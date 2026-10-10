@@ -878,3 +878,19 @@
 - Worker `ba82f9d8-a2ac-419f-b6ff-aea6b74a32f0`，run `91a5c33f-9c9c-441f-b91d-988008a22526`，原生会话 `a7763d79-f6d3-4ec6-8ddc-4883e6d3ea24`。原生选型 ID `gemini-3.8-flash-low`，思考强度 low。queued 到 completed 约 22.0 秒；事件包含 write_to_file DONE、result SUCCESS 和最终 completed。
 - 实际 `cwn-windows-agy-fix.txt` 的内容严格等于 `AGY_WINDOWS_OK\n`，SHA-256 `57FF6AF8ED1A0D68189F378DCD137658D6E57CD1AAE2D2FE80F1FC23760B0F0C`。独立读取核对，不以模型自述代替验收。证据 `final-agy-worker.json`、`final-agy-events.jsonl`。
 - Claude 仍单独待验：官方登录进程已启动并监听本地回调端口，但真实 xterm DOM 无输出（非 Canvas），尚未确认浏览器授权页面或账号登录成功；不据此宣称官方登录全链路通过。
+
+### Claude 官方登录对照与重试（2026-10-11）
+
+- 已结束先前空白终端，三个精确归属进程均退出。同一已安装 helper/Electron Host 的 `--version` 正常输出 2.1.296、退出 0；`auth status --json` 的内联 JSON/私有配置文件对照均正确识别官方未登录、退出 1，清理确认，未启动模型。
+- 相同官方配置的 Windows 原生可见控制台出现完整浏览器/备用链接/回填码提示，随后仅清理该次进程和非秘密临时配置。没有据此认定已经登录。
+- 实际插件再次启动，恢复 Desktop 窗口前台后已看到上述三项提示，xterm 输入聚焦，未显示登录错误；源码/安装包未变。首次空白时未确认窗口可见性，不能据此断言 CLI OAuth 挂死或 stdin/stdout 故障；准确原因仍未确定。当前等待用户完成官方授权，未计为 Claude 真实模型通过。
+- 安全证据：`claude-version-probe-result.json`、`claude-status-inline-file-result.json`、`claude-native-console-control-result.json`、`claude-desktop-login-retry.json`；仅保存固定提示布尔值、身份及退出结果，不保存授权 URL/验证码。
+
+### 阶段交付与待用户授权
+
+- 已本地提交 `d416b44`、`db5d9a7`，未推送、未发新版本。当前安装包与最终源码对应；严格规格 11/11 通过。原有素材移动及文档改动未混入提交。
+- 实际 Windows 三个 Worker 均已结束（两个 completed、一个 interrupted）；本次临时 UI 计划任务为 0。当前只保留用户待授权的 Claude 账号终端，故不重启 Desktop 以免取消授权。正式关闭账号终端及恢复无调试参数启动仍待后续完成。
+- 修正首次空白的证据解释：xterm 6 的 DOM 绘制与输出缓存分离，不可见时可推迟刷新，空 DOM 行不能证明没收到输出；同代码恢复前台后已显示完整提示。首次现场缺少可见性/缓冲证据，不断言具体根因。账号授权与模型执行仍以真实成功状态核对。
+- Claude 官方账号授权需用户完成；Kimi 同源额度响应为 `{}`，没有可核验剩余额度，继续保留未验收边界。其余已完成的 UI、MiMo 文件/续聊/停止、Antigravity 文件任务和自动测试不受影响。OpenSpec 保持活动，不通过归档隐藏缺口。
+
+- 已关闭本次 Mac→Windows 调试 SSH 转发，Mac 19487 监听为 0；Windows 当前登录终端继续等待用户操作，应用的本机调试参数将在账号终端结束后正常重启清除。
