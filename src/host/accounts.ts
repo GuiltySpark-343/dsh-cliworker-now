@@ -1,4 +1,12 @@
+import {
+  readClaudeOwnRoute,
+  claudeNativeSettingsArguments,
+  claudeRouteStatusArguments,
+  claudeRouteIdentity,
+  ClaudeOwnRouteError,
+} from './claude-own-route.ts'
 import { isExtendedCli } from './extended-adapters.ts'
+import { nativeAgyAccountIdentity } from './agy-windows-account.ts'
 import { firstPartyEnvironment, MimoConfigurationError } from './first-party-models.ts'
 import type { SubprocessTerminalHandle } from '@deepseek-ai/dsh-subprocess'
 import { randomUUID } from 'node:crypto'
@@ -36,6 +44,7 @@ import { preparePiOmpAccountTerminal } from './pi-omp-accounts.ts'
 import { readKimiAccount, KIMI_MANAGE_LOGIN, prepareKimiAccountDirectory } from './kimi-accounts.ts'
 import { readMimoAccount } from './mimo-configuration.ts'
 import { prepareMimoAccountTerminal } from './first-party-account-context.ts'
+import { spawnAccountTerminal, WindowsAccountTerminalError } from './windows-account-terminal.ts'
 
 const STATUS_TIMEOUT = 10_000
 const STARTUP_TIMEOUT = 30_000
@@ -64,6 +73,16 @@ const instructionFor = (cli: CliId, action: AccountAction): string => {
     : '按 CLI 原生流程退出登录。'
 }
 const actionsFor = (cli: CliId, config: RuntimeConfig): AccountStatus['actions'] => {
+  if (cli === 'claude')
+    return [
+      {
+        id: 'login',
+        label: '官方登录 / 切换账号',
+        description: '打开 Claude 原生官方登录；保留本地代理设置。',
+      },
+      { id: 'logout', label: '退出官方账号', description: '仅退出 Claude 官方账号；本地代理设置保留。' },
+      { id: 'manage', label: '官方账号终端', description: '打开 Claude 官方账号原生终端。' },
+    ]
   if (cli === 'pi' || cli === 'omp' || cli === 'hermes')
     return [
       { id: 'login', label: '登录设置', description: '打开原生终端登录界面，选择提供商后由你完成授权。' },
@@ -120,8 +139,10 @@ function summarize(cli: CliId, raw: string, exitCode: number | null): AccountIde
       if (exitCode === 0 && value.loggedIn === true) {
         // Claude's installed auth/status implementation only returns email for
         // claude.ai sessions. Environment OAuth tokens do not identify an account.
-        const oauth = value.authMethod === 'oauth_token' || value.authMethod === 'claude.ai'
+        const oauth = value.authMethod === 'claude.ai'
         const api = value.authMethod === 'api_key' || value.authMethod === 'api_key_helper'
+        if (value.authMethod === 'oauth_token')
+          return { state: 'configured', summary: 'CLI 已配置令牌，账号类型待确认', verification: 'cli' }
         return {
           state: 'authenticated',
           summary: api ? 'API 登录' : oauth ? '已通过 OAuth 登录' : 'CLI 报告已登录',
@@ -200,6 +221,7 @@ export class AccountManager {
   private readonly sessions = new Map<string, AccountSession>()
   private readonly reserved = new Set<CliId>()
   private readonly unsafeQueries = new Set<CliId>()
+  private readonly unsafeTerminals = new Map<CliId, string>()
   private readonly statusQueries = new Map<string, StatusQuery>()
   private readonly pending = new Set<Promise<unknown>>()
   private readonly parents = new Map<string, ParentScope>()
@@ -210,12 +232,12 @@ export class AccountManager {
   constructor(
     private backend: ProcessBackend,
     private config: RuntimeConfig,
-    private identity: AccountIdentitySource = localAccountIdentity(),
+    private identity: AccountIdentitySource = nativeAgyAccountIdentity(backend, config),
   ) {}
 
   isBusy(cli: CliId): boolean {
     validateCli(cli)
-    return this.reserved.has(cli) || this.unsafeQueries.has(cli)
+    return this.reserved.has(cli) || this.unsafeQueries.has(cli) || this.unsafeTerminals.has(cli)
   }
 
   async status(cli: CliId, cwd: string, signal: AbortSignal): Promise<AccountStatus> {
@@ -269,6 +291,14 @@ export class AccountManager {
   }
 
   private async readStatus(cli: CliId, cwd: string, signal: AbortSignal): Promise<AccountStatus> {
+    if (this.unsafeTerminals.has(cli))
+      return {
+        cli,
+        installed: true,
+        state: 'unavailable',
+        summary: '账号终端尚未确认完全退出，请重启应用',
+        actions: [],
+      }
     if (this.unsafeQueries.has(cli))
       return {
         cli,
@@ -344,6 +374,7 @@ export class AccountManager {
             actions: this.backend.spawnTerminal ? actionsFor(cli, this.config) : [],
           }
       }
+      const claudeRoute = cli === 'claude' ? await readClaudeOwnRoute(cwd, control) : undefined
       const argv =
         cli === 'codex'
           ? ['login', 'status']
@@ -353,7 +384,7 @@ export class AccountManager {
               ? ['provider', 'list', '--json']
               : ['auth', 'whoami']
       const child = this.backend.spawn({
-        argv: [executable, ...argv],
+        argv: claudeRoute ? claudeRouteStatusArguments(executable, claudeRoute) : [executable, ...argv],
         env: firstPartyEnvironment(cli),
         cwd,
         stdio: { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' },
@@ -377,8 +408,9 @@ export class AccountManager {
       const readers = [read(child.stdout), read(child.stderr)]
       try {
         const [outcome] = await abortable(Promise.all([child.done, ...readers]), control)
-        const status =
-          cli === 'kimi' && outcome.exitCode === 0
+        const status = claudeRoute
+          ? claudeRouteIdentity(claudeRoute, raw, outcome.exitCode)
+          : cli === 'kimi' && outcome.exitCode === 0
             ? await readKimiAccount(raw, control)
             : summarize(cli, raw, outcome.exitCode)
         return {
@@ -416,10 +448,26 @@ export class AccountManager {
       }
       if (signal.aborted || this.controller.signal.aborted) throw new Error('账号状态查询已取消')
       const code = (error as NodeJS.ErrnoException)?.code
+      if (error instanceof ClaudeOwnRouteError)
+        return {
+          cli,
+          installed,
+          state: 'unavailable',
+          summary: error.message,
+          actions: this.backend.spawnTerminal ? actionsFor(cli, this.config) : [],
+        }
       if (error instanceof MimoConfigurationError)
         return { cli, installed, state: 'unavailable', summary: error.message, actions: [] }
       if (error instanceof HermesExecutableError)
         return { cli, installed, state: 'unavailable', summary: error.message, actions: [] }
+      if (code === 'CLI_LAUNCHER_UNSUPPORTED')
+        return {
+          cli,
+          installed: true,
+          state: 'unavailable',
+          summary: 'CLI 启动入口无法确认，请配置原生程序或固定 Node/Bun 入口',
+          actions: [],
+        }
       if (code === 'CLI_IDENTITY_MISMATCH')
         return {
           cli,
@@ -484,6 +532,7 @@ export class AccountManager {
     if (!capability || capability.target === 'models')
       throw new Error('此版本 CLI 未提供终端登录或账号管理入口')
     if (!this.backend.spawnTerminal) throw new Error('当前宿主不支持交互终端')
+    if (this.unsafeTerminals.has(cli)) throw new Error('账号终端尚未确认完全退出，请重启应用')
     if (this.unsafeQueries.has(cli)) throw new ProcessCleanupUnconfirmedError()
     if (this.reserved.has(cli)) throw new Error('此 CLI 已有账号终端，请先关闭后重试')
     const directory = projectDirectory(cwd)
@@ -531,7 +580,21 @@ export class AccountManager {
         env: firstPartyEnvironment(cli),
         cwd,
       }
-      if (cli === 'kimi') {
+      if (cli === 'claude') {
+        const claudeAccountRoute = await readClaudeOwnRoute(cwd, startup)
+        startup.throwIfAborted()
+        // Login/logout always address the native official account; proxy settings remain untouched.
+        launch.argv = [
+          executable,
+          ...claudeNativeSettingsArguments(claudeAccountRoute.configDirectory),
+          ...argumentsFor(cli, action),
+          ...(action === 'login' ? ['--claudeai'] : []),
+        ]
+        instruction =
+          action === 'logout'
+            ? '退出 Claude 官方账号；本地代理设置保留。'
+            : '在原生终端登录 Claude 官方账号；本地代理设置保留。'
+      } else if (cli === 'kimi') {
         if (action === 'login') {
           const current = await this.readStatus(cli, cwd, startup)
           startup.throwIfAborted()
@@ -597,7 +660,7 @@ export class AccountManager {
         release = prepared.cleanup
       }
       startup.throwIfAborted()
-      allocation = this.backend.spawnTerminal!({
+      allocation = spawnAccountTerminal(this.backend, {
         ...launch,
         rows: 24,
         cols: 80,
@@ -636,9 +699,10 @@ export class AccountManager {
         },
         async (error) => {
           try {
-            await release?.()
+            if (!(error instanceof ProcessCleanupUnconfirmedError)) await release?.()
           } finally {
-            this.reserved.delete(cli)
+            if (error instanceof ProcessCleanupUnconfirmedError) this.unsafeTerminals.set(cli, parent)
+            else this.reserved.delete(cli)
           }
           throw error
         },
@@ -667,7 +731,11 @@ export class AccountManager {
             this.finish(
               published,
               outcome.exitCode === 0 ? 'closed' : 'failed',
-              outcome.exitCode === 0 ? '账号终端已结束' : '账号终端已退出，请查看 CLI 提示',
+              outcome.exitCode === 0
+                ? '账号终端已结束'
+                : Number.isInteger(outcome.exitCode)
+                  ? `账号终端异常退出（退出码 ${outcome.exitCode}），请在系统终端检查该 CLI 后重试`
+                  : '账号终端连接已结束，未返回退出码；请在系统终端检查该 CLI 后重试',
             ),
           () => this.finish(published, 'failed', '账号终端连接失败，请重新打开'),
         )
@@ -686,8 +754,11 @@ export class AccountManager {
       if (session && startup.aborted && !session.cleanup)
         await this.finish(session, 'closed', '启动已取消').catch(() => undefined)
       if (error instanceof Error && error.message === '此 CLI 已有账号终端，请先关闭后重试') throw error
+      if (error instanceof ProcessCleanupUnconfirmedError)
+        throw new Error('账号终端尚未确认完全退出，请重启应用')
       if (timeout.signal.aborted) throw new Error('账号终端启动超时，正在回收启动过程；请稍后重试')
       if (error instanceof ZCodeAccountCapabilityError) throw error
+      if (error instanceof WindowsAccountTerminalError) throw error
       if (error instanceof HermesExecutableError) throw error
       if (error instanceof MimoConfigurationError) throw error
       if ((error as NodeJS.ErrnoException)?.code === 'CLI_IDENTITY_MISMATCH')
@@ -829,7 +900,10 @@ export class AccountManager {
       })
       if (previous) cleanup.push(previous)
       const results = await Promise.allSettled(cleanup)
-      if (results.some((result) => result.status === 'rejected'))
+      if (
+        results.some((result) => result.status === 'rejected') ||
+        [...this.unsafeTerminals.values()].includes(parent)
+      )
         throw new Error('此主会话的账号终端尚未确认完全退出')
     })()
     this.parentClosings.set(parent, operation)
@@ -897,7 +971,7 @@ export class AccountManager {
         session.frames.length = 0
       }
       const failures = results.filter((result) => result.status === 'rejected')
-      if (failures.length) throw new Error('部分账号终端尚未确认完全退出')
+      if (failures.length || this.unsafeTerminals.size) throw new Error('部分账号终端尚未确认完全退出')
       this.sessions.clear()
       this.reserved.clear()
       this.parents.clear()

@@ -508,3 +508,9 @@ vi.mock('../src/host/authorized-catalog.ts', () => ({
   ACCOUNT_CHANGED: '账号已变更，请重新选择或新建任务',
   authorizeSelection: async (preference: unknown) => ({ binding: 'synthetic-own-account', preference }),
 }))
+
+// Synthetic route only; account sources and source pinning are exercised separately.
+vi.mock('../src/host/claude-own-route.ts', async (original) => ({
+  ...(await original<typeof import('../src/host/claude-own-route.ts')>()),
+  readClaudeOwnRoute: async () => ({ kind: 'native', sourceIds: ['synthetic-claude'] }),
+}))

@@ -83,10 +83,14 @@ export function managedZCodeEntry(home = homedir()): string {
 
 function builtinPath(executable: string, builtin?: string): string {
   const adjacent = join(dirname(executable), 'provider/zcode-builtin.json')
+  // Both Desktop bundles keep glm/zcode.cjs next to config/provider resources.
+  const bundled = join(dirname(executable), '../config/provider/zcode-builtin.json')
   const config =
     builtin ??
     (existsSync(adjacent)
       ? adjacent
+      : existsSync(bundled)
+        ? bundled
       : '/Applications/ZCode.app/Contents/Resources/config/provider/zcode-builtin.json')
   if (!existsSync(config)) throw new Error('请配置与 ZCode CLI 配套的 zcodeBuiltinConfig')
   return config

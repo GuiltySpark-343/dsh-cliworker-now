@@ -23,7 +23,13 @@ import { AccountManager } from '../src/host/accounts.ts'
 import { DEFAULT_CONFIG, type ProcessBackend, type RuntimeConfig } from '../src/host/process.ts'
 import type { CliId } from '../src/shared/types.ts'
 import type { AccountIdentitySource } from '../src/host/account-identity.ts'
-
+// Manager transport/lifecycle tests use a simulated PTY on every platform.
+// Windows Job/ConPTY ownership has its own simulated and real-OS suites.
+vi.mock('../src/host/windows-account-terminal.ts', async (load) => ({
+  ...(await load<typeof import('../src/host/windows-account-terminal.ts')>()),
+  spawnAccountTerminal: (backend: ProcessBackend, spec: SubprocessTerminalSpawnSpec) =>
+    backend.spawnTerminal!(spec),
+}))
 vi.mock('../src/host/pi-omp-identity.ts', () => ({
   verifyPiOmpExecutable: async (_cli: string, executable: string) => executable,
 }))
@@ -87,6 +93,10 @@ function fixture(overrides: Partial<RuntimeConfig> = {}) {
   roots.push(cwd)
   vi.stubEnv('MIMOCODE_HOME', join(cwd, 'mimo'))
   vi.stubEnv('KIMI_CODE_HOME', join(cwd, 'kimi'))
+  vi.stubEnv('CLAUDE_CONFIG_DIR', join(cwd, 'claude'))
+  for (const key of Object.keys(process.env))
+    if (/ANTHROPIC|CLAUDE_CODE_(?:OAUTH|USE_|API)|AWS_|GOOGLE_|CLOUD_ML|API_KEY|BEARER_TOKEN/.test(key))
+      vi.stubEnv(key, '')
   const output = new PassThrough()
   const result = deferred<SubprocessOutcome>()
   const cleanup = deferred<void>()
@@ -240,7 +250,10 @@ describe('account status safety (synthetic CLI output)', () => {
       }),
     )
     const claude = await f.manager.status('claude', f.cwd, f.signal)
-    expect(claude).toMatchObject({ state: 'authenticated', summary: '已通过 OAuth 登录' })
+    expect(claude).toMatchObject({
+      state: 'unavailable',
+      summary: 'Claude 官方登录来源无法确认，请使用原生登录',
+    })
     expect(JSON.stringify(claude)).not.toMatch(/SECRET|private@example/)
     expect(f.statusProcesses.every((child) => vi.mocked(child.terminate).mock.calls.length === 1)).toBe(true)
     expect(f.statusProcesses.every((child) => vi.mocked(child.waitForExit).mock.calls.length === 1)).toBe(
@@ -341,6 +354,11 @@ describe('account status safety (synthetic CLI output)', () => {
         apiKeySource: 'sk-SECRET',
       }),
     )
+    mkdirSync(join(f.cwd, 'claude'), { recursive: true })
+    writeFileSync(
+      join(f.cwd, 'claude/settings.json'),
+      JSON.stringify({ env: { ANTHROPIC_API_KEY: 'synthetic-own-key' } }),
+    )
     const api = await f.manager.status('claude', f.cwd, f.signal)
     expect(api).toMatchObject({ state: 'authenticated', authMethod: 'api' })
     expect(api.accountLabel).toBeUndefined()
@@ -393,6 +411,19 @@ describe('account status safety (synthetic CLI output)', () => {
     })
     expect(JSON.stringify(status)).not.toContain('SECRET')
     expect(f.backend.spawnTerminal).not.toHaveBeenCalled()
+  })
+
+  it('distinguishes an installed unsupported launcher from a missing installation', async () => {
+    const f = fixture()
+    vi.mocked(f.backend.resolveExecutable).mockRejectedValue(
+      Object.assign(new Error('private installation error'), { code: 'CLI_LAUNCHER_UNSUPPORTED' }),
+    )
+    expect(await f.manager.status('opencode', f.cwd, f.signal)).toMatchObject({
+      installed: true,
+      state: 'unavailable',
+      actions: [],
+      summary: 'CLI 启动入口无法确认，请配置原生程序或固定 Node/Bun 入口',
+    })
   })
 
   it('status lookup can be cancelled before spawn and does not launch an account process', async () => {
@@ -469,7 +500,7 @@ describe('account status safety (synthetic CLI output)', () => {
     })
     const old = f.manager.status('claude', f.cwd, controller.signal)
     const rejection = expect(old).rejects.toThrow('已取消')
-    await tick()
+    await vi.waitFor(() => expect(f.backend.spawn).toHaveBeenCalledTimes(1))
     controller.abort()
     let cancelled = false
     void old.catch(() => {
@@ -551,6 +582,7 @@ describe('account status safety (synthetic CLI output)', () => {
     }
     vi.mocked(f.backend.spawn).mockReturnValueOnce(child)
     const reading = f.manager.status('claude', f.cwd, f.signal)
+    await vi.waitFor(() => expect(f.backend.spawn).toHaveBeenCalledTimes(1))
     await vi.advanceTimersByTimeAsync(10_000)
     expect(await reading).toMatchObject({ state: 'unavailable', installed: true })
     expect(child.terminate).toHaveBeenCalledTimes(1)
@@ -608,7 +640,7 @@ describe('user-operated account terminals (synthetic PTY)', () => {
     const f = fixture()
     const opened = await f.manager.start('parent', cli, action, f.cwd, f.signal)
     const spec = vi.mocked(f.backend.spawnTerminal!).mock.calls[0][0]
-    expect(spec.argv.slice(1)).toEqual(expected)
+    expect(spec.argv.slice(cli === 'claude' ? 3 : 1)).toEqual(expected)
     if (cli === 'mimo' || cli === 'kimi') expect(spec.cwd).not.toBe(f.cwd)
     else expect(spec.cwd).toBe(f.cwd)
     expect(spec.terminalType).toBe('xterm-256color')
@@ -943,7 +975,7 @@ describe('extended CLI account capabilities (synthetic credentials and PTYs)', (
         '/synthetic/grok',
         ...(action === 'login' ? ['login'] : []),
       ])
-      expect(spec.env?.GROK_HOME).toMatch(/\/\.grok$/)
+    expect(spec.env?.GROK_HOME).toMatch(/[\\/]\.grok$/)
       expect(spec.env?.ELECTRON_RUN_AS_NODE).toBe('1')
       expect(spec.cwd).toBe(join(f.config.stateDirectory!, 'accounts/grok-terminal/workspace'))
       expect(f.backend.spawn).not.toHaveBeenCalled()

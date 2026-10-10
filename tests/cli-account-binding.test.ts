@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { CLI_IDS, type CliId } from '../src/shared/types.ts'
 import {
@@ -17,6 +18,7 @@ const fixture = vi.hoisted(() => ({
   status: {} as any,
   sources: {} as Record<string, any[]>,
   codex: undefined as any,
+  windowsAgy: undefined as any,
 }))
 vi.mock('node:os', async (original) => ({
   ...(await original<typeof import('node:os')>()),
@@ -30,7 +32,21 @@ vi.mock('../src/host/first-party-models.ts', async (original) => ({
   ...(await original<typeof import('../src/host/first-party-models.ts')>()),
   readFirstPartyModelSources: vi.fn(async (cli: string) => fixture.sources[cli] ?? []),
 }))
+vi.mock('../src/host/claude-own-route.ts', async (original) => ({
+  ...(await original<typeof import('../src/host/claude-own-route.ts')>()),
+  readClaudeOwnRoute: vi.fn(async () =>
+    fixture.sources.claude?.length
+      ? { kind: 'api', sourceIds: fixture.sources.claude[0].sourceIds, source: fixture.sources.claude[0] }
+      : { kind: 'native', sourceIds: [fixture.home] },
+  ),
+}))
 vi.mock('../src/host/codex-account.ts', () => ({ readCodexAccount: vi.fn(async () => fixture.codex) }))
+// Windows reads native keyring metadata instead of the POSIX token file below.
+// This is the same synthetic identity, never a real Credential Manager read.
+vi.mock('../src/host/agy-windows-account.ts', async (original) => ({
+  ...(await original<typeof import('../src/host/agy-windows-account.ts')>()),
+  readWindowsAgyAccount: vi.fn(async () => fixture.windowsAgy ?? { identity: { state: 'unconfigured' } }),
+}))
 import { readCliAccountBinding, readCodexOwnAccountSource } from '../src/host/cli-account-binding.ts'
 import { captureCatalogMetadata } from '../src/host/adapters.ts'
 const backend: ProcessBackend = { resolveExecutable: vi.fn(), spawn: vi.fn() }
@@ -43,6 +59,36 @@ const jwt = (sub: string, extra: Record<string, unknown> = {}) =>
   `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify({ sub, iss: 'https://synthetic.example', exp: 4e9, ...extra })).toString('base64url')}.synthetic`
 const run = (cli: CliId, signal = new AbortController().signal) =>
   readCliAccountBinding(cli, backend, config, project, signal)
+
+it('binds explicit Claude bearer credentials as API material, including endpoint and header mode', async () => {
+  fixture.status = { loggedIn: true, authMethod: 'oauth_token', email: 'synthetic@example.test' }
+  const source = {
+    provider: 'anthropic',
+    credential: { type: 'api', key: 'synthetic-claude-bearer' },
+    sourceIds: [join(fixture.home, '.claude/settings.json')],
+    baseUrl: 'https://own.example.test',
+    apiType: 'anthropic-messages',
+    anthropicAuth: 'bearer',
+  }
+  fixture.sources.claude = [source]
+  const bearer = await run('claude')
+  expect(bearer).toMatch(/^cli-account-v1:/)
+  expect(bearer).not.toContain(source.credential.key)
+  fixture.status.email = 'unrelated-native-label@example.test'
+  expect(await run('claude')).toBe(bearer)
+  source.credential.key = 'synthetic-changed-bearer'
+  expect(await run('claude')).not.toBe(bearer)
+  source.credential.key = 'synthetic-claude-bearer'
+  source.baseUrl = 'https://other-own.example.test'
+  expect(await run('claude')).not.toBe(bearer)
+  source.baseUrl = 'https://own.example.test'
+  source.anthropicAuth = 'api-key-and-bearer'
+  expect(await run('claude')).not.toBe(bearer)
+  fixture.sources.claude = []
+  await expect(run('claude')).rejects.toThrow('Claude 官方登录来源无法确认')
+  fixture.status = { loggedIn: false, authMethod: 'none' }
+  await expect(run('claude')).rejects.toThrow('Claude 官方账号未登录')
+})
 
 it('binds supported OpenCode API accounts even alongside an unsupported opaque OAuth account', async () => {
   const path = join(fixture.home, '.local/share/opencode/auth.json')
@@ -81,6 +127,7 @@ beforeEach(() => {
   fixture.sources = {}
   fixture.status = {}
   fixture.codex = undefined
+  fixture.windowsAgy = undefined
   config = {
     ...DEFAULT_CONFIG,
     stateDirectory: join(fixture.home, 'plugin'),
@@ -107,6 +154,10 @@ afterEach(() => {
 })
 
 function agy(sub = 'own-agy', refresh = 'synthetic-refresh') {
+  fixture.windowsAgy = {
+    identity: { state: 'authenticated', authMethod: 'oauth', verification: 'local' },
+    principalHash: createHash('sha256').update(`google:${sub}`).digest('hex'),
+  }
   write(join(fixture.home, '.gemini/jetski-standalone-oauth-token'), {
     auth_method: 'consumer',
     token: { access_token: jwt(sub), refresh_token: refresh, expiry: '2099-01-01T00:00:00Z' },
@@ -273,6 +324,7 @@ it('keeps OAuth rotation stable, but changes on account switch and rejects logou
   agy('different-user')
   expect(await run('antigravity')).not.toBe(first)
   rmSync(join(fixture.home, '.gemini/jetski-standalone-oauth-token'))
+  fixture.windowsAgy = undefined
   await expect(run('antigravity')).rejects.toMatchObject({ code: 'CLI_OWN_ACCOUNT_REQUIRED' })
 })
 
@@ -446,4 +498,29 @@ it('prioritizes cleanup failure over simultaneous cancellation', async () => {
     throw new ProcessCleanupUnconfirmedError()
   })
   await expect(run('claude', controller.signal)).rejects.toBeInstanceOf(ProcessCleanupUnconfirmedError)
+})
+
+it('binds the exact selected Claude source snapshot instead of silently rereading a restored configuration', async () => {
+  const a = {
+    provider: 'anthropic',
+    credential: { type: 'api', key: 'synthetic-A' },
+    baseUrl: 'http://127.0.0.1:15721',
+    apiType: 'anthropic-messages',
+    anthropicAuth: 'bearer',
+    sourceIds: [join(fixture.home, '.claude/settings.json')],
+    nativeModels: [],
+  }
+  fixture.sources.claude = [a]
+  const admitted = await run('claude')
+  const b = { ...a, credential: { type: 'api', key: 'synthetic-B' } }
+  const prepared = await readCliAccountBinding(
+    'claude',
+    backend,
+    config,
+    project,
+    new AbortController().signal,
+    { kind: 'proxy', sourceIds: b.sourceIds, source: b },
+  )
+  expect(prepared).not.toBe(admitted)
+  expect(await run('claude')).toBe(admitted)
 })

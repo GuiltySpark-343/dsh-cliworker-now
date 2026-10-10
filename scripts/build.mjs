@@ -13,6 +13,7 @@ const tsc = (project) =>
 tsc('tsconfig.host-build.json')
 for (const name of [
   'private-launch',
+  'windows-account-launch',
   'native-launch',
   'pi-omp-environment',
   'terminal-bridge',
@@ -48,6 +49,13 @@ for (const name of ['own-account-lease', 'pi-omp-refresh']) {
 // from the bundle URL and from emitted unbundled adapter modules.
 cpSync('src/host/hermes-native-entry.py', 'lib/hermes-native-entry.py')
 cpSync('src/host/hermes-native-entry.py', 'lib/types/host/hermes-native-entry.py')
+cpSync('src/host/windows-account-owner.ps1', 'lib/windows-account-owner.ps1')
+cpSync('src/host/windows-account-owner.ps1', 'lib/types/host/windows-account-owner.ps1')
+cpSync('src/host/windows-account-bootstrap.ps1', 'lib/windows-account-bootstrap.ps1')
+cpSync('src/host/windows-account-bootstrap.ps1', 'lib/types/host/windows-account-bootstrap.ps1')
+cpSync('src/host/windows-account-launch.mjs', 'lib/types/host/windows-account-launch.mjs')
+cpSync('src/host/windows-agy-account.ps1', 'lib/windows-agy-account.ps1')
+cpSync('src/host/windows-agy-account.ps1', 'lib/types/host/windows-agy-account.ps1')
 await build({
   entry: { index: 'lib/types/host/index.js' },
   outDir: 'lib',

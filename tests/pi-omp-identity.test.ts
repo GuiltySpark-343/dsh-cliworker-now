@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync, realpathSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, rmSync, existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { inspectPiInstallation } from '../src/host/pi-installation.mjs'
+import { resolveNativeEntry } from '../src/host/native-launch.mjs'
 import { verifyPiOmpExecutable } from '../src/host/pi-omp-identity.ts'
 import { executableFor, resolveCliExecutable } from '../src/host/adapters.ts'
 import { DEFAULT_CONFIG, ProcessCleanupUnconfirmedError, type ProcessBackend } from '../src/host/process.ts'
@@ -19,7 +20,7 @@ const root = () => {
 function piPackage(directory: string, version = '1.0.4', name = '@earendil-works/pi-coding-agent') {
   mkdirSync(join(directory, 'dist/core'), { recursive: true })
   mkdirSync(join(directory, 'dist/bundle'), { recursive: true })
-  writeFileSync(join(directory, 'package.json'), JSON.stringify({ name, version }))
+  writeFileSync(join(directory, 'package.json'), JSON.stringify({ name, version, bin: { pi: 'dist/bundle/cli.js' } }))
   for (const file of ['cli.js', 'bundle/cli.js', 'index.js', 'core/model-runtime.js', 'core/auth-storage.js'])
     writeFileSync(join(directory, 'dist', file), '// Synthetic package; never executed.\n')
   return join(directory, 'dist/cli.js')
@@ -32,7 +33,7 @@ afterEach(() => {
 })
 
 describe('distinct Pi and OMP entry identities', () => {
-  it.each(['1.0.2', '1.0.4'])(
+  it.each(['1.0.2', '1.0.4', '1.1.0'])(
     'accepts the verified Pi %s package and canonicalizes its bundled launcher',
     async (version) => {
       const path = root(),
@@ -43,6 +44,31 @@ describe('distinct Pi and OMP entry identities', () => {
       expect(capture).not.toHaveBeenCalled()
     },
   )
+  it('statically resolves the official Windows managed launcher and refuses changed bootstrap or version pointers', () => {
+    const home = root(), bin = join(home, '.pi/agent/bin'), install = join(home, '.pi/agent/install')
+    mkdirSync(bin, { recursive: true })
+    const packageRoot = join(install, 'releases/1.1.0/node_modules/@earendil-works/pi-coding-agent')
+    const entry = piPackage(packageRoot, '1.1.0')
+    const pointer = join(install, 'current-version'), launcher = join(bin, 'pi-launcher.js'), shim = join(bin, 'pi.cmd')
+    // Exact official Pi 1.1.0 Windows bootstrap (read as a fixture, never executed).
+    const source = readFileSync(new URL('./fixtures/pi-managed-launcher.js', import.meta.url), 'utf8')
+    writeFileSync(pointer, '1.1.0\n')
+    writeFileSync(launcher, source)
+    writeFileSync(shim, '@ECHO off\nnode "%~dp0pi-launcher.js" %*\r\n')
+    const native = resolveNativeEntry(shim, 'win32')
+    expect(native).toBe(launcher)
+    expect(inspectPiInstallation(native)).toMatchObject({ version: '1.1.0', executable: entry })
+    writeFileSync(launcher, source + '\nrequire("node:child_process").execSync("unsafe")\n')
+    expect(() => inspectPiInstallation(native)).toThrow('Pi 安装身份')
+    writeFileSync(launcher, source)
+    for (const value of ['../1.1.0', '.', '1.1.1', '1.1.0\\other']) {
+      writeFileSync(pointer, value)
+      expect(() => inspectPiInstallation(native)).toThrow('Pi 安装身份')
+    }
+    writeFileSync(pointer, '1.1.0')
+    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: '@oh-my-pi/pi-coding-agent', version: '1.1.0', bin: { pi: 'dist/cli.js' } }))
+    expect(() => inspectPiInstallation(native)).toThrow('Pi 安装身份')
+  })
   it.skipIf(process.platform === 'win32')(
     'uses the POSIX official Pi launcher before an old private runtime and resolves one canonical entry',
     async () => {

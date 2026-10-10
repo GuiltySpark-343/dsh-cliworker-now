@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { AccountTerminal } from '../src/client/account-terminal.tsx'
+import { AccountTerminal, type AccountCloseControl } from '../src/client/account-terminal.tsx'
 import type { API } from '../src/client/workers.ts'
 import type { AccountAction, AccountFrame, AccountSource } from '../src/shared/accounts.ts'
 import type { CliId } from '../src/shared/types.ts'
@@ -161,6 +161,7 @@ async function setup(initiallyOpen = true) {
   } as unknown as API
   const onClose = vi.fn(),
     onFinished = vi.fn()
+  const closeControl: AccountCloseControl = { current: undefined }
   const render = (cli: CliId = 'codex', action: AccountAction = 'login', source?: AccountSource) => (
     <AccountTerminal
       api={api}
@@ -170,6 +171,7 @@ async function setup(initiallyOpen = true) {
       source={source}
       onClose={onClose}
       onFinished={onFinished}
+      closeControl={closeControl}
     />
   )
   let renderer!: ReactTestRenderer
@@ -220,6 +222,7 @@ async function setup(initiallyOpen = true) {
     close,
     click,
     unmount,
+    closeControl,
   }
 }
 
@@ -232,6 +235,12 @@ it('starts an account action only when explicitly mounted and never enters a pro
   expect(terminals[0].options.disableStdin).toBe(true)
   await fixture.start()
   expect(terminals[0].options.disableStdin).toBe(false)
+  expect(terminals[0].options.cursorStyle).toBe('block')
+  expect(terminals[0].options.cursorBlink).toBe(true)
+  expect(terminals[0].options.theme.cursor).not.toBe(terminals[0].options.theme.cursorAccent)
+  expect(terminals[0].focus).toHaveBeenCalledOnce()
+  await act(async () => fixture.renderer.root.findByProps({ className: 'cwn-account-terminal-view' }).props.onClick())
+  expect(terminals[0].focus).toHaveBeenCalledTimes(2)
   expect(fixture.accountWatch).toHaveBeenCalledWith('parent', 'terminal-a', expect.any(AbortSignal))
   expect(fixture.accountWrite).not.toHaveBeenCalled()
   const text = JSON.stringify(fixture.renderer.toJSON())
@@ -430,6 +439,38 @@ it('bounds the closing spinner and waits for cleanup before permitting a retry',
   })
   expect(fixture.accountStart).toHaveBeenCalledTimes(2)
   await fixture.start('retry-terminal', 1)
+})
+
+it('uses one close operation for modal and terminal controls and retries the same session after failure', async () => {
+  const f = await setup()
+  await f.start()
+  const pending = deferred()
+  f.accountStop.mockReturnValueOnce(pending.promise)
+  let closed!: Promise<boolean>
+  await act(async () => {
+    closed = f.closeControl.current!()
+    expect(f.closeControl.current!()).toBe(closed)
+  })
+  await f.close()
+  expect(f.accountStop).toHaveBeenCalledOnce()
+  await act(async () => pending.reject(new Error('fixture cleanup failure')))
+  expect(await closed).toBe(false)
+  expect(f.onClose).not.toHaveBeenCalled()
+  expect(f.accountStart).toHaveBeenCalledOnce()
+  await act(async () => { expect(await f.closeControl.current!()).toBe(true) })
+  expect(f.accountStop.mock.calls).toEqual([['parent', 'terminal-a'], ['parent', 'terminal-a']])
+  expect(f.onClose).toHaveBeenCalledOnce()
+})
+
+it.each([
+  ['当前 ZCode 未声明原生登录能力，请检查 CLI 安装', '当前 ZCode 未声明原生登录能力'],
+  ['secret token ABC https://private.example/account', '账号终端暂不可用'],
+])('only displays whitelisted startup diagnostics: %s', async (message, expected) => {
+  const f = await setup()
+  await act(async () => f.starts[0].reject(new Error(message)))
+  const text = JSON.stringify(f.renderer.toJSON())
+  expect(text).toContain(expected)
+  expect(text).not.toContain('secret token')
 })
 
 it('drops unsent input once the user starts closing the terminal', async () => {

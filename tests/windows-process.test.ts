@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnManagedAgent } from '../src/host/managed-agent.ts'
 import { hermesNativeCommand, verifyHermesExecutable } from '../src/host/hermes-installation.ts'
+import { spawnAccountTerminal } from '../src/host/windows-account-terminal.ts'
 const roots: string[] = []
 afterEach(() => roots.splice(0).forEach((path) => rmSync(path, { recursive: true, force: true })))
 // These tests execute actual Windows OS primitives and temporary Node/Python
@@ -56,9 +57,25 @@ it.skipIf(process.platform !== 'win32').each(['terminate', 'abort'] as const)(
   15000,
 )
 
-it.skipIf(process.platform !== 'win32')(
-  'real Windows account-style ConPTY closes its own child and preserves unrelated work',
-  async () => {
+it.skipIf(process.platform !== 'win32').each(['stop', 'natural-exit'] as const)(
+  'real Windows account-style ConPTY %s closes its own child and preserves unrelated work',
+  async (operation) => {
+    const consoles = () => {
+      const raw = execFileSync(
+        'powershell.exe',
+        [
+          '-NoLogo',
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `@(Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq ${process.pid} -and $_.Name -eq 'conhost.exe' } | Select-Object -ExpandProperty ProcessId) | ConvertTo-Json -Compress`,
+        ],
+        { encoding: 'utf8', windowsHide: true },
+      ).trim()
+      const value = raw ? JSON.parse(raw) : []
+      return Array.isArray(value) ? value : [value]
+    }
+    const beforeConsoles = consoles()
     const ctx = new Context()
     await ctx.plugin(LocalSubprocessRuntime)
     // No CLI login: both payloads are explicit Node lifecycle fixtures.
@@ -66,11 +83,11 @@ it.skipIf(process.platform !== 'win32')(
     let childPid: number | undefined
     let terminal: Awaited<ReturnType<typeof ctx.subprocess.spawnTerminal>> | undefined
     try {
-      terminal = await ctx.subprocess.spawnTerminal({
+      terminal = await spawnAccountTerminal(ctx.subprocess, {
         argv: [
           process.execPath,
           '-e',
-          "const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); console.log(JSON.stringify({fixture:'account-terminal',pid:child.pid,tty:!!process.stdin.isTTY})); process.stdin.on('data',data=>console.log('fixture-received:'+data.toString().trim())); setInterval(()=>{},1000)",
+          `const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',detached:true}); console.log(JSON.stringify({fixture:'account-terminal',pid:child.pid,tty:!!process.stdin.isTTY})); process.stdin.on('data',data=>{console.log('fixture-received:'+data.toString().trim()); ${operation === 'natural-exit' ? 'process.exit(7)' : ''}}); setInterval(()=>{},1000)`,
         ],
         cwd: process.cwd(),
         env: {},
@@ -80,6 +97,7 @@ it.skipIf(process.platform !== 'win32')(
         graceMs: 500,
       })
       void terminal.done.catch(() => undefined)
+      expect(terminal.pid).toBeGreaterThan(0)
       let output = ''
       const reader = (async () => {
         for await (const chunk of terminal!.output) output += String(chunk)
@@ -97,10 +115,13 @@ it.skipIf(process.platform !== 'win32')(
       await vi.waitFor(() => expect(output).toContain('fixture-received:safe-fixture-input'), {
         timeout: 5000,
       })
+      if (operation === 'natural-exit')
+        await expect(terminal.done).resolves.toEqual({ exitCode: 7, signal: null })
       await terminal.terminate()
       await reader
       expect(() => process.kill(childPid!, 0)).toThrow()
       expect(() => process.kill(unrelated.pid!, 0)).not.toThrow()
+      expect(consoles().filter((pid) => !beforeConsoles.includes(pid))).toEqual([])
     } finally {
       await terminal?.terminate().catch(() => undefined)
       if (childPid) {

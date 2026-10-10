@@ -142,8 +142,8 @@ export async function probeAccountModels(input, options = {}) {
     if (input.apiType === 'anthropic-messages' && !oauth) {
       // ZCode's native Anthropic factory sends both headers. Other callers keep
       // the ordinary x-api-key contract unless they explicitly mirror that route.
-      if (input.anthropicAuth !== 'api-key-and-bearer') delete headers.Authorization
-      headers['x-api-key'] = token
+      if (!['api-key-and-bearer', 'bearer'].includes(input.anthropicAuth)) delete headers.Authorization
+      if (input.anthropicAuth !== 'bearer') headers['x-api-key'] = token
       headers['anthropic-version'] = '2023-06-01'
     }
     if (codex) {

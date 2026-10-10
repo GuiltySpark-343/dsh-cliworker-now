@@ -35,7 +35,9 @@ afterEach(() => {
   vi.unstubAllEnvs()
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
-function fixture(help = 'zcode 0.16.9\n  login [zai|bigmodel]  Sign in through browser authorization\n') {
+function fixture(
+  help = 'zcode 0.16.9\n  login [zai|bigmodel]  Sign in through browser authorization\n  logout  Remove credentials\n  tui  Open terminal\n',
+) {
   const home = mkdtempSync(join(tmpdir(), 'cwn-zg-account-'))
   roots.push(home)
   const stateDirectory = join(home, 'state')
@@ -192,16 +194,44 @@ describe('ZCode/Grok user-operated account helpers', () => {
     }
   })
 
-  it('rejects the same-version incomplete Desktop build before attempting any auth command', async () => {
+  it('uses the installed Desktop ZAI login and does not invent a BigModel argument', async () => {
     const f = fixture(
       'zcode 0.16.9\n  login      Sign in with Z.AI OAuth for model access\n  tui  Open terminal\n',
     )
-    await expect(
-      zcodeGrokAccountLaunch('zcode', 'login', '/synthetic/bundled.cjs', f.config, f.backend, f.signal, f),
-    ).rejects.toThrow('完整 ZCode CLI')
+    const launch = await zcodeGrokAccountLaunch(
+      'zcode',
+      'login',
+      '/synthetic/bundled.cjs',
+      f.config,
+      f.backend,
+      f.signal,
+      f,
+    )
+    expect(launch.argv).toEqual(wrapped([process.execPath, '/synthetic/bundled.cjs', 'login']))
+    expect(launch.instruction).toContain('仅支持 Z.AI OAuth，不支持 BigModel')
     expect(vi.mocked(f.backend.spawn).mock.calls).toHaveLength(1)
     expect(vi.mocked(f.backend.spawn).mock.calls[0]![0].argv.at(-1)).toBe('--help')
     expect(supportsBigModelLogin('0.16.9')).toBe(false)
+  })
+
+  it('checks manage and logout independently of provider-specific login support', async () => {
+    const f = fixture('zcode 0.16.9\n  tui  Open terminal\n')
+    const launch = await zcodeGrokAccountLaunch(
+      'zcode',
+      'manage',
+      '/synthetic/bundled.cjs',
+      f.config,
+      f.backend,
+      f.signal,
+      f,
+    )
+    expect(launch.argv.at(-1)).toBe('tui')
+    await expect(
+      zcodeGrokAccountLaunch('zcode', 'login', '/synthetic/bundled.cjs', f.config, f.backend, f.signal, f),
+    ).rejects.toThrow('未声明原生登录能力')
+    await expect(
+      zcodeGrokAccountLaunch('zcode', 'logout', '/synthetic/bundled.cjs', f.config, f.backend, f.signal, f),
+    ).rejects.toThrow('未声明原生退出登录能力')
   })
 
   it('bounds capability responses, cleans up, and never reports raw CLI output', async () => {

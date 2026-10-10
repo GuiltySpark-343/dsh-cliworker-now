@@ -114,7 +114,7 @@ async function configured(cli: CliId): Promise<boolean> {
           project,
           async (argv) =>
             argv.includes('--help')
-              ? '--model --output-format'
+              ? '--model --output-format --settings'
               : JSON.stringify({ loggedIn: true, authMethod: 'api_key' }),
           signal(),
         )

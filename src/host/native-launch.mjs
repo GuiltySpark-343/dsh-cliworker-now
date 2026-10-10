@@ -1,9 +1,12 @@
 // Inspect fixed launcher data; never ask a shell to interpret CLI arguments.
 import { openSync, readSync, fstatSync, closeSync, realpathSync, statSync, existsSync } from 'node:fs'
-import { dirname, extname, isAbsolute, resolve, sep, delimiter, join } from 'node:path'
+import { basename, dirname, extname, isAbsolute, relative, resolve, sep, delimiter, join } from 'node:path'
 import { homedir, userInfo } from 'node:os'
 
-const invalid = () => new Error('CLI 启动入口无法确认，请配置原生程序或固定 Node/Bun 入口')
+const invalid = () => Object.assign(
+  new Error('CLI 启动入口无法确认，请配置原生程序或固定 Node/Bun 入口'),
+  { code: 'CLI_LAUNCHER_UNSUPPORTED' },
+)
 const batch = (value) => /\.(?:cmd|bat)$/i.test(value)
 function text(path, limit = 128 * 1024) {
   const descriptor = openSync(path, 'r')
@@ -73,6 +76,45 @@ function runtimeProgram(runtime, platform, launcherDirectory) {
   if (!candidate) throw new Error('未找到 Bun，请安装该 CLI 所需的 Bun 运行时')
   return file(candidate)
 }
+/** npm's native bin shim is data, not a batch program to execute. */
+function nativePackageBin(shim, suffix) {
+  const parts = suffix.replace(/\\/g, '/').split('/')
+  if (parts[0] !== 'node_modules' || parts.some((part) => !part || part === '.' || part === '..'))
+    throw invalid()
+  const scoped = parts[1]?.startsWith('@')
+  const name = parts.slice(1, scoped ? 3 : 2).join('/')
+  if (!/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/.test(name)) throw invalid()
+  const root = fileDirectory(resolve(dirname(shim), ...parts.slice(0, scoped ? 3 : 2)))
+  const entry = file(resolve(dirname(shim), ...parts))
+  const inside = relative(root, entry)
+  if (!inside || inside === '..' || inside.startsWith('..' + sep) || isAbsolute(inside)) throw invalid()
+  const manifest = JSON.parse(text(join(root, 'package.json')))
+  const command = basename(shim, extname(shim))
+  const declared = typeof manifest.bin === 'string'
+    ? name.split('/').at(-1) === command ? manifest.bin : undefined
+    : manifest.bin?.[command]
+  if (manifest.name !== name || typeof declared !== 'string' || isAbsolute(declared) ||
+    declared.replace(/\\/g, '/').split('/').includes('..') || file(resolve(root, declared)) !== entry)
+    throw invalid()
+  const descriptor = openSync(entry, 'r')
+  try {
+    const header = Buffer.alloc(64), signature = Buffer.alloc(4)
+    const size = fstatSync(descriptor).size
+    if (readSync(descriptor, header, 0, 64, 0) !== 64 || header.toString('ascii', 0, 2) !== 'MZ')
+      throw invalid()
+    const offset = header.readUInt32LE(0x3c)
+    if (offset < 64 || offset + 4 > size || readSync(descriptor, signature, 0, 4, offset) !== 4 ||
+      signature.toString('hex') !== '50450000') throw invalid()
+  } finally {
+    closeSync(descriptor)
+  }
+  return entry
+}
+function fileDirectory(path) {
+  const canonical = realpathSync(path)
+  if (!statSync(canonical).isDirectory()) throw invalid()
+  return canonical
+}
 function inspectBatch(executable, platform) {
   const source = text(file(executable)).trim().replace(/\r\n/g, '\n')
   // Nous' official fallback contains just a fixed interpreter and its encoded
@@ -101,8 +143,14 @@ function inspectBatch(executable, platform) {
     // npm cmd-shim's standard final control prefix is launcher boilerplate;
     // it is discarded, and nothing from it is executed by this module.
     line = line.replace(/^endLocal & goto #_undefined_# 2>NUL \|\| title [^&\n]+ & /i, '')
+    const native = /^@?"%(?:~dp0[\\/]?|dp0%[\\/])([^"\n%]+\.exe)"\s+%\*$/i.exec(line)
+    if (native) {
+      entries.add(nativePackageBin(executable, native[1]))
+      runtimes.add('native')
+      continue
+    }
     const command =
-      /^@?(?:(node|bun)|"%_prog%"|"%(?:~dp0|dp0%)[\\/](node|bun)\.exe")\s+"%(?:~dp0|dp0%)[\\/]([^"\n%]+)"\s+%\*$/i.exec(
+      /^@?(?:(node|bun)|"%_prog%"|"%(?:~dp0[\\/]?|dp0%[\\/])(node|bun)\.exe")\s+"%(?:~dp0[\\/]?|dp0%[\\/])([^"\n%]+)"\s+%\*$/i.exec(
         line,
       )
     if (command) {
@@ -112,7 +160,7 @@ function inspectBatch(executable, platform) {
       if (command[1] || command[2]) runtimes.add((command[1] || command[2]).toLowerCase())
       continue
     }
-    const program = /^@?set "?_prog=(?:%(?:~dp0|dp0%)[\\/])?(node|bun)(?:\.exe)?"?$/i.exec(line)
+    const program = /^@?set "?_prog=(?:%(?:~dp0[\\/]?|dp0%[\\/]))?(node|bun)(?:\.exe)?"?$/i.exec(line)
     if (program) {
       runtimes.add(program[1].toLowerCase())
       continue
@@ -121,7 +169,7 @@ function inspectBatch(executable, platform) {
       /^@?(?:goto start|:find_dp0|:start|set dp0=%~dp0|exit \/b|setlocal|endlocal|call :find_dp0)$/i.test(
         line,
       ) ||
-      /^@?if (?:not )?exist "%(?:~dp0|dp0%)[\\/](?:node|bun)\.exe" \($/i.test(line) ||
+      /^@?if (?:not )?exist "%(?:~dp0[\\/]?|dp0%[\\/])(?:node|bun)\.exe" \($/i.test(line) ||
       /^\)(?: else \()?$/i.test(line) ||
       /^@?set pathext=%pathext:;\.js;=;%$/i.test(line) ||
       /^@?if (?:not )?defined node_path \($/i.test(line) ||
@@ -133,6 +181,7 @@ function inspectBatch(executable, platform) {
   if (entries.size !== 1 || runtimes.size !== 1) throw invalid()
   const entry = [...entries][0],
     runtime = [...runtimes][0]
+  if (runtime === 'native') return { kind: 'native', argv: [entry] }
   if (scriptRuntime(entry) !== runtime) throw invalid()
   return { kind: runtime, argv: [runtimeProgram(runtime, platform, dirname(executable)), entry] }
 }
@@ -151,10 +200,16 @@ export function resolveNativeEntry(executable, platform = process.platform) {
     if (candidate) executable = candidate
   }
   if (!batch(executable)) return executable
-  const inspected = inspectBatch(executable, platform)
+  let inspected
+  try {
+    inspected = inspectBatch(executable, platform)
+  } catch {
+    // A present but invalid shim is not an absent CLI. Never forward raw paths or script text.
+    throw invalid()
+  }
   // Keep Bun's fixed shim identity: it may pin a bundled bun.exe beside the
   // shim which cannot be recovered from only the package's JS path.
-  return inspected.kind === 'node' ? inspected.argv[1] : executable
+  return inspected.kind === 'node' ? inspected.argv[1] : inspected.kind === 'native' ? inspected.argv[0] : executable
 }
 
 /** Windows CreateProcess accepts real programs, not npm command files. */

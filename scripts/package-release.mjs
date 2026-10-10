@@ -36,6 +36,7 @@ const helperNames = [
   'pi-omp-environment',
   'pi-omp-refresh',
   'private-launch',
+  'windows-account-launch',
   'terminal-bridge',
   'zcode-resume',
 ]
@@ -43,6 +44,13 @@ const required = new Set([
   ...helperNames.map((name) => `lib/${name}.mjs`),
   'lib/hermes-native-entry.py',
   'lib/types/host/hermes-native-entry.py',
+  'lib/windows-account-owner.ps1',
+  'lib/types/host/windows-account-owner.ps1',
+  'lib/windows-account-bootstrap.ps1',
+  'lib/types/host/windows-account-bootstrap.ps1',
+  'lib/types/host/windows-account-launch.mjs',
+  'lib/windows-agy-account.ps1',
+  'lib/types/host/windows-agy-account.ps1',
 ])
 const runtimeEntries = new Set(helperNames.map((name) => `lib/${name}.mjs`))
 const typeEntries = new Set()
@@ -122,7 +130,7 @@ const hashes = new Map()
 for (const part of files) {
   const bytes = readFileSync(join(root, part))
   hashes.set(part, sha256(bytes))
-  if (!/\.(?:[cm]?js|[cm]?ts|map|py|md|yml)$/.test(part)) continue
+  if (!/\.(?:[cm]?js|[cm]?ts|map|py|ps1|md|yml)$/.test(part)) continue
   const text = bytes.toString('utf8')
   if ([root, homedir()].some((path) => path.length > 1 && text.includes(path)))
     throw new Error(`Machine-private absolute path in release file: ${part}`)

@@ -32,7 +32,8 @@ const privateArgv = (argv: string[]) => [
 
 export function zcodeGrokInstruction(cli: ZCodeGrokCli, action: AccountAction): string {
   if (cli === 'zcode') {
-    if (action === 'login') return '按 ZCode 原生提示完成 BigModel 授权；此账号供本插件的 ZCode 任务使用。'
+    if (action === 'login')
+      return '按当前 ZCode 原生能力完成授权；终端会注明使用 Z.AI 或 BigModel。此账号供本插件的 ZCode 任务使用。'
     if (action === 'logout') return '此操作会退出该独立配置中的 Z.AI 和 BigModel Coding Plan 账号。'
     return '在 ZCode 原生终端输入 /login 或 /logout 管理账号。'
   }
@@ -229,7 +230,14 @@ export async function zcodeGrokAccountStatus(
     if (location.isSymbolicLink() || !location.isFile()) throw new Error('Invalid account file')
     file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     const info = await file.stat()
-    if (!info.isFile() || info.dev !== location.dev || info.ino !== location.ino || info.nlink !== 1 || info.size > 64 * 1024 || !info.size)
+    if (
+      !info.isFile() ||
+      info.dev !== location.dev ||
+      info.ino !== location.ino ||
+      info.nlink !== 1 ||
+      info.size > 64 * 1024 ||
+      !info.size
+    )
       throw new Error('Invalid account file')
     let offset = 0
     while (offset < buffer.length) {
@@ -241,7 +249,13 @@ export async function zcodeGrokAccountStatus(
     if (offset > 64 * 1024) throw new Error('Account file too large')
     const current = await lstat(path)
     const after = await file.stat()
-    if (current.isSymbolicLink() || current.dev !== info.dev || current.ino !== info.ino || after.size !== info.size || after.mtimeMs !== info.mtimeMs)
+    if (
+      current.isSymbolicLink() ||
+      current.dev !== info.dev ||
+      current.ino !== info.ino ||
+      after.size !== info.size ||
+      after.mtimeMs !== info.mtimeMs
+    )
       throw new Error('Account file changed during read')
     const raw: unknown = JSON.parse(buffer.subarray(0, offset).toString('utf8'))
     signal.throwIfAborted()
@@ -380,23 +394,44 @@ export async function zcodeGrokAccountLaunch(
     }
   }
   const help = await zcodeHelp(executable, cwd, backend, config, signal)
-  if (!supportsBigModelLogin(help))
-    throw new ZCodeAccountCapabilityError(
-      '当前 ZCode 是不含完整 BigModel 登录与终端界面的桌面内置版。请配置支持 login [zai|bigmodel] 的完整 ZCode CLI。',
-    )
+  const plainHelp = stripVTControlCharacters(help)
+  const bigmodel = supportsBigModelLogin(help)
+  const zai = /^\s*login\s+Sign in with Z\.AI OAuth\b/m.test(plainHelp)
+  if (action === 'login' && !bigmodel && !zai)
+    throw new ZCodeAccountCapabilityError('当前 ZCode 未声明原生登录能力，请检查 CLI 安装')
+  if (action === 'manage' && !/^\s*tui\s+/m.test(plainHelp))
+    throw new ZCodeAccountCapabilityError('当前 ZCode 未声明原生终端界面，请检查 CLI 安装')
+  if (action === 'logout' && !/^\s*logout\s+/m.test(plainHelp))
+    throw new ZCodeAccountCapabilityError('当前 ZCode 未声明原生退出登录能力，请检查 CLI 安装')
   const auth = await privateDirectory(zcodeAuthDirectory(config.zcodeAuthDirectory, root))
-  const env = {
-    ...zcodeEnvironment(executable, state, auth, config.zcodeBuiltinConfig),
-    ELECTRON_RUN_AS_NODE: '1',
+  let env: Record<string, string>
+  try {
+    env = {
+      ...zcodeEnvironment(executable, state, auth, config.zcodeBuiltinConfig),
+      ELECTRON_RUN_AS_NODE: '1',
+    }
+  } catch {
+    throw new ZCodeAccountCapabilityError('ZCode 配套资源不可用，请检查 CLI 安装或配置 zcodeBuiltinConfig')
   }
   signal.throwIfAborted()
   return {
     argv: privateArgv([
       ...entryArgv(executable),
-      ...(action === 'manage' ? ['tui'] : action === 'login' ? ['login', 'bigmodel'] : ['logout']),
+      ...(action === 'manage'
+        ? ['tui']
+        : action === 'login'
+          ? ['login', ...(bigmodel ? ['bigmodel'] : [])]
+          : ['logout']),
     ]),
     env,
     cwd,
-    instruction: zcodeGrokInstruction(cli, action),
+    instruction:
+      action === 'login'
+        ? bigmodel
+          ? '按 ZCode 原生提示完成 BigModel 授权；此账号供本插件的 ZCode 任务使用。'
+          : '当前 ZCode 版本的原生登录仅支持 Z.AI OAuth，不支持 BigModel 登录。按提示完成 Z.AI 授权；此账号供本插件的 ZCode 任务使用。'
+        : action === 'logout' && !bigmodel
+          ? '此操作会退出该独立配置中的 Z.AI 账号。'
+          : zcodeGrokInstruction(cli, action),
   }
 }

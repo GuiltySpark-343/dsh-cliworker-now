@@ -1,3 +1,9 @@
+import {
+  readClaudeOwnRoute,
+  claudeRouteStatusArguments,
+  claudeRouteIdentity,
+  ClaudeOwnRouteError,
+} from './claude-own-route.ts'
 import { constants } from 'node:fs'
 import { lstat, open } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -6,6 +12,8 @@ import { safePiOmpAncestors } from './pi-omp-native.ts'
 import { EFFORTS, type ModelChoice } from '../shared/types.ts'
 import { probeAccountModels, type AccountModelInput } from './account-models.mjs'
 import { parseNativeJsonc } from './opencode-native.ts'
+import { mimoMetadataCache, mimoMetadataKey, type MimoOwnSnapshot } from './mimo-metadata-cache.ts'
+import { readKimiOAuthModelSources, probeKimiOAuthModels } from './kimi-oauth-models.ts'
 import {
   assertMimoConfiguration,
   mimoConfigurationFiles,
@@ -34,6 +42,7 @@ function parseMetadata(value: string): Record<string, any> {
 /** Private material only. Never return this structure through Gateway or persist it. */
 export interface FirstPartyModelSource extends AccountModelInput {
   sourceIds: string[]
+  claudeRoute?: 'proxy' | 'api'
   nativeFullModelIds?: boolean
   nativeModels: { remoteId: string; choice: ModelChoice }[]
 }
@@ -307,18 +316,33 @@ export async function readFirstPartyModelSources(
       return []
     const raw = parseMetadata(await capture([executable, 'provider', 'list', '--json']))
     signal.throwIfAborted()
-    return parseKimiModelSources(
-      raw,
-      join(process.env.KIMI_CODE_HOME ?? join(homedir(), '.kimi-code'), 'config.toml'),
-    )
+    const sourceId = join(process.env.KIMI_CODE_HOME ?? join(homedir(), '.kimi-code'), 'config.toml')
+    return [
+      ...parseKimiModelSources(raw, sourceId),
+      ...(await readKimiOAuthModelSources(raw, sourceId, signal)),
+    ]
   }
   if (cli === 'mimo') {
     const env = firstPartyEnvironment(cli)
+    const expected = mimoConfigurationPaths()
+    const own: MimoOwnSnapshot = {
+      authPath: join(expected.data, 'auth.json'),
+      auth: await readFirstPartyJson(join(expected.data, 'auth.json')),
+      configurations: [],
+    }
+    // Read current own material before every reuse, including logout/account or route changes.
+    // The cache stores neither credentials nor raw native config output.
+    for (const path of await mimoConfigurationFiles(project)) {
+      own.configurations.push({ path, value: await readFirstPartyJson(path) })
+      signal.throwIfAborted()
+    }
+    const key = await mimoMetadataKey(executable, project, own, signal)
+    const cached = mimoMetadataCache.get(key, own)
+    if (cached) return cached
     const paths = await capture([executable, 'debug', 'paths'], env)
     signal.throwIfAborted()
     const data = paths.match(/^data\s+(.+)$/m)?.[1]?.trim()
     if (!data || !isAbsolute(data) || dirname(data) === data) return []
-    const expected = mimoConfigurationPaths()
     if (data !== expected.data || paths.match(/^config\s+(.+)$/m)?.[1]?.trim() !== expected.config)
       throw new MimoConfigurationError('MiMo 配置来源无法确认，请检查配置')
     const authPath = join(data, 'auth.json'),
@@ -346,57 +370,44 @@ export async function readFirstPartyModelSources(
     await assertFirstPartyConfiguration(cli, project, signal)
     const native = parseMimoModelRecords(await capture([executable, 'models', '--verbose'], env))
     signal.throwIfAborted()
-    return mimoModelSources(native, config, auth, authPath, inline)
-  }
-  const root = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
-  const paths = [
-    join(root, 'settings.json'),
-    join(project, '.claude/settings.json'),
-    join(project, '.claude/settings.local.json'),
-  ]
-  const configured: Record<string, any> = {},
-    env: Record<string, any> = {}
-  for (const path of paths) {
-    const settings = await readFirstPartyJson(path)
+    const sources = mimoModelSources(native, config, auth, authPath, inline)
+    // If native discovery overlapped a configuration write, keep the normal result but do
+    // not publish it under the older snapshot. Authorization still compares fresh bindings.
+    const after: MimoOwnSnapshot = {
+      authPath,
+      auth: await readFirstPartyJson(authPath),
+      configurations: [],
+    }
+    for (const path of await mimoConfigurationFiles(project)) {
+      after.configurations.push({ path, value: await readFirstPartyJson(path) })
+      signal.throwIfAborted()
+    }
+    if (key === (await mimoMetadataKey(executable, project, after, signal)))
+      mimoMetadataCache.set(key, sources, after)
     signal.throwIfAborted()
-    Object.assign(configured, settings)
-    if (record(settings.env)) Object.assign(env, settings.env)
+    return sources
   }
-  const managed = await readFirstPartyJson(claudeManagedSettingsPath())
-  const authOption = /ANTHROPIC|CLAUDE_CODE_(?:OAUTH|USE_|API)|AWS_|GOOGLE_|CLOUD_ML|API_KEY|BEARER_TOKEN/
-  if (Object.entries(process.env).some(([key, value]) => value && authOption.test(key))) return []
-  if (
-    configured.apiKeyHelper ||
-    managed.apiKeyHelper ||
-    (record(managed.env) && Object.keys(managed.env).some((key) => authOption.test(key)))
-  )
-    return []
-  if (
-    Object.entries(env).some(
-      ([key, value]) =>
-        value && authOption.test(key) && !['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'].includes(key),
-    )
-  )
-    return []
-  if (!literal(env.ANTHROPIC_API_KEY)) return []
-  const status = parseMetadata(await capture([executable, 'auth', 'status', '--json']))
+  let route
+  try {
+    route = await readClaudeOwnRoute(project, signal)
+  } catch (error) {
+    if (error instanceof ClaudeOwnRouteError) return []
+    throw error
+  }
+  if (route.kind === 'native' || !route.source) return []
+  const raw = await capture(claudeRouteStatusArguments(executable, route))
   signal.throwIfAborted()
-  if (!record(status) || status.loggedIn !== true || status.authMethod !== 'api_key') return []
+  try {
+    claudeRouteIdentity(route, raw, 0)
+  } catch (error) {
+    if (error instanceof ClaudeOwnRouteError) return []
+    throw error
+  }
   const help = await capture([executable, '--help'])
   signal.throwIfAborted()
-  if (!help.includes('--model') || !help.includes('--output-format'))
-    throw new Error('Claude 版本不支持模型参数，请升级')
-  return [
-    {
-      provider: 'anthropic',
-      credential: { type: 'api', key: env.ANTHROPIC_API_KEY },
-      baseUrl: env.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com',
-      apiType: 'anthropic-messages',
-      sourceIds: paths,
-      nativeModels: [],
-      nativeFullModelIds: true,
-    },
-  ]
+  if (!help.includes('--model') || !help.includes('--output-format') || !help.includes('--settings'))
+    throw new Error('Claude 版本不支持原生来源参数，请升级')
+  return [route.source]
 }
 
 export async function discoverFirstPartySources(
@@ -408,14 +419,31 @@ export async function discoverFirstPartySources(
     scopes = new Map<string, Awaited<ReturnType<typeof probeAccountModels>>>()
   for (const source of sources) {
     signal.throwIfAborted()
-    const route = JSON.stringify([source.provider, source.baseUrl, source.apiType, source.credential])
+    const route = JSON.stringify([
+      source.provider,
+      source.baseUrl,
+      source.apiType,
+      source.anthropicAuth,
+      source.credential,
+    ])
     let scope = scopes.get(route)
     if (!scope) {
-      scope = await probeAccountModels(source, { ...options, signal })
+      scope =
+        source.apiType === 'kimi-managed-oauth'
+          ? await probeKimiOAuthModels(source, { ...options, signal })
+          : await probeAccountModels(source, { ...options, signal })
       scopes.set(route, scope)
     }
     signal.throwIfAborted()
-    if (scope.state !== 'supported') continue
+    if (scope.state !== 'supported') {
+      if (source.claudeRoute === 'proxy')
+        throw new ClaudeOwnRouteError(
+          scope.state === 'denied'
+            ? 'Claude 本地代理认证失败，请检查代理配置'
+            : 'Claude 本地代理模型目录无法确认，请检查代理服务',
+        )
+      continue
+    }
     const nativeModels = source.nativeFullModelIds
       ? scope.models
           .filter((model) => id(model.id) && !['sonnet', 'opus', 'haiku'].includes(model.id))

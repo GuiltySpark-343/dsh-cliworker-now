@@ -1,6 +1,9 @@
+import { readClaudeOwnRoute, claudeNativeSettingsArguments } from './claude-own-route.ts'
+import { discoverClaudeNativeOAuth } from './claude-native-oauth.ts'
 import { discoverCodexModels } from './codex-models.ts'
 import { discoverAgyAccountModels } from './agy-models.ts'
 import { discoverFirstPartySources, readFirstPartyModelSources } from './first-party-models.ts'
+import { nativeAgyAccountIdentity } from './agy-windows-account.ts'
 import { extendedCatalog, isExtendedCli } from './extended-adapters.ts'
 import { ZCodeProtocol, managedZCodeEntry } from './zcode-adapter.ts'
 import { HermesProtocol } from './hermes-adapter.ts'
@@ -57,7 +60,18 @@ export const executableFor = (cli: CliId, config: RuntimeConfig): string => {
   if (process.platform === 'win32') {
     const roots = [
       join(homedir(), '.local', 'bin'),
-      join(homedir(), cli === 'pi' ? '.pi/agent/bin' : cli === 'grok' ? '.grok/bin' : cli === 'kimi' ? '.kimi-code/bin' : cli === 'mimo' ? '.mimocode/bin' : '.local/bin'),
+      join(
+        homedir(),
+        cli === 'pi'
+          ? '.pi/agent/bin'
+          : cli === 'grok'
+            ? '.grok/bin'
+            : cli === 'kimi'
+              ? '.kimi-code/bin'
+              : cli === 'mimo'
+                ? '.mimocode/bin'
+                : '.local/bin',
+      ),
     ]
     if (cli === 'zcode') {
       const programs = process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Programs')
@@ -98,6 +112,7 @@ export async function captureCatalogMetadata(
   cwd: string,
   signal: AbortSignal,
   env?: Record<string, string>,
+  allowedExitCodes: readonly number[] = [0],
 ) {
   signal.throwIfAborted()
   const control = AbortSignal.any([signal, AbortSignal.timeout(15000)])
@@ -125,7 +140,8 @@ export async function captureCatalogMetadata(
     await Promise.all(readers)
     const outcome = await process.done
     control.throwIfAborted()
-    if (outcome.exitCode !== 0) throw new Error('CLI 模型查询失败，请在终端检查该 CLI 配置')
+    if (outcome.exitCode === null || !allowedExitCodes.includes(outcome.exitCode))
+      throw new Error('CLI 模型查询失败，请在终端检查该 CLI 配置')
     return output
   } finally {
     let exited = false
@@ -169,6 +185,8 @@ export async function catalogFor(
     const models = await discoverAgyAccountModels(
       () => capture(backend, config, [executable, 'models'], cwd, signal),
       signal,
+      undefined,
+      nativeAgyAccountIdentity(backend, config),
     )
     return { cli, models, notice: '当前账号可用模型' }
   }
@@ -178,6 +196,18 @@ export async function catalogFor(
     return { cli, models, notice: '当前账号可用模型' }
   }
   if (cli === 'claude' || cli === 'kimi' || cli === 'mimo') {
+    const claudeRoute = cli === 'claude' ? await readClaudeOwnRoute(cwd, signal) : undefined
+    if (claudeRoute?.kind === 'native') {
+      const { models } = await discoverClaudeNativeOAuth(
+        backend,
+        config,
+        executable,
+        cwd,
+        signal,
+        claudeNativeSettingsArguments(claudeRoute.configDirectory),
+      )
+      return { cli, models, notice: 'Claude 官方账号当前可用模型' }
+    }
     const sources = await readFirstPartyModelSources(
       cli,
       executable,
@@ -187,7 +217,11 @@ export async function catalogFor(
     )
     const models = await discoverFirstPartySources(sources, signal)
     if (!models.length) throw new Error(`${CLI_LABELS[cli]} 当前账号暂无可确认模型，请检查配置`)
-    return { cli, models, notice: '当前账号可用模型' }
+    return {
+      cli,
+      models,
+      notice: claudeRoute?.kind === 'proxy' ? 'Claude 本地代理当前可用模型' : '当前账号可用模型',
+    }
   }
   throw new Error('Unsupported CLI')
 }

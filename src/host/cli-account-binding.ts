@@ -1,3 +1,10 @@
+import {
+  readClaudeOwnRoute,
+  claudeRouteStatusArguments,
+  claudeRouteIdentity,
+  ClaudeOwnRouteError,
+  type ClaudeOwnRoute,
+} from './claude-own-route.ts'
 import { constants } from 'node:fs'
 import { lstat, open } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
@@ -7,7 +14,9 @@ import { CLI_LABELS, type CliId } from '../shared/types.ts'
 import { captureCatalogMetadata, resolveCliExecutable } from './adapters.ts'
 import { readCodexAccount } from './codex-account.ts'
 import { assertAgyNativeAccountRoute } from './agy-models.ts'
+import { readWindowsAgyAccount } from './agy-windows-account.ts'
 import { readFirstPartyModelSources } from './first-party-models.ts'
+import { KimiOAuthModelError } from './kimi-oauth-models.ts'
 import { readPiOmpAccountMaterial, safePiOmpAncestors } from './pi-omp-native.ts'
 import { readOpenCodeProfile, OPENCODE_OAUTH_UNSUPPORTED } from './opencode-native.ts'
 import { openCodeAuthDirectory } from './opencode-adapter.ts'
@@ -282,10 +291,21 @@ async function material(
   config: RuntimeConfig,
   project: string,
   signal: AbortSignal,
+  selectedClaudeRoute?: ClaudeOwnRoute,
 ): Promise<BindingMaterial> {
   const home = homedir()
   if (cli === 'antigravity') {
     await assertAgyNativeAccountRoute(signal, home)
+    if (process.platform === 'win32') {
+      const account = await readWindowsAgyAccount(backend, config, signal)
+      return {
+        sourceIds: ['windows-credential:gemini:antigravity'],
+        entries:
+          account.identity.state === 'authenticated' && account.principalHash
+            ? [{ provider: 'antigravity', principal: { kind: 'oauth', subjectHash: account.principalHash } }]
+            : [],
+      }
+    }
     const root = join(home, '.gemini')
     const auth = await document(join(root, 'jetski-standalone-oauth-token'), signal)
     const principal =
@@ -323,32 +343,52 @@ async function material(
   if (cli === 'claude' || cli === 'kimi' || cli === 'mimo') {
     const executable = await resolveCliExecutable(cli, backend, config, signal)
     if (cli === 'claude') {
-      const status = JSON.parse(
-        await captureCatalogMetadata(
-          backend,
-          config,
-          [executable, 'auth', 'status', '--json'],
-          project,
-          signal,
-        ),
-      )
-      if (status.loggedIn === true && status.authMethod === 'claude.ai' && text(status.email))
-        return {
-          sourceIds: [
-            resolve(process.env.CLAUDE_CONFIG_DIR?.trim() || join(home, '.claude')),
-            'native:claude-auth-status',
-          ],
-          entries: [
-            {
-              provider: 'anthropic',
-              principal: {
-                kind: 'oauth',
-                email: status.email.toLowerCase(),
-                ...(text(status.orgId) ? { organization: status.orgId } : {}),
+      const route = selectedClaudeRoute ?? (await readClaudeOwnRoute(project, signal))
+      if (route.kind === 'native') {
+        const status = JSON.parse(
+          await captureCatalogMetadata(
+            backend,
+            config,
+            claudeRouteStatusArguments(executable, route),
+            project,
+            signal,
+            undefined,
+            [0, 1],
+          ),
+        )
+        const identity = claudeRouteIdentity(route, JSON.stringify(status), status.loggedIn === true ? 0 : 1)
+        if (identity.state === 'authenticated' && identity.accountLabel)
+          return {
+            sourceIds: [
+              resolve(
+                route.configDirectory || process.env.CLAUDE_CONFIG_DIR?.trim() || join(home, '.claude'),
+              ),
+              'native:claude-auth-status',
+            ],
+            entries: [
+              {
+                provider: 'anthropic',
+                route: { source: 'official-native-login' },
+                principal: {
+                  kind: 'oauth',
+                  email: identity.accountLabel.toLowerCase(),
+                  ...(text(status.orgId) ? { organization: status.orgId } : {}),
+                },
               },
-            },
-          ],
-        }
+            ],
+          }
+        throw new ClaudeOwnRouteError('Claude 官方账号未登录，请使用原生登录')
+      }
+      if (selectedClaudeRoute) {
+        const source = route.source
+        if (!source) throw new ClaudeOwnRouteError()
+        const entry = credentialEntry(source.provider, source.credential, {
+          baseUrl: source.baseUrl,
+          apiType: source.apiType,
+          anthropicAuth: source.anthropicAuth,
+        })
+        return { sourceIds: source.sourceIds, entries: entry ? [entry] : [] }
+      }
     }
     const sources = await readFirstPartyModelSources(
       cli,
@@ -363,6 +403,7 @@ async function material(
         const entry = credentialEntry(source.provider, source.credential, {
           baseUrl: source.baseUrl,
           apiType: source.apiType,
+          anthropicAuth: source.anthropicAuth,
         })
         return entry ? [entry] : []
       }),
@@ -518,10 +559,11 @@ export async function readCliAccountBinding(
   config: RuntimeConfig,
   project: string,
   signal: AbortSignal,
+  selectedClaudeRoute?: ClaudeOwnRoute,
 ): Promise<string> {
   signal.throwIfAborted()
   try {
-    const value = await material(cli, backend, config, project, signal)
+    const value = await material(cli, backend, config, project, signal, selectedClaudeRoute)
     signal.throwIfAborted()
     if (!value.entries.length || !value.sourceIds.length) throw new CliAccountBindingError(cli)
     const sources = [
@@ -532,7 +574,12 @@ export async function readCliAccountBinding(
   } catch (error) {
     if (error instanceof ProcessCleanupUnconfirmedError) throw error
     signal.throwIfAborted()
-    if (error instanceof CliAccountBindingError) throw error
+    if (
+      error instanceof CliAccountBindingError ||
+      error instanceof KimiOAuthModelError ||
+      error instanceof ClaudeOwnRouteError
+    )
+      throw error
     throw new CliAccountBindingError(cli)
   }
 }

@@ -23,7 +23,7 @@ import {
 import type { AccountAction, AccountSource, AccountStatus } from '../shared/accounts.ts'
 import { modelName } from '../shared/models.ts'
 import { visibleModelChoices } from '../shared/model-presentation.ts'
-import { AccountTerminal } from './account-terminal.tsx'
+import { AccountTerminal, type AccountCloseControl } from './account-terminal.tsx'
 import { BrandIcon, Glyph } from './icons.tsx'
 import { operationMessage } from './operation-error.ts'
 import { value, type API } from './workers.ts'
@@ -64,23 +64,25 @@ function providerLoginSummary(account: AccountStatus): { label: string; detail: 
     const provider = typeof login.providerLabel === 'string' ? login.providerLabel.trim() : ''
     if (!provider || provider.length > 64 || unsafe.test(provider)) return []
     const identity =
-      login.authMethod === 'oauth' && typeof login.accountLabel === 'string'
-        ? login.accountLabel.trim()
-        : ''
+      login.authMethod === 'oauth' && typeof login.accountLabel === 'string' ? login.accountLabel.trim() : ''
     const email =
       identity.length <= 254 && !unsafe.test(identity) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(identity)
         ? identity
         : ''
-    return [{
-      label: login.authMethod === 'api' ? `${provider} API 登录` : `${provider}账号登录`,
-      authMethod: login.authMethod,
-      email,
-    }]
+    return [
+      {
+        label: login.authMethod === 'api' ? `${provider} API 登录` : `${provider}账号登录`,
+        authMethod: login.authMethod,
+        email,
+      },
+    ]
   })
   if (!logins.length) return undefined
   const oauth = logins.filter((login) => login.authMethod === 'oauth')
   const visible = oauth.length ? oauth : logins
-  const detail = [...new Set(logins.map(({ label, email }) => (email ? `${label} ${email}` : label)))].join(' · ')
+  const detail = [...new Set(logins.map(({ label, email }) => (email ? `${label} ${email}` : label)))].join(
+    ' · ',
+  )
   return {
     label: [...new Set(visible.map(({ label }) => label))].join(' · '),
     detail,
@@ -95,7 +97,14 @@ function connectionStatus(enabled: boolean | undefined, account?: AccountEntry, 
   if (enabled === undefined || !account || (account.loading && !account.data))
     return { state: 'pending', label: '正在检查连接' }
   if (!account.error && account.data?.state === 'unconfigured')
-    return { state: 'unconfigured', label: account.data.installed ? '未登录' : '未安装' }
+    return {
+      state: 'unconfigured',
+      label: account.data.installed
+        ? account.data.cli === 'claude'
+          ? account.data.summary
+          : '未登录'
+        : '未安装',
+    }
   if (account.error || !account.data || ['unavailable', 'unauthenticated'].includes(account.data.state)) {
     return { state: 'failed', label: account.error || account.data?.summary || '连接失败' }
   }
@@ -136,6 +145,18 @@ function OpenSettingsDialog({
   enabledRef.current = enabled
   const probes = useRef(new Map<CliId, AbortController>())
   const toggleController = useRef<AbortController>()
+  const accountClose = useRef<() => Promise<boolean>>()
+  const leaving = useRef(false)
+  const leave = async (transition: () => void) => {
+    if (leaving.current) return
+    leaving.current = true
+    try {
+      if (accountClose.current && !(await accountClose.current())) return
+      transition()
+    } finally {
+      leaving.current = false
+    }
+  }
 
   const refreshAccount = useCallback(
     (id: CliId, replace = false) => {
@@ -234,7 +255,7 @@ function OpenSettingsDialog({
   return (
     <Modal
       open
-      onClose={onClose}
+      onClose={() => void leave(onClose)}
       title="CLI Worker 设置"
       closeLabel="关闭设置"
       className="cwn-settings-dialog"
@@ -249,7 +270,7 @@ function OpenSettingsDialog({
             className="cwn-settings-nav-primary"
             aria-label="智能体设置"
             aria-pressed={page === 'roles'}
-            onClick={() => setPage('roles')}
+            onClick={() => void leave(() => setPage('roles'))}
           >
             <span className="cwn-settings-nav-icon" aria-hidden="true">
               <IconUserOutlineRegular size={20} />
@@ -293,10 +314,12 @@ function OpenSettingsDialog({
                     aria-pressed={page === 'cli' && cli === id}
                     tabIndex={cliExpanded ? undefined : -1}
                     data-enabled={enabled?.[id] !== false}
-                    onClick={() => {
-                      setCli(id)
-                      setPage('cli')
-                    }}
+                    onClick={() =>
+                      void leave(() => {
+                        setCli(id)
+                        setPage('cli')
+                      })
+                    }
                   >
                     <BrandIcon cli={id} size={22} />
                     <span className="cwn-settings-nav-label">{CLI_LABELS[id]}</span>
@@ -319,6 +342,7 @@ function OpenSettingsDialog({
           <RolePresetsPane api={api} sessionId={sessionId} />
         ) : (
           <CliSettings
+            accountClose={accountClose}
             openNativeSettings={openNativeSettings}
             key={`${sessionId}:${cli}`}
             api={api}
@@ -440,7 +464,9 @@ function AccountSummary({
                   ? authenticatedLabel(data)
                   : data?.state === 'unconfigured'
                     ? data.installed
-                      ? '未登录'
+                      ? data.cli === 'claude'
+                        ? data.summary
+                        : '未登录'
                       : '未安装'
                     : data?.state === 'configured'
                       ? '已配置'
@@ -459,7 +485,9 @@ function AccountSummary({
             <span className="cwn-account-logins" title={providerLogins.detail} aria-label={label}>
               {label}
             </span>
-          ) : label}
+          ) : (
+            label
+          )}
         </span>
         {authenticated && !data.logins?.length && !apiLogin && data.accountLabel && (
           <span className="cwn-account-label" title={data.accountLabel}>
@@ -472,6 +500,7 @@ function AccountSummary({
   )
 }
 function CliSettings({
+  accountClose,
   openNativeSettings,
   api,
   sessionId,
@@ -486,6 +515,7 @@ function CliSettings({
   settingsError,
   toggleError,
 }: {
+  accountClose: AccountCloseControl
   openNativeSettings?: () => void
   api: API
   sessionId: string
@@ -610,8 +640,9 @@ function CliSettings({
     setAccountSource(undefined)
     onRefreshAccount(true)
   }
-  const sources = chosenAction?.sources?.filter((source, index, all) =>
-    ['native', 'plugin'].includes(source.id) && all.findIndex((item) => item.id === source.id) === index,
+  const sources = chosenAction?.sources?.filter(
+    (source, index, all) =>
+      ['native', 'plugin'].includes(source.id) && all.findIndex((item) => item.id === source.id) === index,
   )
   const choosingSource = action === 'logout' && chosenAction?.sources !== undefined && !accountSource
   const accountAction = (id: AccountAction) => {
@@ -657,8 +688,13 @@ function CliSettings({
               return
             }
             setChosenAction(item)
-            setAccountSource(id === 'logout' && item.sources?.length === 1 &&
-              ['native', 'plugin'].includes(item.sources[0]!.id) ? item.sources[0]!.id : undefined)
+            setAccountSource(
+              id === 'logout' &&
+                item.sources?.length === 1 &&
+                ['native', 'plugin'].includes(item.sources[0]!.id)
+                ? item.sources[0]!.id
+                : undefined,
+            )
             setAction(item.id)
           }
         }}
@@ -749,7 +785,10 @@ function CliSettings({
         {action && enabled && (
           <Modal
             open
-            onClose={closeAccount}
+            onClose={() => {
+              if (accountClose.current) void accountClose.current()
+              else closeAccount()
+            }}
             title={`${CLI_LABELS[cli]} · ${chosenAction?.label ?? '账号终端'}`}
             closeLabel="关闭账号操作"
             className="cwn-account-dialog"
@@ -760,7 +799,12 @@ function CliSettings({
                 <p>{sources?.length ? '选择要退出的账号来源' : '账号来源不可用，请关闭后刷新状态'}</p>
                 <div className="cwn-account-actions">
                   {sources?.map((source) => (
-                    <Button key={source.id} variant="outline" size="md" onClick={() => setAccountSource(source.id)}>
+                    <Button
+                      key={source.id}
+                      variant="outline"
+                      size="md"
+                      onClick={() => setAccountSource(source.id)}
+                    >
                       {source.label}
                     </Button>
                   ))}
@@ -768,6 +812,7 @@ function CliSettings({
               </section>
             ) : (
               <AccountTerminal
+                closeControl={accountClose}
                 api={api}
                 sessionId={sessionId}
                 cli={cli}

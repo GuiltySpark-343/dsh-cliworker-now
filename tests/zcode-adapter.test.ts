@@ -13,7 +13,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { discoverZCode, parseZCodeBuiltin, prepareZCode, ZCodeProtocol } from '../src/host/zcode-adapter.ts'
+import { discoverZCode, parseZCodeBuiltin, prepareZCode, ZCodeProtocol, zcodeEnvironment } from '../src/host/zcode-adapter.ts'
 import type { EventInput } from '../src/host/protocol.ts'
 
 const directories: string[] = []
@@ -22,6 +22,15 @@ const directory = () => {
   directories.push(path)
   return path
 }
+it('uses the companion resources/config provider beside a Desktop glm entry', () => {
+  const root = directory()
+  const resources = join(root, 'ZCode', 'resources')
+  const provider = join(resources, 'config/provider/zcode-builtin.json')
+  mkdirSync(dirname(provider), { recursive: true })
+  writeFileSync(provider, '{}')
+  const env = zcodeEnvironment(join(resources, 'glm/zcode.cjs'), join(root, 'state'))
+  expect(env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE).toBe(provider)
+})
 afterEach(() => {
   for (const path of directories.splice(0)) rmSync(path, { recursive: true, force: true })
   vi.unstubAllEnvs()

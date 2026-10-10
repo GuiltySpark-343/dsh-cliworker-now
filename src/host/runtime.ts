@@ -1,3 +1,4 @@
+import { readClaudeOwnRoute, prepareClaudeWorkerLaunch } from './claude-own-route.ts'
 import { extendedLaunch, isExtendedCli } from './extended-adapters.ts'
 import { appendFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
@@ -540,6 +541,25 @@ export class WorkerRuntime {
       worker.status = 'running'
       this.storage.save(worker)
       this.changed()
+      const selectedClaudeRoute =
+        cliOf(worker.preference) === 'claude'
+          ? await readClaudeOwnRoute(worker.project, controller.signal)
+          : undefined
+      // Bind the exact prepared snapshot as well as the current source. A -> B -> A
+      // configuration changes must not authorize launching B under A's admission.
+      if (
+        selectedClaudeRoute &&
+        binding !==
+          (await readCliAccountBinding(
+            'claude',
+            this.backend,
+            this.config,
+            worker.project,
+            controller.signal,
+            selectedClaudeRoute,
+          ))
+      )
+        throw new Error(ACCOUNT_CHANGED)
       const launch = isExtendedCli(cliOf(worker.preference))
         ? await extendedLaunch(
             cliOf(worker.preference),
@@ -554,18 +574,33 @@ export class WorkerRuntime {
             (argv, env) =>
               captureCatalogMetadata(this.backend, this.config, argv, worker.project, controller.signal, env),
           )
-        : {
-            env: firstPartyEnvironment(cliOf(worker.preference)),
-            argv: workerArguments(
-              executable,
-              worker.project,
-              worker.preference,
-              worker.mode,
-              task.prompt,
-              this.config.timeoutMs,
-              expectedConversation,
-            ),
-          }
+        : cliOf(worker.preference) === 'claude'
+          ? await prepareClaudeWorkerLaunch(
+              selectedClaudeRoute!,
+              workerArguments(
+                executable,
+                worker.project,
+                worker.preference,
+                worker.mode,
+                task.prompt,
+                this.config.timeoutMs,
+                expectedConversation,
+              ),
+              this.storage.directory,
+              controller.signal,
+            )
+          : {
+              env: firstPartyEnvironment(cliOf(worker.preference)),
+              argv: workerArguments(
+                executable,
+                worker.project,
+                worker.preference,
+                worker.mode,
+                task.prompt,
+                this.config.timeoutMs,
+                expectedConversation,
+              ),
+            }
       release = 'cleanup' in launch ? launch.cleanup : undefined
       controller.signal.throwIfAborted()
       if (

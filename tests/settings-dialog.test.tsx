@@ -7,9 +7,17 @@ import type { AccountStatus } from '../src/shared/accounts.ts'
 import { CLI_IDS, CLI_LABELS, type CliId } from '../src/shared/types.ts'
 
 // Explicit simulation: no CLI, login flow or native portal is started in these tests.
-const terminal = vi.hoisted(() => ({ started: vi.fn(), stopped: vi.fn() }))
+const terminal = vi.hoisted(() => ({ started: vi.fn(), stopped: vi.fn(), close: vi.fn(async () => true) }))
 vi.mock('../src/client/account-terminal.tsx', () => ({
-  AccountTerminal: ({ cli, action, source, onClose, onFinished }: any) => {
+  AccountTerminal: ({ cli, action, source, onClose, onFinished, closeControl }: any) => {
+    useEffect(() => {
+      closeControl.current = async () => {
+        if (!(await terminal.close())) return false
+        onClose()
+        return true
+      }
+      return () => { closeControl.current = undefined }
+    })
     useEffect(() => {
       if (source) terminal.started(cli, action, source)
       else terminal.started(cli, action)
@@ -72,6 +80,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
 }))
 const mounted: ReactTestRenderer[] = []
 afterEach(async () => {
+  terminal.close.mockReset().mockResolvedValue(true)
   await act(async () => {
     for (const r of mounted.splice(0)) r.unmount()
   })
@@ -332,6 +341,26 @@ it.each(['关闭账号操作', 'Codex 设置'])(
     await t.click('Antigravity 设置')
     expect(terminal.started).toHaveBeenCalledTimes(1)
     expect(t.button('登录 / 切换账号').props.disabled).toBe(true)
+  },
+)
+
+it.each(['关闭账号操作', '关闭设置', 'Codex 设置', '智能体设置'])(
+  'waits for terminal cleanup and retains the current terminal for retry via %s',
+  async (dismiss) => {
+    const t = await setup({ accountStatus: accountFixture({ actions: accountActions }) })
+    await t.click('登录 / 切换账号')
+    const cleanup = deferred()
+    terminal.close.mockReturnValueOnce(cleanup.promise)
+    await t.click(dismiss)
+    expect(t.r.root.findAllByProps({ 'data-terminal': 'antigravity' })).toHaveLength(1)
+    expect(terminal.stopped).not.toHaveBeenCalled()
+    await act(async () => cleanup.resolve(false))
+    expect(t.r.root.findAllByProps({ 'data-terminal': 'antigravity' })).toHaveLength(1)
+    await t.click(dismiss)
+    expect(terminal.started).toHaveBeenCalledOnce()
+    expect(terminal.stopped).toHaveBeenCalledExactlyOnceWith('antigravity', 'login')
+    if (dismiss === '关闭设置') expect(t.r.toJSON()).toBe(null)
+    else expect(t.r.root.findAllByProps({ 'data-terminal': 'antigravity' })).toHaveLength(0)
   },
 )
 

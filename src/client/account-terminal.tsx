@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type MutableRefObject } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Button, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -9,6 +9,34 @@ import { accountTerminalCSS } from './account-terminal-css.ts'
 
 const STARTUP_TIMEOUT_MS = 20_000
 const CLEANUP_TIMEOUT_MS = 12_000
+
+export type AccountCloseControl = MutableRefObject<(() => Promise<boolean>) | undefined>
+
+// RPC errors may contain native output. Only plugin-owned, fixed diagnostics
+// cross this boundary; never display arbitrary exception text from a CLI.
+function startupMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : ''
+  const safe = [
+    '此 CLI 已有账号终端，请先关闭后重试',
+    '当前宿主不支持交互终端',
+    '账号终端尚未确认完全退出，请重启应用',
+    'Windows 账号终端托管不可用，请检查 PowerShell 后重试',
+    '账号终端启动超时，正在回收启动过程；请稍后重试',
+    '无法启动账号终端，请检查 CLI 安装',
+    'CLI 启动入口无法确认，请配置原生程序或固定 Node/Bun 入口',
+    '无法确认 ZCode 账号功能，请检查完整 CLI 安装后重试',
+    '当前 ZCode 未声明原生登录能力，请检查 CLI 安装',
+    '当前 ZCode 未声明原生终端界面，请检查 CLI 安装',
+    '当前 ZCode 未声明原生退出登录能力，请检查 CLI 安装',
+    'ZCode 配套资源不可用，请检查 CLI 安装或配置 zcodeBuiltinConfig',
+    'OMP 执行入口身份不匹配，请检查该 CLI 的安装和路径',
+    'Pi 执行入口身份不匹配，请检查该 CLI 的安装和路径',
+  ]
+  return (
+    safe.find((item) => message === item || message === `Error: ${item}`) ??
+    '账号终端暂不可用，请确认此 CLI 没有运行任务且当前项目允许执行，再重试'
+  )
+}
 
 async function waitForCleanup(cleanup: Promise<void>) {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -33,6 +61,7 @@ export function AccountTerminal({
   source,
   onClose,
   onFinished,
+  closeControl,
 }: {
   api: API
   sessionId: string
@@ -41,12 +70,15 @@ export function AccountTerminal({
   source?: AccountSource
   onClose: () => void
   onFinished: () => void
+  closeControl?: AccountCloseControl
 }) {
   const element = useRef<HTMLDivElement>(null)
   const callbacks = useRef({ onClose, onFinished })
   callbacks.current = { onClose, onFinished }
   const stop = useRef<() => Promise<void>>(async () => {})
+  const focus = useRef<() => void>(() => {})
   const generation = useRef(0)
+  const closing = useRef<Promise<boolean>>()
   const [attempt, setAttempt] = useState(0)
   const [phase, setPhase] = useState<'loading' | 'running' | 'closed' | 'failed' | 'stopping'>('loading')
   const [instruction, setInstruction] = useState('')
@@ -139,6 +171,8 @@ export function AccountTerminal({
         fontSize: 12,
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
         cursorBlink: true,
+        cursorStyle: 'block',
+        cursorInactiveStyle: 'outline',
         scrollback: 1000,
         disableStdin: true,
         // Do not turn CLI-controlled escape sequences into browser navigation.
@@ -146,6 +180,9 @@ export function AccountTerminal({
         allowProposedApi: false,
       })
       const view = terminal
+      focus.current = () => {
+        if (alive && !ended && !startup.signal.aborted) view.focus()
+      }
       const fit = new FitAddon()
       view.loadAddon(fit)
       view.open(element.current)
@@ -157,6 +194,7 @@ export function AccountTerminal({
             background: css.getPropertyValue('--dsw-alias-bg-layer-2').trim() || '#ffffff',
             foreground: css.getPropertyValue('--dsw-alias-label-primary').trim() || '#222222',
             cursor: css.getPropertyValue('--dsw-alias-label-primary').trim() || '#222222',
+            cursorAccent: css.getPropertyValue('--dsw-alias-bg-layer-2').trim() || '#ffffff',
           }
         } catch {
           fail('账号终端显示未能初始化，请重试')
@@ -206,9 +244,11 @@ export function AccountTerminal({
       void (async () => {
         try {
           const result = JSON.parse(
-            value(await (source
-              ? api.cliworker.accountStartForSource(sessionId, cli, action, source, startup.signal)
-              : api.cliworker.accountStart(sessionId, cli, action, startup.signal))),
+            value(
+              await (source
+                ? api.cliworker.accountStartForSource(sessionId, cli, action, source, startup.signal)
+                : api.cliworker.accountStart(sessionId, cli, action, startup.signal)),
+            ),
           ) as { id: string; instruction: string }
           clearTimeout(startupTimer)
           id = result.id
@@ -245,10 +285,10 @@ export function AccountTerminal({
             finish(true)
             void stopSession().catch(() => undefined)
           }
-        } catch {
+        } catch (error) {
           clearTimeout(startupTimer)
           if (alive && !startup.signal.aborted) {
-            setNotice('账号终端暂不可用，请确认此 CLI 没有运行任务且当前项目允许执行，再重试')
+            setNotice(startupMessage(error))
             finish(true)
           }
           // Start process cleanup independently so a slow stop RPC cannot keep
@@ -261,6 +301,7 @@ export function AccountTerminal({
     } catch {
       fail('账号终端显示未能初始化，请重试')
       disposeView()
+      focus.current = () => {}
     }
     return () => {
       alive = false
@@ -273,23 +314,42 @@ export function AccountTerminal({
     }
   }, [api, sessionId, cli, action, source, attempt])
 
-  const close = async (retry = false) => {
+  const close = (retry = false): Promise<boolean> => {
+    if (closing.current) return closing.current
     const ownGeneration = generation.current
     setPhase('stopping')
-    try {
-      await waitForCleanup(stop.current())
-      if (generation.current !== ownGeneration) return
-      if (retry) setAttempt((value) => value + 1)
-      else callbacks.current.onClose()
-    } catch {
-      if (generation.current !== ownGeneration) return
-      setPhase('failed')
-      setNotice('终端关闭失败，请重试')
-    }
+    const operation = (async () => {
+      try {
+        await waitForCleanup(stop.current())
+        if (generation.current !== ownGeneration) return false
+        if (retry) setAttempt((value) => value + 1)
+        else callbacks.current.onClose()
+        return true
+      } catch {
+        if (generation.current !== ownGeneration) return false
+        setPhase('failed')
+        setNotice('终端关闭失败，请重试')
+        return false
+      }
+    })()
+    closing.current = operation
+    void operation.finally(() => {
+      if (closing.current === operation) closing.current = undefined
+    })
+    return operation
   }
+  useEffect(() => {
+    if (!closeControl) return
+    const request = () => close()
+    closeControl.current = request
+    return () => {
+      if (closeControl.current === request) closeControl.current = undefined
+    }
+  })
   return (
     <section className="cwn-account-terminal" data-cli={cli}>
       <style>{accountTerminalCSS}</style>
+      <style>{`.cwn-account-terminal-view:focus-within { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: 3px; border-radius: 4px; }`}</style>
       <div className="cwn-account-terminal-head">
         <strong>{CLI_LABELS[cli]} 账号终端</strong>
         <Button variant="ghost" size="md" onClick={() => void close()} disabled={phase === 'stopping'}>
@@ -307,7 +367,11 @@ export function AccountTerminal({
         className="cwn-account-terminal-view"
         ref={element}
         aria-label={`${CLI_LABELS[cli]} 原生账号终端`}
+        onClick={() => focus.current()}
       />
+      {phase === 'running' && (
+        <p className="cwn-account-instruction">点击终端开始输入，闪烁方块表示输入位置。</p>
+      )}
       {(phase === 'failed' || phase === 'closed') && (
         <Button variant="ghost" size="md" onClick={() => void close(true)}>
           {phase === 'closed' ? '重新打开终端' : '重试'}

@@ -9,7 +9,7 @@ export interface AccountModelInput {
   baseUrl?: string
   apiType?: string
   /** Mirror a native route that explicitly sends both Anthropic auth headers. */
-  anthropicAuth?: 'api-key-and-bearer'
+  anthropicAuth?: 'api-key-and-bearer' | 'bearer'
   customModelIds?: string[]
   verifiedModelIds?: string[]
 }

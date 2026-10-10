@@ -17,6 +17,12 @@ vi.mock('../src/host/adapters.ts', async (original) => ({
   catalogFor: vi.fn(),
 }))
 vi.mock('../src/host/cli-account-binding.ts', () => ({ readCliAccountBinding: vi.fn() }))
+const claudeRouteFixture = vi.hoisted(() => ({ selected: undefined as any }))
+vi.mock('../src/host/claude-own-route.ts', async (original) => ({
+  ...(await original<typeof import('../src/host/claude-own-route.ts')>()),
+  readClaudeOwnRoute: async () => claudeRouteFixture.selected,
+}))
+
 const cleanup: (() => void | Promise<void>)[] = []
 let account: string | undefined
 let models = ['synthetic/model']
@@ -24,6 +30,7 @@ let efforts = ['low'] as ('low' | 'high')[]
 const preference: Preference = { cli: 'antigravity', model: 'synthetic/model', effort: 'low' }
 
 beforeEach(() => {
+  claudeRouteFixture.selected = undefined
   account = 'synthetic-account-a'
   models = ['synthetic/model']
   efforts = ['low']
@@ -194,9 +201,11 @@ it('binds history privately, permits the same account and refuses a replacement 
   finishes[0]!()
   await first.done
   expect(storage.accountBinding(first.worker.id)).toBe('synthetic-account-a')
-  expect(statSync(join(storage.directory, `${first.worker.id}.account-binding.json`)).mode & 0o777).toBe(
-    0o600,
-  )
+  const bindingFile = statSync(join(storage.directory, `${first.worker.id}.account-binding.json`))
+  expect(bindingFile.isFile()).toBe(true)
+  // Windows stat mode does not represent its ACL; retain the POSIX assertion
+  // only on platforms where these permission bits carry that meaning.
+  if (process.platform !== 'win32') expect(bindingFile.mode & 0o777).toBe(0o600)
   expect(JSON.stringify(runtime.snapshot('synthetic-parent', first.worker.id))).not.toContain(
     'synthetic-account-a',
   )
@@ -257,3 +266,35 @@ it.each([false, true])(
     expect(backend.spawn).toHaveBeenCalledTimes(1)
   },
 )
+
+it('rejects a Claude prepared B snapshot even when current configuration has returned to admitted A', async () => {
+  const { backend, submit } = setup()
+  claudeRouteFixture.selected = {
+    kind: 'proxy',
+    sourceIds: ['/synthetic/claude/settings.json'],
+    source: {
+      provider: 'anthropic',
+      credential: { type: 'api', key: 'synthetic-B' },
+      sourceIds: ['/synthetic/claude/settings.json'],
+      baseUrl: 'http://127.0.0.1:15721',
+      apiType: 'anthropic-messages',
+      anthropicAuth: 'bearer',
+      nativeModels: [],
+    },
+  }
+  vi.mocked(readCliAccountBinding).mockImplementation(
+    async (_cli, _backend, _config, _project, signal, selected) => {
+      signal.throwIfAborted()
+      // Admission, catalog validation and final current state are A; only the prepared snapshot is B.
+      return selected ? 'synthetic-account-B' : 'synthetic-account-a'
+    },
+  )
+  expect(await submit({ ...preference, cli: 'claude' }).done).toMatchObject({
+    status: 'failed',
+    error: expect.stringContaining('账号已变更'),
+  })
+  expect(backend.spawn).not.toHaveBeenCalled()
+  expect(
+    vi.mocked(readCliAccountBinding).mock.calls.some((call) => call[5] === claudeRouteFixture.selected),
+  ).toBe(true)
+})

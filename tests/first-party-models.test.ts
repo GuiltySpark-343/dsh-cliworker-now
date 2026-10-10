@@ -500,7 +500,7 @@ async function claudeFixture() {
   const capture = vi.fn(async (argv: string[]) =>
     argv.includes('status')
       ? JSON.stringify({ loggedIn: true, authMethod: 'api_key' })
-      : '--model <model> full model name\n--output-format <format>',
+      : '--model <model> full model name\n--output-format <format> --settings <json>',
   )
   return {
     root,
@@ -511,6 +511,98 @@ async function claudeFixture() {
   }
 }
 describe('Claude own native settings API path', () => {
+  it.each(['api_key', 'claude.ai', 'none'])(
+    'does not treat an own bearer config with native %s status as verified bearer routing',
+    async (authMethod) => {
+      const f = await claudeFixture()
+      await writeFile(
+        join(f.user, 'settings.json'),
+        JSON.stringify({
+          env: {
+            ANTHROPIC_AUTH_TOKEN: 'synthetic-own-bearer',
+            ANTHROPIC_BASE_URL: 'https://own.example.test',
+          },
+        }),
+      )
+      f.capture.mockResolvedValue(
+        JSON.stringify({ loggedIn: true, authMethod, email: 'synthetic@example.test' }),
+      )
+      expect(await f.read()).toEqual([])
+      expect(f.capture).toHaveBeenCalledOnce()
+    },
+  )
+  it.each(['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'])(
+    'rejects ambient %s before querying a configured own bearer source',
+    async (name) => {
+      const f = await claudeFixture()
+      await writeFile(
+        join(f.user, 'settings.json'),
+        JSON.stringify({
+          env: {
+            ANTHROPIC_AUTH_TOKEN: 'synthetic-own-bearer',
+            ANTHROPIC_BASE_URL: 'https://own.example.test',
+          },
+        }),
+      )
+      vi.stubEnv(name, 'synthetic-foreign-secret')
+      expect(await f.read()).toEqual([])
+      expect(f.capture).not.toHaveBeenCalled()
+    },
+  )
+  it.each([
+    'file:///synthetic/account.json',
+    'https://synthetic-user:synthetic-secret@own.example.test',
+    'https://own.example.test?token=synthetic-secret',
+    'https://own.example.test#synthetic-secret',
+  ])('rejects a bearer endpoint carrying unsupported routing or credentials: %s', async (baseUrl) => {
+    const f = await claudeFixture()
+    await writeFile(
+      join(f.user, 'settings.json'),
+      JSON.stringify({
+        env: {
+          ANTHROPIC_AUTH_TOKEN: 'synthetic-own-bearer',
+          ANTHROPIC_BASE_URL: baseUrl,
+        },
+      }),
+    )
+    expect(await f.read()).toEqual([])
+    expect(f.capture).not.toHaveBeenCalled()
+  })
+  it('does not share per-request model scope across bearer and API-key header modes', async () => {
+    const f = await claudeFixture()
+    await writeFile(
+      join(f.user, 'settings.json'),
+      JSON.stringify({
+        env: {
+          ANTHROPIC_AUTH_TOKEN: 'synthetic-own-bearer',
+          ANTHROPIC_BASE_URL: 'https://own.example.test',
+        },
+      }),
+    )
+    f.capture.mockImplementation(async (argv) =>
+      argv.includes('status')
+        ? JSON.stringify({ loggedIn: true, authMethod: 'oauth_token' })
+        : '--model --output-format --settings',
+    )
+    const sources = await f.read(),
+      apiSource = { ...sources[0]!, anthropicAuth: undefined }
+    const fetch = vi.fn(
+      async (_url: any, init: any) =>
+        new Response(
+          JSON.stringify({
+            data: [{ id: init.headers.Authorization ? 'claude-bearer-model' : 'claude-api-key-model' }],
+          }),
+        ),
+    )
+    expect(
+      (await discoverFirstPartySources([...sources, apiSource], signal(), { fetch })).map(
+        (model) => model.id,
+      ),
+    ).toEqual(['claude-bearer-model', 'claude-api-key-model'])
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(fetch.mock.calls[0]![1].headers['x-api-key']).toBeUndefined()
+    expect(fetch.mock.calls[1]![1].headers.Authorization).toBeUndefined()
+  })
   it('uses own local settings priority and full account model IDs with native default effort', async () => {
     const f = await claudeFixture()
     await writeFile(join(f.user, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_API_KEY: 'user-key' } }))

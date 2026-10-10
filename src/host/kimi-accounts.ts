@@ -116,11 +116,12 @@ function kimiAccountLabel(accessToken: string): string | undefined {
 }
 
 /** No-follow, bounded read; never refreshes, creates or modifies the native token. */
-async function readToken(directory: string, slot: string, signal: AbortSignal) {
+export async function readKimiOwnToken(directory: string, slot: string, signal: AbortSignal) {
   let handle: Awaited<ReturnType<typeof open>> | undefined
   let bytes: Buffer | undefined
   try {
     signal.throwIfAborted()
+    if (tokenSlot(slot) !== slot) throw new Error('Unsafe Kimi token slot')
     await safePiOmpAncestors(directory)
     const path = join(directory, `${slot}.json`)
     const entry = await lstat(path)
@@ -193,7 +194,7 @@ export async function readKimiAccount(
     if (provider.type !== 'kimi' || !object(provider.oauth) || provider.oauth.storage !== 'file')
       return { state: 'unknown', verification: 'local', summary: 'Kimi 登录配置暂不支持，请打开账号终端' }
     const slot = tokenSlot(provider.oauth.key)
-    const token = await readToken(
+    const token = await readKimiOwnToken(
       join(options.home ?? process.env.KIMI_CODE_HOME ?? join(homedir(), '.kimi-code'), 'credentials'),
       slot,
       signal,

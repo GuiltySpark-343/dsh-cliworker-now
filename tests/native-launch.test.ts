@@ -79,6 +79,53 @@ describe('Windows fixed native launchers', () => {
       expect(resolveNativeEntry(f.shim, 'win32')).toBe(f.shim)
     },
   )
+  it('accepts the official percent-tilde-dp0 trailing separator without adding another slash', () => {
+    const f = fixture()
+    writeFileSync(f.shim, '@ECHO off\nnode "%~dp0node_modules\\synthetic fixture\\cli.js" %*\r\n')
+    expect(nativeLaunchArgv([f.shim, '中文 & literal'], 'win32')).toEqual([
+      process.execPath, f.entry, '中文 & literal',
+    ])
+  })
+  it('resolves a fixed npm native executable only after checking its package bin and PE identity', () => {
+    const root = directory(), packageRoot = join(root, 'node_modules/opencode-ai')
+    mkdirSync(join(packageRoot, 'bin'), { recursive: true })
+    const executable = join(packageRoot, 'bin/opencode.exe'), shim = join(root, 'opencode.cmd')
+    const pe = Buffer.alloc(96)
+    pe.write('MZ'); pe.writeUInt32LE(64, 0x3c); pe.write('PE\0\0', 64)
+    writeFileSync(executable, pe)
+    const manifest = join(packageRoot, 'package.json')
+    const data = { name: 'opencode-ai', version: '1.18.35', bin: { opencode: './bin/opencode.exe' } }
+    writeFileSync(manifest, JSON.stringify(data))
+    const source = '@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n"%dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe"   %*\r\n'
+    writeFileSync(shim, source)
+    expect(resolveNativeEntry(shim, 'win32')).toBe(executable)
+    expect(nativeLaunchArgv([shim, '空格 " & %PATH%', ''], 'win32')).toEqual([executable, '空格 " & %PATH%', ''])
+    for (const changed of [
+      { ...data, name: 'another-package' },
+      { ...data, bin: { another: './bin/opencode.exe' } },
+      { ...data, bin: { opencode: '../opencode-ai/bin/opencode.exe' } },
+    ]) {
+      writeFileSync(manifest, JSON.stringify(changed))
+      expect(() => resolveNativeEntry(shim, 'win32')).toThrow('启动入口无法确认')
+    }
+    writeFileSync(manifest, JSON.stringify(data))
+    writeFileSync(shim, source + 'powershell -c unsafe\n')
+    expect(() => resolveNativeEntry(shim, 'win32')).toThrow('启动入口无法确认')
+    writeFileSync(shim, source.replace('node_modules\\opencode-ai', 'node_modules\\other\\..\\opencode-ai'))
+    expect(() => resolveNativeEntry(shim, 'win32')).toThrow('启动入口无法确认')
+    writeFileSync(shim, source)
+    pe.writeUInt32LE(500, 0x3c)
+    writeFileSync(executable, pe)
+    expect(() => resolveNativeEntry(shim, 'win32')).toThrow('启动入口无法确认')
+  })
+  it('reports present invalid or broken shims as unsupported launchers instead of missing programs', () => {
+    const f = fixture()
+    for (const source of ['@echo off\ncall unknown.cmd %*', '@echo off\nnode "%~dp0missing.js" %*']) {
+      writeFileSync(f.shim, source)
+      try { resolveNativeEntry(f.shim, 'win32'); expect.fail('must reject this shim') }
+      catch (error: any) { expect(error.code).toBe('CLI_LAUNCHER_UNSUPPORTED') }
+    }
+  })
   it('selects Bun from the installed script shebang and package engine without substituting Node', () => {
     const f = fixture(),
       bun = join(f.root, 'bun.exe')
