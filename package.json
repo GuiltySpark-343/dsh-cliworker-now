@@ -60,6 +60,7 @@
     "build": "node scripts/build.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:windows:remote": "node scripts/windows-remote.mjs",
     "smoke:real": "tsx scripts/smoke-real.ts",
     "smoke:stop": "tsx scripts/smoke-stop.ts",
     "build:preview": "node scripts/build-preview.mjs",

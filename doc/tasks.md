@@ -807,3 +807,14 @@
 - GitHub默认中文首页实际渲染推荐命令56字符，npm官方页面实际显示0.7.6、完整README及同一短命令，截图github-install-proof.png/npm-install-proof.png已查看。npm标题包含TypeScript图标替代文本，调整可访问名称匹配后核对成功，不将先前选择器超时当发布失败。Host/Client typecheck与严格规格检查通过；仅发版元数据/说明/打包脚本改变，运行lib仍与原已验包逐字相同，未再次宣称重跑1307项。
 
 - OpenSpec四项任务4/4均完成，package-distribution主规格完整更新2块并保留Purpose/旧场景；同步后严格10/10，归档到openspec/changes/archive/2026-10-10-publish-prebuilt-registry-package/后严格9/9、活动change0。主页/包页、远端字节及真实registry profile安装均验证完成；本地提交并按本轮授权推送GitHub，原未提交修改继续排除。
+
+
+## 2026-10-10：Mac 到个人 Windows 的隔离远程验收
+
+- 用户授权接通 Windows 测试环境和流程；OpenSpec `add-windows-remote-test-workflow`，规划提交 `4c2d2e8`。新增 `scripts/windows-remote.mjs`、common/runner、27 项边界用例与 `test:windows:remote` 开发入口。中英 README 开发段和专用指南同步，安装区保持原单条命令；不新增运行时依赖或版本发布。
+- 本机执行 `pnpm --config.verifyDepsBeforeRun=false typecheck`、新增测试 27/27、隔离 build:preview/pack、严格规格 10/10、git diff --check。现有回归在受限环境的真实进程用例失败并停滞，终止该次自身 Vitest 后用实际进程权限复查通过；完整回归 1300 通过、7 个权限夹具因本次命令 umask 077 不符而失败、7 个 Windows 专属跳过，标准 022 下两文件 44 项全过，合并核对 1307 通过/7 跳过。无产品/夹具源码改写。
+- 实际命令：`pnpm --config.verifyDepsBeforeRun=false test:windows:remote --config .test-data/windows-remote/config.json`。Windows 11 x64、Node 24.15.0、固定 pnpm 11.25.0；专用 tools 非全局安装，SDK 与 Harness 0.2.0-rc.2 在本次依赖目录内，独立空配置执行 Harness --version 退出 0。
+- 成功 run：冻结锁文件安装、归档列表/特殊文件核验、Mac 协议声明准备、类型检查、七个现有 CI 文件、原 Mac 包 Host 入口加载九阶段退出码全部 0。101 项通过、1 项明确 POSIX Pi launcher 场景跳过、0 失败；真实 Windows Job/取消、ConPTY、Python 用例通过，其余账号与 launcher 数据为合成夹具。Host 实际导出 CliWorkerService/default，在 Windows 本机 SDK 依赖中 import 成功。
+- Mac/Windows 包 SHA-256 相同：`775bae13cb1dd5a1b1135be204ef5025de494f171ededd1a74d90d028dfc6b58`。报告、阶段日志及原始 Vitest JSON 回传，测试 JSON 哈希及计数/七文件/必要阶段/运行 ID 校验通过，正常运行两端锁释放并确认清理。
+- 初次真实试跑分别暴露 PowerShell Get-Item 隐藏 AppData 需 -Force、gitconfig 文件误作目录、冷源码缺生成 remote 声明三项准备问题，逐项修正并保留失败/回传证据；最终成功不遮蔽这些记录。另在实际安装阶段主动 SIGINT：流程非零退出、两端 interrupted、报告回传、Windows 自有进程范围清理及两端锁释放确认。
+- 私有证据在 `.test-data/windows-remote/runs/`、mac-regression-summary.json、cancellation-check.json、harness-version.json；原报告/日志/配置和个人机器信息不入 Git。最终 Mac 当前 lib 281 文件哈希与开始前完全相同，未正式 build 或更新 Desktop。模型调用为 0；官方 CLI 额外版本/帮助探针、真实模型、Windows 全量矩阵和 Desktop 界面均未验收，不以本次结果代替。

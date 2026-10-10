@@ -317,6 +317,8 @@ pnpm --config.verify-deps-before-run=false build:preview
 
 隔离包输出到 `.cache/preview-package`。先在隔离 profile 验收，确认没有活动任务后，再运行正式构建；避免开发构建影响 Desktop 正在使用的版本。
 
+在 Mac 构建后，可通过 SSH 在自己的 Windows 原生测试机安装隔离依赖、运行定向回归并回传日志与包哈希；见 [Windows 远程测试指南](doc/windows-remote-testing.md)。入口为 `pnpm --config.verifyDepsBeforeRun=false test:windows:remote --config .test-data/windows-remote/config.json`，默认不调用模型或验收 Desktop 界面。
+
 真实 CLI 验收是额外步骤，会使用对应账号与模型额度，不由以上自动测试代替：
 
 ```sh

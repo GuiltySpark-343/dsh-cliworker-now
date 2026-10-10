@@ -18,6 +18,7 @@
 - 复用 CI 七个文件；实际 Job、ConPTY、Python 进程属于原生验收，临时账号与 launcher 数据属于合成夹具。当前 Windows Node 24 满足包引擎，但与 CI Node 22 是不同的矩阵记录。
 - Windows 运行器按阶段输出报告和日志；运行退出码、Vitest JSON、接收包哈希及加载结果相互核对。未成功阶段不遮蔽。仅清理自身锁和进程，证据目录保留；本机 POSIX 私有目录 0700、文件 0600。
 - 不执行根目录正式 build，不改变 Mac Desktop 当前 lib 或 Windows Desktop。Harness CLI/SDK 随本机测试依赖准备在隔离源码目录，不要求把 dsh 添加到全局 PATH。
+- 冷源码的 Client 类型检查依赖包自身生成的 `lib/typert.remote-client.d.ts`。在 Windows 校验并解包 Mac 产物后，将其 lib 复制到本次源码测试目录，记录 `mac-contract-types` 阶段；Host 加载仍直接指向原解包产物，不在 Windows 重新生成协议或替代 Mac 包。
 
 ## Risks / Trade-offs
 

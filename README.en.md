@@ -314,6 +314,8 @@ pnpm --config.verify-deps-before-run=false build:preview
 
 The isolated package is written to `.cache/preview-package`. Verify it in a separate profile first, then check that no tasks are active before the production build, so development does not overwrite the version used by an active Desktop session.
 
+After building on Mac, use SSH to install isolated native dependencies and run targeted regressions on your own Windows machine, then return logs and package hashes. See the [Windows remote testing guide](doc/windows-remote-testing.md) (Chinese). Run `pnpm --config.verifyDepsBeforeRun=false test:windows:remote --config .test-data/windows-remote/config.json`; the default workflow makes no model requests and does not verify the Desktop UI.
+
 Live CLI acceptance is separate and uses the selected account's model allowance:
 
 ```sh

@@ -515,3 +515,11 @@ Hermes 与角色功能共享同一 WorkerRuntime；名称、角色快照与原�
 - scripts/package-release.mjs使用既有已验收lib生成独立dist/npm/dsh-cliworker-now，根private:true保留。公开manifest补registry/repository并移除scripts/devDependencies/packageManager，消费者不构建源码；保留SDK peers、exports和原生helper。
 - 检查公开运行入口及14动态helper的可达模块、.d.ts相对声明、所有发行文件无链接/私有路径；非公开tsc附带JS保持原字节但不视作第二入口。公开tarball仅manifest/README不同，运行lib280文件与原包一致；同一tarball用于npm和GitHubRelease。
 - 推荐明确profile和固定短包名dsh-cliworker-now@0.7.6，避免省略必填profile或引用无lib的Git源码；首页仍仅一行可执行推荐，备用Release与web放折叠段。
+
+
+## 2026-10-10：开发用 Windows 远程验收
+
+- 新增开发入口 `test:windows:remote`：Mac 隔离 preview 构建/打包，严格 SSH 密钥及主机记录，允许列表源码快照和原构建包传送，Windows 本机冻结依赖、定向回归及原包 Host 加载，回传阶段/哈希/测试证据。Host、Client、协议和 Desktop 链接不变。
+- 本机连接配置及日志在 Git 忽略的 `.test-data/windows-remote/`；Windows 专用根有归属标记，tools 内准备固定 pnpm，各 run 使用空账号、npm、Git、Harness 和系统管理配置目录。根目录/父链及源码拒绝链接，Mac 与 Windows 分别持有运行锁；取消只处理本次进程并等待确认，失败报告与清理状态不覆盖为成功。
+- Client 类型检查依赖生成的远程协议声明：解包并核验 Mac 包后将其 lib 复制到源码测试目录，不在 Windows 重建；Host 加载指向原 artifact/package/lib。源码与 preview、传送包与接收包、原始 Vitest JSON 与报告分别核验哈希及阶段。
+- 真实 Windows x64 验收与中断清理通过；默认不做真实模型、官方 CLI 额外启动或 Desktop 界面。流程文档见 `doc/windows-remote-testing.md`，实际边界见 `doc/tasks.md`。
