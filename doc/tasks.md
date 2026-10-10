@@ -829,3 +829,14 @@
 - 实际 HTTP 验收：认证根页返回 200，序列化 `globalThis["__DSH_BOOT__"]` 含插件；插件 JavaScript 返回 200，实际模块加载包装有效。向 `/api/cliworker/cliSettings` 发送缺少 parentSessionId 的请求，得到 HTTP 200 的 server-response 与预期 `gateway/arguments-invalid`，证明生成 endpoint 与参数校验注册正确，不将该错误响应写作真实任务成功。
 - 首次私有验收夹具误用不存在的 ready 事件及字面 window.__DSH_BOOT__ 判断，分别超时/误拒真实正常 HTML；改用 appReady.onReady 与实际 globalThis 序列化形式后通过，未修改插件代码，各轮诊断保留。全部实例通过 Host 内 SIGTERM 正常 dispose，最终退出 0、fixture cleanup receipt 存在；再读 Windows 核对该 run 进程 0、18790 监听 0、host.lock 0、远程 run.lock 不存在。
 - 报告和私有日志保存在 `.test-data/windows-remote/runs/` 对应 run 的 remote/ 与 harness/；连接令牌/Cookie 未输出或入 Git。当前结论仅为 Windows 安装、启动、插件注册/资源/Gateway及原生进程链路通过；真实 CLI 模型任务、账号权限和 Windows 原生 Desktop 画面未验证。模型调用 0，未更新 Desktop 或发布版本。
+
+
+## 2026-10-10：实际 Windows Desktop 登录与功能验收
+
+- 用户授权直接操作其实际 Windows Desktop，所有已登录且有额度的 CLI 沿用已保存模型做最小测试；MiMo 无默认值时单独明确选择 MiMo-V2.5/default。对象为 Windows 本机 DeepSeek Harness 0.2.0-rc.2 / 插件 0.7.6，不把此前隔离 Host 测试当成实际 Desktop 证据。
+- 11 个 CLI 设置逐一检查。Kimi 本次原生终端登录、用户授权及刷新 authenticated 通过；Claude 识别已有 OAuth；两者模型目录仍拒绝确认自身账号，未执行真实任务；这涉及当前版本 OAuth 绑定/目录能力，尚不能归因为 Windows 特有故障。Antigravity 浏览器授权后未观测 CLI 完成，刷新仍未登录，且等待流程被本次验收关闭，需要完整复测，不能独断供应商失败。ZCode 管理终端启动失败；OMP 管理及登录立即退出；Grok 管理终端关闭后进程残留并阻塞后续登录。
+- MiMo 模型目录、默认模型/强度保存、首次选型/角色卡、主对话派遣、过程与结果回传通过；首次任务真实创建测试文本，独立实读内容与哈希匹配。续聊保持同一原生会话，正确回忆文件名。两轮停止分别保留证据：提前停止未捕获运行前进程，不宣称运行中终止；另一轮在实际 UI 运行中且 MiMo/启动器进程存在时停止，三进程消失、状态 interrupted。Worker 无持久化 exitCode 字段，completed 按实现的退出 0/协议成功/退出确认判定并结合事件及产物核验。
+- 实际 UI 通过临时角色增改删且原 7 个预设完全不变、MiMo 启用切换恢复、标题/名称独立改回、删除恢复同 Worker/native session、搜索及状态筛选、概览/子对话导航、运行时输入禁用。正常重启后会话和插件任务卡存在，模型偏好保存。未宣称注销重登、全部 CLI 真任务、跨项目继承、全部并发/权限/迁移路径完成。
+- 实际安装包复现 Pi/OpenCode Windows launcher 拒绝而误报未安装，文件真实存在；Pi 已装 1.1.0 与插件只接受 1.0.2/1.0.4 是独立限制。Codex/Hermes 未找到可用 CLI，登录按钮禁用。没有重装 CLI、注销既有账号或修改产品代码。
+- Grok 残留在正常退出整个 Desktop 后仍存在；核对本次 helper/父子关系后仅清理本次进程树。源码审阅发现外层账号弹窗关闭异步卸载并吞清理错误的恢复缺口，底层终止失败原因尚未确定。Desktop 已无调试参数重启，临时端口/SSH 隧道关闭、临时计划任务清空；测试会话和文本保留。
+- 私有白名单结果、运行事件摘要、进程与截图证据及完整中文报告保存在 `.test-data/windows-remote/desktop-audit/`，不含凭据导出、不入 Git。此次只补充真实验收记录，不新建行为变更或发布；后续修复需单独按 OpenSpec 实施并复测，当前不判定全功能通过。
