@@ -5,6 +5,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { spawnManagedAgent } from '../src/host/managed-agent.ts'
 import { hermesNativeCommand, verifyHermesExecutable } from '../src/host/hermes-installation.ts'
 import { spawnAccountTerminal } from '../src/host/windows-account-terminal.ts'
@@ -78,16 +79,32 @@ it.skipIf(process.platform !== 'win32').each(['stop', 'natural-exit'] as const)(
     const beforeConsoles = consoles()
     const ctx = new Context()
     await ctx.plugin(LocalSubprocessRuntime)
+    // CI can pin the installed GUI-subsystem runtime without changing the SDK.
+    // Every payload remains synthetic; no real CLI account is read.
+    const accountRuntime = process.env.CLIWORKER_TEST_ELECTRON ?? process.execPath
+    const backend = {
+      spawn: (spec: Parameters<typeof ctx.subprocess.spawn>[0]) => ctx.subprocess.spawn(spec),
+      spawnTerminal: (spec: Parameters<typeof ctx.subprocess.spawnTerminal>[0]) => {
+        const argv = [...spec.argv]
+        argv[argv.indexOf('-RuntimePath') + 1] = accountRuntime
+        return ctx.subprocess.spawnTerminal({ ...spec, argv })
+      },
+    }
+    const literalArgs = ['中文 路径', '& whoami', 'literal"quote', 'back\\slash\\', '', '$HOME;`echo unsafe`']
     // No CLI login: both payloads are explicit Node lifecycle fixtures.
     const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
     let childPid: number | undefined
     let terminal: Awaited<ReturnType<typeof ctx.subprocess.spawnTerminal>> | undefined
     try {
-      terminal = await spawnAccountTerminal(ctx.subprocess, {
+      terminal = await spawnAccountTerminal(backend, {
         argv: [
-          process.execPath,
+          accountRuntime,
+          fileURLToPath(new URL('../src/host/private-launch.mjs', import.meta.url)),
+          accountRuntime,
           '-e',
-          `const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',detached:true}); console.log(JSON.stringify({fixture:'account-terminal',pid:child.pid,tty:!!process.stdin.isTTY})); process.stdin.on('data',data=>{console.log('fixture-received:'+data.toString().trim()); ${operation === 'natural-exit' ? 'process.exit(7)' : ''}}); setInterval(()=>{},1000)`,
+          `const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',detached:true}); console.log(JSON.stringify({fixture:'account-terminal',pid:child.pid,tty:!!process.stdin.isTTY})); console.log('fixture-argv:'+JSON.stringify(process.argv.slice(1))); console.error('fixture-stderr:'+!!process.stderr.isTTY); console.log('fixture-stdout:'+!!process.stdout.isTTY); process.stdin.on('data',data=>{console.log('fixture-received:'+data.toString().trim()); ${operation === 'natural-exit' ? 'process.exit(7)' : ''}}); setInterval(()=>{},1000)`,
+          '--',
+          ...literalArgs,
         ],
         cwd: process.cwd(),
         env: {},
@@ -108,6 +125,9 @@ it.skipIf(process.platform !== 'win32').each(['stop', 'natural-exit'] as const)(
           const record = output.match(/\{"fixture":"account-terminal","pid":(\d+),"tty":true\}/)
           expect(record).not.toBeNull()
           childPid = Number(record![1])
+          expect(output).toContain('fixture-argv:' + JSON.stringify(literalArgs))
+          expect(output).toContain('fixture-stderr:true')
+          expect(output).toContain('fixture-stdout:true')
         },
         { timeout: 10000 },
       )

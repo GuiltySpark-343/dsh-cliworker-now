@@ -14,6 +14,7 @@ tsc('tsconfig.host-build.json')
 for (const name of [
   'private-launch',
   'windows-account-launch',
+  'windows-account-stdio',
   'native-launch',
   'pi-omp-environment',
   'terminal-bridge',
@@ -54,6 +55,7 @@ cpSync('src/host/windows-account-owner.ps1', 'lib/types/host/windows-account-own
 cpSync('src/host/windows-account-bootstrap.ps1', 'lib/windows-account-bootstrap.ps1')
 cpSync('src/host/windows-account-bootstrap.ps1', 'lib/types/host/windows-account-bootstrap.ps1')
 cpSync('src/host/windows-account-launch.mjs', 'lib/types/host/windows-account-launch.mjs')
+cpSync('src/host/windows-account-stdio.mjs', 'lib/types/host/windows-account-stdio.mjs')
 cpSync('src/host/windows-agy-account.ps1', 'lib/windows-agy-account.ps1')
 cpSync('src/host/windows-agy-account.ps1', 'lib/types/host/windows-agy-account.ps1')
 await build({

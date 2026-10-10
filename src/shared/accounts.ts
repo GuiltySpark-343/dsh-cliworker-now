@@ -38,4 +38,6 @@ export interface AccountFrame {
   data?: string
   status?: 'running' | 'closed' | 'failed'
   message?: string
+  /** Host has confirmed process-range exit and released account resources. */
+  cleanupConfirmed?: boolean
 }

@@ -44,6 +44,22 @@ describe('one CLI name registry', () => {
       expect(resolveCliName(alias)).toMatchObject({ status: 'resolved', cli: 'zcode', match: 'alias' })
   })
 
+  it('accepts only matching parenthesized CLI aliases and preserves conflicting or unknown selectors', () => {
+    for (const name of [
+      'Antigravity（agy）CLI',
+      'AGY (antigravity)',
+      'OMP（Oh My Pi）',
+      'Pi（Pi Coding Agent）',
+    ])
+      expect(resolveCliName(name).status).toBe('resolved')
+    expect(requireCliName('Antigravity（agy）CLI')).toBe('antigravity')
+    expect(requireCliName('OMP（Oh My Pi）')).toBe('omp')
+    for (const name of ['Antigravity（codex）', 'OMP（Pi）', 'Antigravity（frog）', 'frog（agy）']) {
+      expect(resolveCliName(name).status).toBe('ambiguous')
+      expect(() => requireCliName(name)).toThrow('无法确定 CLI')
+    }
+  })
+
   it('allows only one character error in longer names and refuses unknown, multiple and retired choices', () => {
     for (const [name, cli] of [
       ['codx', 'codex'],
@@ -80,6 +96,16 @@ describe('explicit requests from this human step', () => {
     ['使用 oh-my-pi 检查代码', 'omp'],
     ['使用 Pi Coding Agent 检查代码', 'pi'],
     ['调用 harmes cli 检查代码', 'hermes'],
+    [
+      '请调用 CLI Worker 的 cliworker_start，只使用 Antigravity（agy）CLI 做一次最小 Windows 验收，模型 Gemini3.8Flash low',
+      'antigravity',
+    ],
+    [
+      '用 agy cli 创建 cwn-windows-agy-fix.txt，内容为 AGY_WINDOWS_OK 加换行。仅操作这个测试文件。任务名 Windows Antigravity 最小验收，智能体名 Win-AGY验收。请调用 cliworker_start，参数 cli 必须为 antigravity。',
+      'antigravity',
+    ],
+    ['请调用 CLI Worker Now 的 cliworker_start，仅使用 Antigravity (agy) CLI 检查代码', 'antigravity'],
+    ['使用 Antigravity CLI 检查代码，然后调用 agy cli 完成检查', 'antigravity'],
   ])('%s routes to %s without choosing a model', (text, cli) => {
     expect(invocationResolution([user(text)])).toMatchObject({ status: 'resolved', cli })
   })
@@ -103,6 +129,13 @@ describe('explicit requests from this human step', () => {
     '```text\n调用 agy cli 帮我检查代码\n```',
     '调用已有智能体小林继续任务',
     '让小林继续调用 agy cli 帮我检查代码',
+    '请调用 CLI Worker 的 cliworker_start',
+    '请调用 cliworker_start，参数 cli 必须为 antigravity',
+    '请调用 cliworker_resolve，参数 cli 仅为名称说明',
+    '调用 CLI 做一次检查',
+    '不要只使用 Antigravity（agy）CLI',
+    '“只使用 Antigravity（agy）CLI”是一个例子',
+    '只使用 Antigravity（agy）CLI 有什么区别？',
   ])('%s does not contribute an execution hint', (text) => {
     expect(invocationResolution([user(text)])).toBeUndefined()
   })
@@ -130,6 +163,20 @@ describe('explicit requests from this human step', () => {
       source: { kind: 'system-prompt' },
     } as UserMessage
     expect(invocationResolution([injected])).toBeUndefined()
+  })
+
+  it('deduplicates only fully resolved identical targets in the current admitted batch', () => {
+    expect(
+      invocationResolution([user('使用 Antigravity（agy）CLI 检查代码'), user('请用 agy cli 完成检查')]),
+    ).toMatchObject({ status: 'resolved', cli: 'antigravity' })
+    for (const messages of [
+      [user('用 agy cli 检查代码'), user('使用 codex cli 检查测试')],
+      [user('请调用 CLI Worker 的 cliworker_start，只使用 agy CLI 检查，同时使用 codex CLI 检查')],
+      [user('使用 Antigravity（codex）CLI 检查')],
+      [user('用 agy cli 检查代码'), user('使用 frog cli 检查测试')],
+      [user('使用 Antigravity（frog）CLI 检查')],
+    ])
+      expect(invocationResolution(messages)).toMatchObject({ status: 'ambiguous' })
   })
 })
 
@@ -277,6 +324,30 @@ describe('native prompt/tool integration', () => {
     expect(f.launch).not.toHaveBeenCalled()
   })
 
+  it('does not carry rejected name hints into a subsequent accepted step or confuse tool instructions with names', async () => {
+    const f = await fixture()
+    const previous = await f.request([user('调用 frog cli 帮我检查代码')])
+    expect(previous.text).toContain('本步用户调用的 CLI 无法确定')
+    const text = '用 agy cli 创建测试文件。请调用 cliworker_start，参数 cli 必须为 antigravity。'
+    const current = await f.request([user(text)])
+    expect(current.text).toContain('必须显式传入 cli="antigravity"')
+    expect(current.text).not.toContain('本步用户调用的 CLI 无法确定')
+    expect(current.decision.kind).toBe('enter')
+    if (current.decision.kind !== 'enter') throw new Error('expected admitted request')
+    expect(current.decision.messages).toHaveLength(2)
+    expect(current.decision.messages[0]!.content).toEqual([{ type: 'text', text }])
+    const repeated = await f.request([
+      user('用 agy cli 检查代码'),
+      user('使用 Antigravity（agy）CLI 检查代码'),
+    ])
+    expect(repeated.text).toContain('必须显式传入 cli="antigravity"')
+    expect(repeated.text).not.toContain('本步用户调用的 CLI 无法确定')
+    const conflicting = await f.request([user('用 agy cli 检查代码'), user('使用 codex cli 检查代码')])
+    expect(conflicting.text).toContain('本步用户调用的 CLI 无法确定')
+    expect(f.chooseDispatch).not.toHaveBeenCalled()
+    expect(f.launch).not.toHaveBeenCalled()
+  })
+
   it('uses admitted human input only, leaving rejected, aborted and uninstalled requests unchanged', async () => {
     const f = await fixture()
     const request = [user('调用 agy cli 检查代码')]
@@ -352,6 +423,7 @@ describe('native prompt/tool integration', () => {
       ['Oh My Pi', 'omp'],
       ['pi', 'pi'],
       ['Pi Coding Agent', 'pi'],
+      ['Antigravity（agy）CLI', 'antigravity'],
     ]) {
       expect(await f.start(alias)).toBe('synthetic-background-receipt')
       expect(f.chooseDispatch).toHaveBeenLastCalledWith(f.agent, expect.any(AbortSignal), cli)
@@ -382,7 +454,8 @@ describe('native prompt/tool integration', () => {
 
   it('refuses unknown/ambiguous and preserves cancellation, role and permission gates before publication', async () => {
     const f = await fixture()
-    for (const name of ['unknown-cli', 'agy/codex', 'harness']) await expect(f.start(name)).rejects.toThrow()
+    for (const name of ['unknown-cli', 'agy/codex', 'harness', 'Antigravity（codex）', 'Antigravity（frog）'])
+      await expect(f.start(name)).rejects.toThrow()
     expect(f.chooseDispatch).not.toHaveBeenCalled()
     expect(f.launch).not.toHaveBeenCalled()
     f.chooseDispatch.mockRejectedValueOnce(new Error('synthetic selection cancelled'))

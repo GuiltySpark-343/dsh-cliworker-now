@@ -66,6 +66,23 @@ export function resolveCliName(name: string): CliResolution {
       match: normalized === exact.cli ? 'canonical' : 'alias',
       matchedName: exact.name,
     }
+  const annotated = /^([^()]+)\(([^()]+)\)$/u.exec(normalized)
+  if (annotated) {
+    const primary = resolveCliName(annotated[1]!)
+    const alias = resolveCliName(annotated[2]!)
+    if (primary.status === 'resolved' && alias.status === 'resolved' && primary.cli === alias.cli)
+      return primary
+    return {
+      status: 'ambiguous',
+      candidates: [
+        ...new Set(
+          [primary, alias].flatMap((result) =>
+            result.status === 'resolved' ? [result.cli] : result.candidates,
+          ),
+        ),
+      ],
+    }
+  }
   const parts = name.split(/[,，、/;；+]|\s+(?:and|or)\s+|[和与或]/iu).filter((part) => part.trim())
   if (parts.length > 1) {
     const candidates = [
@@ -118,7 +135,7 @@ function withoutQuotes(text: string): string {
 }
 
 const command =
-  /^(?:(?:请(?:你)?|麻烦(?:你)?|帮我|帮忙|我想(?:要)?|我希望|我要|现在|再|然后|顺便|同时|并且|并|也|你能否|能否|能不能|可以|please|can you)\s*)*(?:调用|使用|用|派遣|启动|让|invoke\b|call\b|use\b|start\b)\s*(.+)$/iu
+  /^(?:(?:请(?:你)?|麻烦(?:你)?|帮我|帮忙|我想(?:要)?|我希望|我要|现在|再|然后|顺便|同时|并且|并|也|只|仅仅?|你能否|能否|能不能|可以|please|can you)\s*)*(?:调用|使用|用|派遣|启动|让|invoke\b|call\b|use\b|start\b)\s*(.+)$/iu
 const discussion =
   /^\s*(?:的?\s*(?:模型|model\b)|是什么意思|是什[么麼]|是否|有什么|怎么样|怎么(?:用|调用)|如何(?:工作|使用)|有哪些|的?(?:区别|说明|例子|示例|介绍)|这个(?:说法|例子)|means\b)/iu
 function isDiscussion(suffix: string): boolean {
@@ -150,12 +167,16 @@ export function invocationResolution(messages: readonly UserMessage[]): CliResol
       message.content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n'),
     )
     for (const clause of text.split(
-      /[\n。;；!?！？]|[,，](?=\s*(?:请|然后|顺便|同时|并且|调用|使用|用|让))/u,
+      /[\n。;；!?！？]|[,，](?=\s*(?:请|然后|顺便|同时|并且|只|仅|调用|使用|用|让))/u,
     )) {
       const request = clause.trim().match(command)?.[1]
       if (!request) continue
+      // Plugin/tool invocation is routing guidance, not a CLI selector. In
+      // particular, a later "参数 cli" must not turn cliworker_start into one.
+      if (/^(?:cli\s+worker(?:\s+now)?\b|cliworker_(?:start|resolve)\b)/iu.test(request)) continue
       const explicit = request.match(/^(.*?)\s*(?:cli\b|命令行)(.*)$/iu)
       if (explicit) {
+        if (!explicit[1]!.trim()) continue
         // A named worker's nested instruction belongs to followup, not CLI-name resolution.
         if (/调用|使用|继续|接着/u.test(explicit[1]!)) continue
         const selectors = [resolveCliName(explicit[1]!)]
@@ -187,6 +208,12 @@ export function invocationResolution(messages: readonly UserMessage[]): CliResol
   }
   if (!resolutions.length) return undefined
   if (resolutions.length === 1) return resolutions[0]
+  const first = resolutions[0]!
+  if (
+    first.status === 'resolved' &&
+    resolutions.every((result) => result.status === 'resolved' && result.cli === first.cli)
+  )
+    return first
   return {
     status: 'ambiguous',
     candidates: [

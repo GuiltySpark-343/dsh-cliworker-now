@@ -329,6 +329,37 @@ it('also disables input when the remote stream ends without a final status frame
   expect(fixture.accountWrite).not.toHaveBeenCalled()
 })
 
+it.each(['closed', 'failed'] as const)('closes an explicitly cleaned %s terminal after Host retention expires without another stop RPC', async (status) => {
+  vi.useFakeTimers()
+  const fixture = await setup()
+  await fixture.start()
+  await act(async () => {
+    fixture.streams[0].push({ seq: 1, status, cleanupConfirmed: true })
+    await vi.advanceTimersByTimeAsync(61_000)
+  })
+  fixture.accountStop.mockRejectedValue(new Error('synthetic expired terminal'))
+  await fixture.close()
+  await fixture.close()
+  await fixture.unmount()
+  expect(fixture.accountStop).not.toHaveBeenCalled()
+  expect(fixture.onClose).toHaveBeenCalledTimes(2)
+})
+
+it('keeps an unconfirmed failed terminal retryable until stop succeeds', async () => {
+  const fixture = await setup()
+  await fixture.start()
+  await act(async () => {
+    fixture.streams[0].push({ seq: 1, status: 'failed', cleanupConfirmed: false })
+  })
+  fixture.accountStop.mockRejectedValueOnce(new Error('synthetic cleanup failure'))
+  await fixture.close()
+  expect(fixture.onClose).not.toHaveBeenCalled()
+  expect(JSON.stringify(fixture.renderer.toJSON())).toContain('终端关闭失败')
+  await fixture.close()
+  expect(fixture.accountStop).toHaveBeenCalledTimes(2)
+  expect(fixture.onClose).toHaveBeenCalledOnce()
+})
+
 it('serializes typed chunks so a slow write cannot reorder CLI input', async () => {
   const fixture = await setup()
   await fixture.start()

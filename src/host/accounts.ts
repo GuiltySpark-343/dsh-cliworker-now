@@ -926,7 +926,7 @@ export class AccountManager {
         await session.output
         await session.release?.()
         session.state = state
-        this.emit(session, { status: state, message })
+        this.emit(session, { status: state, message, cleanupConfirmed: true })
         this.reserved.delete(session.cli)
         session.expiry = setTimeout(() => {
           session.frames.length = 0

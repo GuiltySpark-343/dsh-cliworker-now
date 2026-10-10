@@ -91,6 +91,7 @@ export function AccountTerminal({
     let alive = true,
       id = '',
       ended = false,
+      cleanupConfirmed = false,
       lastSeq = 0,
       queuedBytes = 0,
       resizeFrame = 0,
@@ -125,7 +126,7 @@ export function AccountTerminal({
       clearTimeout(startupTimer)
       startup.abort()
       disableInput()
-      if (!id) return Promise.resolve()
+      if (!id || cleanupConfirmed) return Promise.resolve()
       return (stopping ??= (async () => {
         value(await api.cliworker.accountStop(sessionId, id))
         if (!ended) finish()
@@ -276,6 +277,7 @@ export function AccountTerminal({
             }
             item.accept()
             if (frame.status === 'closed' || frame.status === 'failed') {
+              cleanupConfirmed = frame.cleanupConfirmed === true
               if (!ended) finish(frame.status === 'failed')
               break
             }

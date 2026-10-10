@@ -698,7 +698,7 @@ describe('user-operated account terminals (synthetic PTY)', () => {
     await stop
     const frames = []
     for await (const frame of f.manager.watch('p', id, f.signal)) frames.push(frame)
-    expect(frames.at(-1)).toMatchObject({ status: 'closed' })
+    expect(frames.at(-1)).toMatchObject({ status: 'closed', cleanupConfirmed: true })
     expect(f.terminal.terminate).toHaveBeenCalledTimes(1)
   })
 
@@ -871,8 +871,15 @@ describe('user-operated account terminals (synthetic PTY)', () => {
     const { id } = await f.manager.start('p', 'codex', 'login', f.cwd, f.signal)
     vi.mocked(f.terminal.terminate).mockRejectedValueOnce(new Error('provider SECRET failure'))
     await expect(f.manager.stop('p', id)).rejects.toThrow('尚未确认完全退出')
+    const before = []
+    for await (const frame of f.manager.watch('p', id, f.signal)) before.push(frame)
+    expect(before.at(-1)).toMatchObject({ status: 'failed' })
+    expect(before.at(-1)?.cleanupConfirmed).not.toBe(true)
     expect(() => f.manager.start('p', 'codex', 'login', f.cwd, f.signal)).toThrow('已有账号终端')
     await f.manager.stop('p', id)
+    const after = []
+    for await (const frame of f.manager.watch('p', id, f.signal)) after.push(frame)
+    expect(after.at(-1)).toMatchObject({ status: 'closed', cleanupConfirmed: true })
     expect(f.terminal.terminate).toHaveBeenCalledTimes(2)
   })
 

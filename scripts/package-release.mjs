@@ -37,6 +37,7 @@ const helperNames = [
   'pi-omp-refresh',
   'private-launch',
   'windows-account-launch',
+  'windows-account-stdio',
   'terminal-bridge',
   'zcode-resume',
 ]
@@ -49,6 +50,7 @@ const required = new Set([
   'lib/windows-account-bootstrap.ps1',
   'lib/types/host/windows-account-bootstrap.ps1',
   'lib/types/host/windows-account-launch.mjs',
+  'lib/types/host/windows-account-stdio.mjs',
   'lib/windows-agy-account.ps1',
   'lib/types/host/windows-agy-account.ps1',
 ])

@@ -840,3 +840,41 @@
 - 实际安装包复现 Pi/OpenCode Windows launcher 拒绝而误报未安装，文件真实存在；Pi 已装 1.1.0 与插件只接受 1.0.2/1.0.4 是独立限制。Codex/Hermes 未找到可用 CLI，登录按钮禁用。没有重装 CLI、注销既有账号或修改产品代码。
 - Grok 残留在正常退出整个 Desktop 后仍存在；核对本次 helper/父子关系后仅清理本次进程树。源码审阅发现外层账号弹窗关闭异步卸载并吞清理错误的恢复缺口，底层终止失败原因尚未确定。Desktop 已无调试参数重启，临时端口/SSH 隧道关闭、临时计划任务清空；测试会话和文本保留。
 - 私有白名单结果、运行事件摘要、进程与截图证据及完整中文报告保存在 `.test-data/windows-remote/desktop-audit/`，不含凭据导出、不入 Git。此次只补充真实验收记录，不新建行为变更或发布；后续修复需单独按 OpenSpec 实施并复测，当前不判定全功能通过。
+
+## 2026-10-10—11：Windows 登录修复与 MiMo 性能阶段验收
+
+本段保留各阶段证据，当前结论以末尾最终 Desktop 复验为准。账号终端及 Antigravity 真实任务已通过；Claude 官方登录和 Kimi 额度边界仍单独保留，变更尚不归档。
+
+- [x] Pi/OpenCode Windows 入口：实际 Windows 静态解析成功，Pi 指向官方 `@earendil-works/pi-coding-agent` 1.1.0 的固定入口，OpenCode 指向官方 npm 原生 exe。中文、引号、百分号、`&` 与空参数保持字面值。另用明确标记的模拟安装验证附加命令、错误包身份、损坏 PE、版本路径越界、未知版本及启动器改变均被拒绝。证据：`.test-data/windows-remote/launcher-fix/probe-result.json`、`rejection-result.json`。
+- [x] Pi 1.1.0 原生契约：无凭据、无网络请求、无模型调用的实际 SDK/RPC 探针通过，包含 SDK 空会话/UI 方法、RPC `get_state` 与 `abort`、会话 ID 和退出码 0。原生登录菜单可显示并清理；该菜单被主动终止的退出码为 1，不能描述成完成登录。README 与设计文档已纳入 1.1.0，仍明确真实账号登录与模型任务未验收。
+- [x] MiMo 能力缓存及隔离：仅在 Host 内存复用不含明文凭据的解析能力，30 秒、最多 16 项。账号、配置、项目、环境、入口及实际运行时/脚本变化使缓存失效；退出账号、取消和远端授权撤销不会因热缓存放行。实际 Windows 回归包含热缓存逐次重查远端模型权限、取消 paths/config/models、读取期间快照变化与失败不缓存等用例。
+- [x] MiMo 真实元数据对比：同一 Windows、MiMo 0.1.15，旧实现三次为 6,899/5,267/5,085 ms，每次 3 个原生元数据进程；修复 Preview 首次未命中为 5,061 ms、3 个进程，随后命中 88/92 ms、0 个进程，解析能力均为 3 项。旧中位数 5,267 ms 对比热读平均 90 ms，元数据阶段约减少 98.3%。首次仍约 5 秒，不把此结果当完整任务耗时或服务端响应提速。证据：`.test-data/windows-remote/desktop-audit/mimo-metadata-benchmark.json`。
+- [x] MiMo 实际 Desktop 完整目录：安装包 run `82132c8d-09dc-4c9e-acc6-b4e1736431c2` 后，首次目录查询 7,849 ms、连续热读 754/670 ms，包含当前账号及在线目录检查。元数据缓存 88/92 ms 与完整目录 754/670 ms 是不同测量范围，不混用。
+- [x] MiMo 真实写文件：沿用原验收 Worker 与原生会话，使用用户明确选定的 `xiaomi/mimo-v2.5/default`。提交前检查 694 ms，queued→completed 14.723 秒，总计约 15.4 秒；协议 `SUCCESS`、持久状态 `completed`。原生首次写工具报错后自行修正，再次写入成功。读取实际 `cwn-windows-fix-82132c8d.txt`，内容等于 `WINDOWS_FIX_OK\n`，SHA-256 为 `FE1180B698337661D29E3314A13385EE1BD3A98532A28EF84A6D8336EC1C18A8`。不是只采信模型完成自述。
+- [x] MiMo 同会话续聊：未再次提供文件名，原生会话正确回复上一轮文件名，协议 `SUCCESS`、状态 `completed`。提交前检查 7,320 ms（缓存已过期），queued→completed 7.154 秒，总计约 14.5 秒。前轮约 61/30 秒与本轮任务内容、会话缓存、网络条件不同，不能将全部差异归因于本次优化。
+- [x] MiMo 运行中停止：实际启动 MiMo、启动器、PowerShell 等待及两个控制台，共 5 个按 PID/创建身份核对的进程；停止返回耗时 137 ms、状态 `interrupted`，同创建身份的五个进程全部退出。未按进程名称批量终止。完整目录、文件、续聊及停止摘要：`.test-data/windows-remote/desktop-audit/fix-mimo-live-summary.json`；人工核对说明：`Windows-修复与性能复验.md` 的“实际 MiMo 全链路复验”。这覆盖 Worker 停止；账号终端清理的独立验收见末尾。
+- [x] 阶段自动回归：本地完整 Vitest 结果为 75 文件通过、1 文件跳过，1,488 测试通过、8 跳过，总计 1,496；原始日志 `.test-data/windows-remote/desktop-audit/fix-full-test-approved.log`，开始时间 2026-10-10 23:52:09。Windows 定向 `node node_modules/vitest/vitest.mjs run … --maxWorkers=4 --reporter=json` 覆盖 10 个测试文件，256/256 通过、0 失败、0 跳过；命令载于 `windows-new-regression-82132c8d.ps1`，最终原始报告为 `windows-new-regression-82132c8d.json`。中间 `*-platform-fixtures.json` 为 254 通过/2 失败，不能当最终通过报告。此阶段通过不覆盖其后的终端改动，最终源码仍需由主任务补回归结果。
+- Claude 认证边界已纠正：旧验收把原生 `authMethod=oauth_token` 简称“官方 OAuth 已登录”不准确，实际令牌来自该 CLI 自身的本地代理设置。代理可连接时保持代理；关闭时使用临时原生官方配置，认证失败不切换来源。现有真实官方账号未登录，不能把代理认证或公共能力列表当作 Claude 订阅授权。原生 2.1.296 在未登录时也返回 5 个带 `resolvedModel` 的能力选项；controls-only 探针没有 prompt/模型事件，设置及凭据状态不变。新目录模块在真实 Host backend 下正确拒绝未登录。`get_usage` 可以使用 CLI 自身按账号绑定、年龄小于 60 秒的快照；插件不新增额度缓存，并拒绝缺少原始 limits 的失败 fallback。正向官方登录与任务仍未通过。证据：`.test-data/windows-remote/claude-route/native-route-safe-result.json`、`overlay-isolated-result.json`，以及 `.test-data/windows-remote/oauth-research/claude-readonly/native-control-safe-result.json`、`claude-native-module-result.json`。
+- Kimi 当前真实限制：原生 TUI 已自行续期，随后同源 `/models` 返回 HTTP 200 与 4 个原生别名对应模型；`/usages` 返回 HTTP 200、完整空对象 `{}`。官方原生界面对空套餐窗口显示无用量信息，不能解释成无限额或断言用户没有订阅。插件提示剩余额度无法确认并拒绝派遣，不绕过门槛、不手工刷新令牌，不宣称真实模型调用通过。仅确认默认强度。证据：`.test-data/windows-remote/oauth-research/kimi-preview-after-native-refresh.json`。
+- [x] Windows 账号终端：实际 Desktop Electron 控制台归属、窗口关闭及后代清理的最终修复和现场验收通过，详见末尾；模拟回归、Node 探针或 Worker 停止不替代该验收。
+- [x] Antigravity：实际 Desktop 原生 Credential Manager 账号状态和真实模型任务均有独立证据，Gemini 3.8 Flash Low 文件任务的事件、结果及产物见末尾。
+- [ ] 最终集成交付：最新源码完整回归、最终 Desktop 包与源码一致性、活动进程清零、规格严格校验和阶段提交以主任务最终记录为准；OpenSpec 按实际子项记录，Claude/Kimi 边界保留，不归档、不推送。
+
+私有日志与运行证据保留在忽略目录，文档仅记录可核查的结果和边界，不提交凭据、账号原文或用户运行数据。
+
+### 最终安装与 Windows 原生终端复验（2026-10-11）
+
+- [x] 最新源码类型检查及完整回归：1,505 通过、8 跳过；Windows Electron 专项 94/94，覆盖真实三路 TTY、输入、Unicode/空串/引号/元字符参数、停止、自然退出码 7、后代及控制台回收、61 秒后终态关闭与失败重试。仅生命周期夹具明确标为模拟，不冒充模型调用。
+- [x] 最终 run `2b637e3f-54b7-4f9f-991d-19709bd62416` 的 Windows 类型检查、107 项通过/1 项 POSIX 专用跳过、原 Mac 包 Host 加载通过；源码与 preview 核对、清理和锁释放确认。
+- [x] Windows 无活动 Worker 时正常退出 Desktop，使用安装版自身 `runtime/cli/bin/dsh.cmd` 更新；308 个 lib 文件与包一致。包 SHA-256 `2d9056b725d1d0b9c35468f0ce096df8c7f9a3f8b9ab9897ece0f752061d3a4f`；Host SHA-256 `aaf3205ef88ded62cafd22f7b88b8b2c5958c1827e68c56f62c8a9e98177b1b5`。Mac 正式构建后恢复应用，Host 哈希相同。
+- [x] 真实 Windows OMP 输入 `/login` 显示提供商菜单，黑色块状光标与焦点边框可见；外层关闭无错误，三个已记录 PID/创建身份均退出。Pi 1.1.0/OpenCode 原生认证菜单、ZCode Z.AI 登录提示、Grok 原生授权入口均能打开、获得输入焦点并正常关闭。未提交新账号凭据或退出既有账号。
+- [x] 根因修复以实际 Electron 为准：固定 PowerShell 等待 GUI helper；账号专属 `CONIN$` 恢复输入，仅预加载本次 Electron CLI，不改共享 Host/任务输入。`cleanupConfirmed` 仅在全范围及私有资源释放完成后发出，修复终态过期后关闭误报。
+- 派遣路由增量 81 项通过：排除插件/工具说明，归一同 CLI 括号别名和重复指令；未知/不同目标仍拒绝。实际 Antigravity 派遣成功见下一节；Claude 原生进程虽启动，但终端空白，尚不确认官方登录流程正常。
+- 证据为 Git 忽略目录 `.test-data/windows-remote/desktop-audit/` 中 `final-full-test.log`、`windows-electron-final-regression.json`、`electron-host-final-tty-result.json`、`final-install-result.json`、`final-desktop-ui-summary.json`、`final-omp-cursor-input.png`。前述中间包失败作为历史保留，以本段及后续记录为当前结论。
+
+### Antigravity 真实最小任务通过（2026-10-11）
+
+- 用户明确选定 Gemini 3.8 Flash、Low；在专用 Windows 验收聊天通过真实插件选型，未附加角色预设。原失败句含 `CLI Worker` 与 `Antigravity（agy）CLI`，更新后成功进入选型和执行。
+- Worker `ba82f9d8-a2ac-419f-b6ff-aea6b74a32f0`，run `91a5c33f-9c9c-441f-b91d-988008a22526`，原生会话 `a7763d79-f6d3-4ec6-8ddc-4883e6d3ea24`。原生选型 ID `gemini-3.8-flash-low`，思考强度 low。queued 到 completed 约 22.0 秒；事件包含 write_to_file DONE、result SUCCESS 和最终 completed。
+- 实际 `cwn-windows-agy-fix.txt` 的内容严格等于 `AGY_WINDOWS_OK\n`，SHA-256 `57FF6AF8ED1A0D68189F378DCD137658D6E57CD1AAE2D2FE80F1FC23760B0F0C`。独立读取核对，不以模型自述代替验收。证据 `final-agy-worker.json`、`final-agy-events.jsonl`。
+- Claude 仍单独待验：官方登录进程已启动并监听本地回调端口，但真实 xterm DOM 无输出（非 Canvas），尚未确认浏览器授权页面或账号登录成功；不据此宣称官方登录全链路通过。

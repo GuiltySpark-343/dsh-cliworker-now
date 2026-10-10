@@ -175,7 +175,7 @@ dsh plugin --profile desktop remove dsh-cliworker-now
 >
 > 调用 glm cli 帮我检查这段代码。
 
-`agy` 对应 **Antigravity**，`glm / zhipu / 智谱` 对应 **ZCode**，`harmes` 对应 **Hermes Agent**。插件会为当前明确调用提供路由提示，并在派遣工具里统一解析名称；较长名称的轻微拼写误差只有唯一候选时才接受。未知名称或多个目标返回简短错误和候选，不自动派遣，普通模型讨论、否定调用和引用示例不会触发路由提示。是否调用工具仍由 Harness 主模型决定；如果模型忽略请求，可明确说“使用 CLI Worker 插件调用 agy CLI”。
+`agy` 对应 **Antigravity**，`glm / zhipu / 智谱` 对应 **ZCode**，`harmes` 对应 **Hermes Agent**。插件会为当前明确调用提供路由提示，并在派遣工具里统一解析名称；支持 `Antigravity（agy）CLI` 这样的同名别名，重复指定同一 CLI 仍视为一个目标。较长名称的轻微拼写误差只有唯一候选时才接受。未知名称或多个目标返回简短错误和候选，不自动派遣，普通模型讨论、否定调用和引用示例不会触发路由提示。是否调用工具仍由 Harness 主模型决定；如果模型忽略请求，可明确说“使用 CLI Worker 插件调用 agy CLI”。
 
 首次使用相应项目和 CLI 时，通过 Harness 原生问题卡片选择：
 
