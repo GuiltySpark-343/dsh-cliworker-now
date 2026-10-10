@@ -818,3 +818,4 @@
 - Mac/Windows 包 SHA-256 相同：`775bae13cb1dd5a1b1135be204ef5025de494f171ededd1a74d90d028dfc6b58`。报告、阶段日志及原始 Vitest JSON 回传，测试 JSON 哈希及计数/七文件/必要阶段/运行 ID 校验通过，正常运行两端锁释放并确认清理。
 - 初次真实试跑分别暴露 PowerShell Get-Item 隐藏 AppData 需 -Force、gitconfig 文件误作目录、冷源码缺生成 remote 声明三项准备问题，逐项修正并保留失败/回传证据；最终成功不遮蔽这些记录。另在实际安装阶段主动 SIGINT：流程非零退出、两端 interrupted、报告回传、Windows 自有进程范围清理及两端锁释放确认。
 - 私有证据在 `.test-data/windows-remote/runs/`、mac-regression-summary.json、cancellation-check.json、harness-version.json；原报告/日志/配置和个人机器信息不入 Git。最终 Mac 当前 lib 281 文件哈希与开始前完全相同，未正式 build 或更新 Desktop。模型调用为 0；官方 CLI 额外版本/帮助探针、真实模型、Windows 全量矩阵和 Desktop 界面均未验收，不以本次结果代替。
+- 交付：实施提交 `b171f24`；OpenSpec 6/6 有实际证据，新增主规格 4 条需求，归档前后严格 10/10、活动变更为 0，归档到 `openspec/changes/archive/2026-10-10-add-windows-remote-test-workflow/`。只本地阶段提交，不推送；用户原有素材和文档改动保留。
