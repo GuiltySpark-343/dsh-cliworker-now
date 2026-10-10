@@ -819,3 +819,13 @@
 - 初次真实试跑分别暴露 PowerShell Get-Item 隐藏 AppData 需 -Force、gitconfig 文件误作目录、冷源码缺生成 remote 声明三项准备问题，逐项修正并保留失败/回传证据；最终成功不遮蔽这些记录。另在实际安装阶段主动 SIGINT：流程非零退出、两端 interrupted、报告回传、Windows 自有进程范围清理及两端锁释放确认。
 - 私有证据在 `.test-data/windows-remote/runs/`、mac-regression-summary.json、cancellation-check.json、harness-version.json；原报告/日志/配置和个人机器信息不入 Git。最终 Mac 当前 lib 281 文件哈希与开始前完全相同，未正式 build 或更新 Desktop。模型调用为 0；官方 CLI 额外版本/帮助探针、真实模型、Windows 全量矩阵和 Desktop 界面均未验收，不以本次结果代替。
 - 交付：实施提交 `b171f24`；OpenSpec 6/6 有实际证据，新增主规格 4 条需求，归档前后严格 10/10、活动变更为 0，归档到 `openspec/changes/archive/2026-10-10-add-windows-remote-test-workflow/`。只本地阶段提交，不推送；用户原有素材和文档改动保留。
+
+
+## 2026-10-10：Windows 插件运行复验与实际 Harness 安装启动
+
+- 用户要求在 Windows 重新跑插件测试。执行现有 `test:windows:remote`：Mac 当前隔离构建包上传、Windows 冻结本机依赖、类型检查、七个定向测试、原包 Host import 及证据回传均通过；101 通过、1 项已知 POSIX Pi launcher 跳过、0 失败。Windows x64 / Node 24.15.0 / pnpm 11.25.0。
+- 补做真实 Harness 0.2.0-rc.2 验收：在本次 run 空 HOME/USERPROFILE/APPDATA/DSH_HOME 与管理配置目录中，使用原生 `plugin --profile windows-plugin-acceptance add --save-exact <Mac tgz>` 安装；原生 ls 退出 0，profile bundle 注册正确，安装后全部 280 个 lib 文件与 Mac 原包逐文件哈希相同。非用户 Desktop profile，无现有会话和账号写入。
+- 在真实 web Host 内通过验收夹具读取 cliworker 服务及客户端 graph，注册、版本、客户端 bundle 哈希均匹配；Agent 和 Worker 为 0。夹具封锁真实生成、账号查询、外部 CLI 和外网 fetch，未把模拟对话或任务当成真实运行。
+- 实际 HTTP 验收：认证根页返回 200，序列化 `globalThis["__DSH_BOOT__"]` 含插件；插件 JavaScript 返回 200，实际模块加载包装有效。向 `/api/cliworker/cliSettings` 发送缺少 parentSessionId 的请求，得到 HTTP 200 的 server-response 与预期 `gateway/arguments-invalid`，证明生成 endpoint 与参数校验注册正确，不将该错误响应写作真实任务成功。
+- 首次私有验收夹具误用不存在的 ready 事件及字面 window.__DSH_BOOT__ 判断，分别超时/误拒真实正常 HTML；改用 appReady.onReady 与实际 globalThis 序列化形式后通过，未修改插件代码，各轮诊断保留。全部实例通过 Host 内 SIGTERM 正常 dispose，最终退出 0、fixture cleanup receipt 存在；再读 Windows 核对该 run 进程 0、18790 监听 0、host.lock 0、远程 run.lock 不存在。
+- 报告和私有日志保存在 `.test-data/windows-remote/runs/` 对应 run 的 remote/ 与 harness/；连接令牌/Cookie 未输出或入 Git。当前结论仅为 Windows 安装、启动、插件注册/资源/Gateway及原生进程链路通过；真实 CLI 模型任务、账号权限和 Windows 原生 Desktop 画面未验证。模型调用 0，未更新 Desktop 或发布版本。
