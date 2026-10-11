@@ -129,7 +129,7 @@ Kimi 已核验的 managed OAuth 模型能力和 Claude 的命令参数能力也�
 ### 5.1 一行安装
 
 ```sh
-dsh plugin --profile desktop add dsh-cliworker-now@0.7.6
+dsh plugin --profile desktop add dsh-cliworker-now@0.7.7
 ```
 
 <details>
@@ -138,15 +138,15 @@ dsh plugin --profile desktop add dsh-cliworker-now@0.7.6
 使用 Web profile 时：
 
 ```sh
-dsh plugin --profile web add dsh-cliworker-now@0.7.6
+dsh plugin --profile web add dsh-cliworker-now@0.7.7
 ```
 
-安装或更新前先结束活动任务并完整退出 Harness，完成后重新打开。npm 包已预构建，无需手动解压或编译。也可以在插件页“添加插件”中输入 `dsh-cliworker-now@0.7.6`。
+安装或更新前先结束活动任务并完整退出 Harness，完成后重新打开。npm 包已预构建，无需手动解压或编译。也可以在插件页“添加插件”中输入 `dsh-cliworker-now@0.7.7`。
 
 GitHub Release 备用安装：
 
 ```sh
-dsh plugin --profile desktop add https://github.com/SuperWheel/cliworker-now/releases/download/v0.7.6/dsh-cliworker-now-0.7.6.tgz
+dsh plugin --profile desktop add https://github.com/SuperWheel/cliworker-now/releases/download/v0.7.7/dsh-cliworker-now-0.7.7.tgz
 ```
 
 从源码开发：
