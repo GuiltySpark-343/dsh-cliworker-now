@@ -36,6 +36,12 @@
 
 ## Native Windows account evidence
 
+### 新版 Windows 伪控制台窗口归属
+
+- 发布前 Windows CI（系统 build 26100）的固定诊断确认父 PID 和创建时间通过，但 `GetWindowThreadProcessId(GetConsoleWindow())` 所得映像不再是系统 conhost。Microsoft Terminal [变更 #14196](https://github.com/microsoft/terminal/pull/14196) 将伪控制台消息窗口的归属 PID 设为根客户端；该窗口 PID 不能一概当作 console server PID。
+- 当窗口归属正是已经持有并加入 Job 的 bootstrap PID 时，动态解析当前已加载 `user32.dll` 的 ordinal 2712，以同一 HWND 调用维护者在 [讨论 #16447](https://github.com/microsoft/terminal/discussions/16447) 给出的 `GetRealWindowOwner`。该接口不是承诺稳定的公开 API；缺失、零值、越界或仍指向 bootstrap 都拒绝。旧系统已经返回真实 console PID 时保持原路径，不依赖版本号猜测或按同名进程枚举。
+- 解析出的候选仍必须满足 Host 父 PID、当前分配的创建时间窗口、系统目录中精确 `conhost.exe` 路径，随后成功加入原有 Job。关闭仍等待 ConPTY dispose 和 Job `ActiveProcesses == 0`，不改变输入输出、账号、SDK 或清理失败门禁。实际 Windows Desktop 与 CI 两类系统都必须复验。
+
 Antigravity 1.3.3 将 Windows OAuth 保存在交互式用户的 Credential Manager 固定目标 `gemini:antigravity`。固定 PowerShell helper 只投影账号状态、稳定主体哈希和安全标签，原生凭据内容不离开该进程；目录及执行边界重读同一来源。SSH 服务会话无法访问该登录存储不代表 Desktop 未登录，验收使用实际交互式 Desktop。
 
 ## Windows 终端与识别补充（2026-10-11）

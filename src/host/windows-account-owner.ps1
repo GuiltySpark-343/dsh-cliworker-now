@@ -21,10 +21,32 @@ public sealed class CwnAccountJob : IDisposable {
  [DllImport("kernel32.dll", SetLastError=true)] static extern bool AttachConsole(uint pid);
  [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
  [DllImport("user32.dll", SetLastError=true)] static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+ [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr GetModuleHandle(string name);
+ [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr GetProcAddress(IntPtr module, IntPtr ordinal);
+ [UnmanagedFunctionPointer(CallingConvention.Winapi)] delegate uint RealWindowOwner(IntPtr window);
  IntPtr job; Process root;
  public CwnAccountJob() { job=CreateJobObject(IntPtr.Zero,null); if(job==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error()); var l=new ExtendedLimits(); l.Basic.Flags=0x2000; if(!SetInformationJobObject(job,9,ref l,(uint)Marshal.SizeOf(l))) { var error=Marshal.GetLastWin32Error(); Dispose(); throw new Win32Exception(error); } }
  public void Attach(int pid, DateTime receiptTime, DateTime earliest) { root=Process.GetProcessById(pid); var handle=root.Handle; var started=root.StartTime.ToUniversalTime(); if(started>receiptTime || started<earliest) throw new Exception("process identity changed"); if(!AssignProcessToJobObject(job,handle)) throw new Win32Exception(Marshal.GetLastWin32Error()); }
- public static int ConsoleOwner(int pid) { FreeConsole(); if(!AttachConsole((uint)pid)) throw new Win32Exception(Marshal.GetLastWin32Error()); try { uint owner; if(GetWindowThreadProcessId(GetConsoleWindow(),out owner)==0 || owner==0) throw new Win32Exception(Marshal.GetLastWin32Error()); return (int)owner; } finally { FreeConsole(); } }
+ public static int ConsoleOwner(int pid) {
+  FreeConsole(); if(!AttachConsole((uint)pid)) throw new Win32Exception(Marshal.GetLastWin32Error());
+  try {
+   var window=GetConsoleWindow(); uint owner;
+   if(window==IntPtr.Zero || GetWindowThreadProcessId(window,out owner)==0 || owner==0) throw new Exception("console owner unavailable");
+   // Modern ConPTY gives its message-only window to the root client, not
+   // conhost: microsoft/terminal#14196. Resolve this same HWND's real owner
+   // using the maintainer's dynamic API from discussion #16447. The ordinal
+   // is not a stable public API; absence or an invalid result fails closed.
+   if(owner==(uint)pid) {
+    var module=GetModuleHandle("user32.dll");
+    var address=module==IntPtr.Zero?IntPtr.Zero:GetProcAddress(module,new IntPtr(2712));
+    if(address==IntPtr.Zero) throw new Exception("real console owner unavailable");
+    var getOwner=(RealWindowOwner)Marshal.GetDelegateForFunctionPointer(address,typeof(RealWindowOwner));
+    owner=getOwner(window);
+   }
+   if(owner==0 || owner>(uint)Int32.MaxValue || owner==(uint)pid) throw new Exception("console owner unavailable");
+   return (int)owner;
+  } finally { FreeConsole(); }
+ }
  public string ConsoleIdentityReason { get; private set; }
  public string ConsoleImageKind { get; private set; }
  public bool ConsoleImageDevicePrefix { get; private set; }
