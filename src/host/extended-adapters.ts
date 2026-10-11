@@ -24,6 +24,7 @@ import { prepareOpenCode, discoverOpenCode, openCodeAuthDirectory } from './open
 import { prepareHermes, discoverHermes } from './hermes-adapter.ts'
 import { effectiveHermesHome } from './hermes-account-context.ts'
 import { prepareGrok, discoverGrok } from './grok-adapter.ts'
+import type { HermesRenewalContext } from './hermes-renewal.ts'
 
 export const EXTENDED_CLIS = ['zcode', 'grok', 'omp', 'pi', 'hermes', 'opencode'] as const
 export const isExtendedCli = (cli: string): cli is (typeof EXTENDED_CLIS)[number] =>
@@ -123,6 +124,7 @@ export async function extendedLaunch(
   config: RuntimeConfig,
   conversationId?: string,
   metadataCapture?: PiOmpMetadataCapture,
+  renewal?: HermesRenewalContext,
 ) {
   const state = privateDirectory(stateDirectory)
   const input = { executable, project, preference, mode, prompt, conversationId, stateDirectory: state }
@@ -154,7 +156,7 @@ export async function extendedLaunch(
               authDirectory: openCodeAuthDirectory(config.stateDirectory),
             })
           : cli === 'hermes'
-            ? await prepareHermes({ ...input, hermesHome: effectiveHermesHome(config) })
+            ? await prepareHermes({ ...input, hermesHome: effectiveHermesHome(config), renewal })
             : cli === 'grok'
               ? await prepareGrok(input)
               : undefined
@@ -194,6 +196,7 @@ export async function extendedCatalog(
   stateDirectory: string,
   config: RuntimeConfig,
   signal?: AbortSignal,
+  renewal?: HermesRenewalContext,
 ): Promise<ModelChoice[]> {
   signal?.throwIfAborted()
   const catalogRoot = privateDirectory(join(stateDirectory, 'catalog', cli))
@@ -241,7 +244,7 @@ export async function extendedCatalog(
                 run,
                 state,
                 effectiveHermesHome({ ...config, stateDirectory: config.stateDirectory ?? stateDirectory }),
-                { signal },
+                { signal, renewal },
               )
             : cli === 'grok'
               ? await discoverGrok(executable, run, state, { signal })

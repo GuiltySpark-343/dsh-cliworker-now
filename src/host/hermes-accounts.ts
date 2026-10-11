@@ -59,6 +59,7 @@ export function projectHermesIdentity(raw: unknown): AccountIdentity | undefined
   const ids = nonempty(raw.active_provider) ? [raw.active_provider] : Object.keys(providers)
   const logins: AccountLogin[] = []
   let expired = false
+  let renewable = false
   for (const id of ids) {
     const state = providers[id]
     if (id === 'nous' && record(state)) {
@@ -69,7 +70,15 @@ export function projectHermesIdentity(raw: unknown): AccountIdentity | undefined
           ...(nous.email ? { accountLabel: nous.email } : {}),
         })
       } catch (error) {
-        if (error instanceof Error && /过期/.test(error.message)) expired = true
+        if (error instanceof Error && /过期/.test(error.message)) {
+          expired = true
+          try {
+            projectHermesNousSource(raw, 0, { allowExpired: true })
+            renewable = nonempty(state.refresh_token)
+          } catch {
+            /* A stale bearer is not sufficient without the same valid own source. */
+          }
+        }
       }
       continue
     }
@@ -138,6 +147,11 @@ export function projectHermesIdentity(raw: unknown): AccountIdentity | undefined
     const only = identity.logins?.length === 1 ? identity.logins[0] : undefined
     return { ...identity, ...(only?.accountLabel ? { accountLabel: only.accountLabel } : {}) }
   }
+  if (renewable)
+    return {
+      state: 'configured', verification: 'local', authMethod: 'oauth',
+      summary: 'Hermes 登录已保存，等待自动续期',
+    }
   if (expired)
     return {
       state: 'unauthenticated',

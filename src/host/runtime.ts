@@ -573,6 +573,7 @@ export class WorkerRuntime {
             expectedConversation,
             (argv, env) =>
               captureCatalogMetadata(this.backend, this.config, argv, worker.project, controller.signal, env),
+            { backend: this.backend, signal: controller.signal, graceMs: this.config.graceMs },
           )
         : cliOf(worker.preference) === 'claude'
           ? await prepareClaudeWorkerLaunch(

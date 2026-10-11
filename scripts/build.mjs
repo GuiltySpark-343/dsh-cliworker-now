@@ -52,8 +52,10 @@ for (const name of ['own-account-lease', 'pi-omp-refresh']) {
 }
 // The native Hermes bridge is executed by the verified installed Python, both
 // from the bundle URL and from emitted unbundled adapter modules.
-cpSync('src/host/hermes-native-entry.py', 'lib/hermes-native-entry.py')
-cpSync('src/host/hermes-native-entry.py', 'lib/types/host/hermes-native-entry.py')
+for (const name of ['hermes-native-entry', 'hermes-nous-refresh']) {
+  cpSync(`src/host/${name}.py`, `lib/${name}.py`)
+  cpSync(`src/host/${name}.py`, `lib/types/host/${name}.py`)
+}
 cpSync('src/host/windows-account-owner.ps1', 'lib/windows-account-owner.ps1')
 cpSync('src/host/windows-account-owner.ps1', 'lib/types/host/windows-account-owner.ps1')
 cpSync('src/host/windows-account-bootstrap.ps1', 'lib/windows-account-bootstrap.ps1')

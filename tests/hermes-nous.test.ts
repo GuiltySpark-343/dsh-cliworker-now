@@ -128,7 +128,11 @@ describe('Hermes own Nous OAuth identity, binding and native account models', ()
     if (kind === 'mismatched-pool') raw.credential_pool.nous[0].agent_key = jwt({ sub: 'other' })
     if (kind === 'external-source') raw.credential_pool.nous[0].source = 'manual:codex_cli'
     if (kind === 'dead') raw.credential_pool.nous[0].last_status = 'dead'
-    if (kind === 'revoked') raw.providers.nous.last_auth_error = { relogin_required: true }
+    if (kind === 'revoked') {
+      raw.providers.nous.last_auth_error = { relogin_required: true }
+      delete raw.providers.nous.access_token
+      delete raw.providers.nous.refresh_token
+    }
     expect(projectHermesIdentity(raw)?.state).not.toBe('authenticated')
   })
   it('keeps account login independent of model TTL and model configuration errors', async () => {

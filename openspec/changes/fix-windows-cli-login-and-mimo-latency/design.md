@@ -93,3 +93,13 @@ Antigravity 1.3.3 将 Windows OAuth 保存在交互式用户的 Credential Manag
 - `ELECTRON_RUN_AS_NODE` 的临时值只服务于 GUI bootstrap，真实 CLI 恢复调用方原有值或显式删除语义；helper 移除自己的 `DSH_SUBPROCESS_CONTROL` 标记且不把 fd 7 传给原生 CLI。标准环境、工作目录与原始 argv 继续沿用原生调用，不记录凭据或授权 URL。
 - ZCode 的 `executableFor` 在两平台共用显式配置优先、已部署 managed 次之、平台原生默认最后的顺序。managed 入口不存在时继续原生查找，已存在但不可读或不是普通文件时由现有入口校验拒绝；不借选择登录地区偷偷改写 executable 配置。Windows 完整 runtime 的通用官方构建和精确版本本机依赖单独部署，原始 Desktop 安装、原生账号目录和已有项目偏好保持原位。
 - 验收分层记录模拟控制回执/真实子进程字节流、Windows 包加载及原生 helper 行为、实际 Desktop 窗口事件与父链；仅某一层通过不能代替全部设置页和账号终端的实际验收。
+
+
+## Hermes Nous 两平台同源续期（2026-10-11）
+
+- 当前本地投影和模型/绑定准入在 invoke JWT 到期（任务边界为 120 秒余量）后提前拒绝，使原生 CLI 没有机会续期。两端当前账号均有 refresh token，Windows 原生 access TTL 为 3600 秒；当下尚未过期，不将机制证据虚写为历史故障完整复现。
+- 采用共享 Host 续期协调入口，健康令牌纯读取，临近过期时使用已有受管后台进程。仅支持已核验的官方依赖安装与明确 Nous 自身账号，保持原有输入输出/隐藏窗口/进程清理边界；不直接执行会清除额度冷却的 `auth refresh`，不启动包含匿名 fallback 和浏览器 challenge 的通用 resolver。
+- 固定 Python helper 在既有安装 lease 与 own-home 环境中复用原生 `refresh_nous_oauth_from_state`、账号事务锁与原子保存。严格验证返回的 state_source_path 为所选 home/auth.json，拒绝原生 profile→global 回退；shared 状态在原生 shared 锁内核对主体/组织/issuer/client/route，保持同源轮换，不静默导入其他账号。
+- 原生刷新回调在新 refresh token 轮换后立即合并保存，以免后续校验失败丢失轮换凭据。仅更新事前验证的同源 pool 行认证字段，保留状态、冷却、id/label/priority；不调用含跨 profile heal/env 导入的全量 load_pool。不将无 access 主体的 refresh-only 材料提升为可用身份。
+- 同 home 检查合并/串行并重读，健康刷新结果不成为长期鉴权缓存。账号切换/退出与续期互斥，取消后等待整个范围退出。临时错误和终止鉴权错误分别映射为短状态，不将原生 stderr 或凭据返回 Gateway。
+- 验收包括合成过期/刷新失败/并发与取消/不换主体回归、两端实际原生续期与目录/UI核验。实际续期可能轮换用户授权给同一 Nous 官方服务的既有凭据，不发模型任务；当前健康令牌的只读结果不冒充真实续期通过。

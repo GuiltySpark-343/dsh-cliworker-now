@@ -185,6 +185,7 @@ export async function catalogFor(
       config.stateDirectory ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'cliworker-now'),
       config,
       signal,
+      { backend, signal, graceMs: config.graceMs },
     )
     if (!models.length) throw new Error(`${CLI_LABELS[cli]} 当前账号暂无可用模型，请登录或刷新`)
     return {

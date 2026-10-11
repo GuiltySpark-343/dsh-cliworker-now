@@ -10,6 +10,7 @@ import { hermesAccountModels, assertHermesOwnAccounts } from './hermes-models.ts
 import { hermesNousEfforts, hermesNousMinimumTtl, selectHermesNousSource } from './hermes-nous.ts'
 import { hermesAccountEnvironment } from './hermes-account-context.ts'
 import { verifyHermesExecutable, hermesNativeCommand } from './hermes-installation.ts'
+import { ensureHermesNousFresh, type HermesRenewalContext } from './hermes-renewal.ts'
 
 export interface HermesInput {
   executable: string
@@ -20,6 +21,7 @@ export interface HermesInput {
   conversationId?: string
   stateDirectory: string
   hermesHome?: string
+  renewal?: HermesRenewalContext
 }
 
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -179,12 +181,14 @@ export async function discoverHermes(
   capture: (argv: string[], env?: Record<string, string>) => Promise<string>,
   stateDirectory: string,
   hermesHome?: string,
-  options: { signal?: AbortSignal; fetch?: typeof fetch } = {},
+  options: { signal?: AbortSignal; fetch?: typeof fetch; renewal?: HermesRenewalContext } = {},
 ): Promise<ModelChoice[]> {
   options.signal?.throwIfAborted()
   await verifyHermesExecutable(executable, options.signal ?? AbortSignal.timeout(15000))
   const home = hermesHomeDirectory(hermesHome)
   await requireConfiguration(home)
+  if (options.renewal)
+    await ensureHermesNousFresh({ ...options.renewal, home, executable })
   const material = await assertHermesOwnAccounts(home, options.signal)
   options.signal?.throwIfAborted()
   const env = await environment(
@@ -204,7 +208,7 @@ export async function discoverHermes(
   // Native launchers take a per-home install lock and may initialize a new profile's
   // runtime. Parallel scalar queries can race that first initialization.
   // Nous has an authenticated native catalog contract. Its bounded own config is
-  // sufficient; do not start native initialization or its automatic OAuth refresh.
+  // sufficient; the dedicated bounded renewal above is the only metadata write path.
   const model =
     material.config.model?.provider === 'nous' ? material.config.model.default : await get('model.default')
   const provider = material.config.model?.provider === 'nous' ? 'nous' : await get('model.provider')
@@ -229,7 +233,7 @@ export async function discoverHermes(
 export async function prepareHermes(
   input: HermesInput,
 ): Promise<{ argv: string[]; env: Record<string, string> }> {
-  await verifyHermesExecutable(input.executable, AbortSignal.timeout(15000))
+  await verifyHermesExecutable(input.executable, input.renewal?.signal ?? AbortSignal.timeout(15000))
   const [provider, model] = selection(input.preference.model)
   if (!['plan', 'accept-edits'].includes(input.mode)) throw new Error('Invalid Hermes mode')
   if (input.mode === 'plan')
@@ -239,7 +243,10 @@ export async function prepareHermes(
     throw new Error('Invalid Hermes session identity')
   const home = hermesHomeDirectory(input.hermesHome)
   await requireConfiguration(home)
-  const material = await assertHermesOwnAccounts(home)
+  if (input.renewal)
+    await ensureHermesNousFresh({ ...input.renewal, home, executable: input.executable })
+  input.renewal?.signal.throwIfAborted()
+  const material = await assertHermesOwnAccounts(home, input.renewal?.signal)
   if (provider === 'nous') selectHermesNousSource(material)
   const efforts = await reasoningEfforts(home, provider, model)
   if (!efforts.includes(input.preference.effort))

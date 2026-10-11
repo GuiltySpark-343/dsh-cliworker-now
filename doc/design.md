@@ -567,3 +567,14 @@ Windows 官方源码安装的 distlib 入口在隔离 `HERMES_HOME` 下无法定
 - Windows 完整 runtime 来自已验证官方源树 `29628c9acdb81b703bbd4080c207a0e7ce5e276e`，补充精确版本 Windows x64 原生包并核验 registry integrity、包身份、PE 与逐文件哈希；账号仍保存在 ZCode 自己的原生目录，不迁移或覆盖 Desktop 登录数据。
 - Windows `--no-browser` 保留原生 deviceflow init/poll/保存；共享解析器按已选 provider 绑定精确 HTTPS 域名、路径和参数集合（BigModel `bigmodel.cn/login`，Z.AI `chat.z.ai/api/oauth/authorize`），原样 URL 只在当前内存使用。自动打开一次、原生网址可点和选择复制，未新增额外按钮。
 - 普通 Windows Electron 后台进程经过固定 GUI bootstrap，原生程序由 Node `windowsHide` 启动；使用独立管道原样传递字节、EOF 和背压，防止继承 fd 导致 libuv 仅 SW_HIDE、没有 CREATE_NO_WINDOW。SDK Job 继续拥有完整进程范围；原生退出事实经有界私有控制通道返回，失败/取消不伪装成功。Mac 与嵌入式 ConPTY 登录保持原路径。参考 libuv 官方 `src/win/process.c` 的 Windows hide/stdin 继承规则。
+
+
+### Hermes Nous 同账号自动续期（2026-10-11）
+
+此前只读 Nous 投影会把短期 invoke JWT 临近过期或已过期视为需要重登，使模型和任务准入先于 Hermes 原生续期被拒绝。本节替代此前“目录路径不自动刷新 OAuth”的限制：目录请求之前允许一次有界的同账号原生续期，目录本身仍不能把 HTTP 失败变成自动登录、切换来源或循环刷新。Mac 与 Windows 使用同一 Host 与固定 Python helper。
+
+- 账号状态、目录、任务绑定及直接任务准备共用同目录进行中续期；健康访问令牌保持本地读取，不启动进程。仅 Nous 已确认主体、组织、issuer、client、官方路由与自身池有效时，调用已核验原生依赖环境中的 `refresh_nous_oauth_from_state`。不调用完整 resolver、guest 修复、外部账号导入、登录网页或生成任务；固定子进程不接受任意 Python/CLI 指令，不输出凭据。
+- 复用 Hermes 自身 `hermes_yaml` 及 auth→shared 原生锁；源文件、身份与池在锁内重核。同主体较新 shared 轮换可以合并，同到期时间但不同令牌对、异主体、异 client/路由和目录重定向均拒绝。轮换回调先保存新令牌，再进行原生后续有效性检查；只更新身份已核实的 pool 认证字段，保留 ID、标签、优先级、停用、额度和冷却。原生 shared 写入后再次核验。
+- 关闭最后一个查询不会立即杀死正在兑换单次刷新凭据的进程：等待有限原生事务落盘和范围退出，后续查询与登录/退出操作也等待同一生命周期。后台进程沿用 Windows 隐藏启动及原生 SDK Job，Mac 沿用宿主进程管理，不修改 Harness 核心或添加操作系统沙箱。进程清理无法确认时阻止继续使用该目录。
+- 暂时网络失败保留账号并提示刷新重试；明确终止或缺少续期凭据才要求重登。重新登录后仍有有效凭据的陈旧错误标记不再单独否定登录；令牌轮换不改变任务绑定的主体摘要，退出或切换账号不会由旧快照恢复。
+- 原生网络超时 4 秒、两层锁各 1 秒、Host 子进程期限 8 秒。续期过程中断电或系统强制结束仍不能保证保存尚未写入的服务器轮换；取消回归验证的是正常 Host 生命周期。实际 OAuth 续期与目录验收不等于模型生成验收，细节见任务记录。

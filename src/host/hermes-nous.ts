@@ -61,14 +61,18 @@ export interface HermesNousSource {
 
 /** Hermes 6c80c327: flat providers.nous, native device-code pool and invoke JWT.
  * No refresh-only, guest, fallback store or different pooled principal is promoted. */
-export function projectHermesNousSource(auth: any, minTtlSeconds = 0): HermesNousSource {
+export function projectHermesNousSource(
+  auth: any,
+  minTtlSeconds = 0,
+  options: { allowExpired?: boolean } = {},
+): HermesNousSource {
   const state = auth?.providers?.nous
   if (
     !object(state) ||
     auth.active_provider !== 'nous' ||
     state.auth_method === 'anonymous' ||
     state.account_tier === 'anonymous' ||
-    state.last_auth_error?.relogin_required === true ||
+    (state.last_auth_error?.relogin_required === true && !state.access_token && !state.refresh_token) ||
     unavailable(state)
   )
     invalid()
@@ -88,7 +92,7 @@ export function projectHermesNousSource(auth: any, minTtlSeconds = 0): HermesNou
     ![...scopes(state.scope), ...scopes(token.scope), ...scopes(token.scp)].includes('inference:invoke')
   )
     invalid()
-  if (token.exp * 1000 <= Date.now() + minTtlSeconds * 1000)
+  if (!options.allowExpired && token.exp * 1000 <= Date.now() + minTtlSeconds * 1000)
     throw new HermesNousError('Nous 登录即将过期或已过期，请在 Hermes 登录设置中重新登录')
   if (!canonical(state.portal_base_url, NOUS_PORTAL) || !canonical(state.inference_base_url, NOUS_INFERENCE))
     throw new HermesNousError('Nous 当前路由暂不支持账号模型查询')
@@ -138,11 +142,10 @@ export function hermesNousMinimumTtl(env: Record<string, string>): number {
 /** Runtime uses its supported MIN_KEY_TTL override (120s), matching the native
  * invoke-JWT skew. The native default 1800s is a proactive-refresh optimization,
  * not invalid-account evidence. An explicit own-home setting still takes precedence. */
-export function selectHermesNousSource(material: {
-  config: any
-  auth: any
-  env: Record<string, string>
-}): HermesNousSource {
+export function selectHermesNousSource(
+  material: { config: any; auth: any; env: Record<string, string> },
+  options: { allowExpired?: boolean } = {},
+): HermesNousSource {
   const { config, auth, env } = material
   const cfg = config.model
   if (!object(cfg) || cfg.provider !== 'nous' || config.providers?.nous?.enabled === false) invalid()
@@ -165,7 +168,7 @@ export function selectHermesNousSource(material: {
     (cfg.api_mode && !['chat_completions', 'anthropic_messages'].includes(cfg.api_mode))
   )
     throw new HermesNousError('Nous 当前路由暂不支持账号模型查询')
-  const source = projectHermesNousSource(auth, hermesNousMinimumTtl(env))
+  const source = projectHermesNousSource(auth, hermesNousMinimumTtl(env), options)
   const wire = config.nous?.anthropic_wire ?? 'chat'
   if (!['chat', 'native', 'auto'].includes(wire))
     throw new HermesNousError('Nous 当前路由暂不支持账号模型查询')

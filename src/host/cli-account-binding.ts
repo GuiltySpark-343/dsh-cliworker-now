@@ -26,6 +26,7 @@ import { HermesNousError, selectHermesNousSource } from './hermes-nous.ts'
 import { hermesUnsuppressedEnvironment, projectHermesUnsuppressedAuth } from './hermes-suppression.ts'
 import { readZCodeBindingMaterial, zcodeAuthDirectory } from './zcode-adapter.ts'
 import { ProcessCleanupUnconfirmedError, type ProcessBackend, type RuntimeConfig } from './process.ts'
+import { ensureHermesNousFresh, HermesRenewalError } from './hermes-renewal.ts'
 
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v)
 const text = (v: unknown): v is string => typeof v === 'string' && !!v.trim()
@@ -497,6 +498,10 @@ async function material(
   }
   if (cli === 'hermes') {
     const root = effectiveHermesHome(config)
+    await ensureHermesNousFresh({
+      home: root, backend, signal, graceMs: config.graceMs,
+      resolveExecutable: (control) => resolveCliExecutable(cli, backend, config, control),
+    })
     const raw = await assertHermesOwnAccounts(root, signal)
     const provider = raw.config.model?.provider
     const source = {
@@ -577,7 +582,8 @@ export async function readCliAccountBinding(
     if (
       error instanceof CliAccountBindingError ||
       error instanceof KimiOAuthModelError ||
-      error instanceof ClaudeOwnRouteError
+      error instanceof ClaudeOwnRouteError ||
+      error instanceof HermesRenewalError
     )
       throw error
     throw new CliAccountBindingError(cli)

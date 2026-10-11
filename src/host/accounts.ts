@@ -52,6 +52,8 @@ import { readMimoAccount } from './mimo-configuration.ts'
 import { prepareMimoAccountTerminal } from './first-party-account-context.ts'
 import { spawnAccountTerminal, WindowsAccountTerminalError } from './windows-account-terminal.ts'
 import { WindowsCliInstallationError } from './windows-cli-installation.ts'
+import { effectiveHermesHome } from './hermes-account-context.ts'
+import { ensureHermesNousFresh, HermesRenewalError, reserveHermesAccount } from './hermes-renewal.ts'
 
 const STATUS_TIMEOUT = 10_000
 const STARTUP_TIMEOUT = 30_000
@@ -330,7 +332,18 @@ export class AccountManager {
           ...(await readMimoAccount(control)),
           actions: this.backend.spawnTerminal ? actionsFor(cli, this.config) : [],
         }
-      if (cli === 'hermes') await verifyHermesExecutable(executable, control)
+      if (cli === 'hermes') {
+        await verifyHermesExecutable(executable, control)
+        const local = await readHermesAccount(this.config, control)
+        if (
+          local.logins?.some((login) => login.providerLabel === 'Nous') ||
+          local.summary === 'Hermes 登录已保存，等待自动续期'
+        )
+          await ensureHermesNousFresh({
+            home: effectiveHermesHome(this.config), executable,
+            backend: this.backend, signal: control, graceMs: this.config.graceMs,
+          })
+      }
       if (isExtendedCli(cli)) {
         const identity = await abortable(
           cli === 'zcode' || cli === 'grok'
@@ -469,6 +482,11 @@ export class AccountManager {
         return { cli, installed, state: 'unavailable', summary: error.message, actions: [] }
       if (error instanceof HermesExecutableError)
         return { cli, installed, state: 'unavailable', summary: error.message, actions: [] }
+      if (error instanceof HermesRenewalError)
+        return {
+          cli, installed, state: error.state === 'relogin' ? 'unauthenticated' : 'unavailable',
+          verification: 'local', summary: error.message, actions: actionsFor(cli, this.config),
+        }
       if (code === 'CLI_LAUNCHER_UNSUPPORTED')
         return {
           cli,
@@ -671,10 +689,16 @@ export class AccountManager {
         instruction = prepared.instruction
         release = prepared.cleanup
       } else if (cli === 'hermes') {
+        const oldHome = effectiveHermesHome(this.config)
+        const releases = [await reserveHermesAccount(oldHome, startup)]
+        release = () => { for (const free of releases) free() }
         const prepared = await prepareHermesAccount(action, executable, cwd, this.config, startup, source)
+        const cleanup = release
+        release = async () => { await prepared.cleanup(); await cleanup() }
+        const selectedHome = effectiveHermesHome(this.config)
+        if (selectedHome !== oldHome) releases.push(await reserveHermesAccount(selectedHome, startup))
         launch = prepared
         instruction = prepared.instruction
-        release = prepared.cleanup
       } else if (cli === 'opencode') {
         const prepared = await prepareOpenCodeAccount(executable, action, this.config, startup)
         launch = prepared

@@ -47,6 +47,8 @@ const required = new Set([
   ...helperNames.map((name) => `lib/${name}.mjs`),
   'lib/hermes-native-entry.py',
   'lib/types/host/hermes-native-entry.py',
+  'lib/hermes-nous-refresh.py',
+  'lib/types/host/hermes-nous-refresh.py',
   'lib/windows-account-owner.ps1',
   'lib/types/host/windows-account-owner.ps1',
   'lib/windows-account-bootstrap.ps1',
