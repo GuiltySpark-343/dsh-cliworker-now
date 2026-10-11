@@ -84,45 +84,13 @@ it.skipIf(process.platform !== 'win32').each(['stop', 'natural-exit'] as const)(
     const accountRuntime = process.env.CLIWORKER_TEST_ELECTRON ?? process.execPath
     let ownerDirectory: string | undefined
     let ownerExit: number | 'pending' | 'rejected' | null = 'pending'
-    let consoleIdentity: Record<string, boolean | string> | undefined
     const backend = {
       spawn: (spec: Parameters<typeof ctx.subprocess.spawn>[0]) => {
         const directoryIndex = spec.argv.indexOf('-Directory')
         if (directoryIndex >= 0) ownerDirectory = spec.argv[directoryIndex + 1]
         const handle = ctx.subprocess.spawn(spec)
         void handle.done.then(
-          ({ exitCode }) => {
-            ownerExit = exitCode
-            if (exitCode !== 2 || !ownerDirectory) return
-            // Sample before ConPTY cleanup removes the console. Only fixed
-            // classifications are emitted; paths and raw errors stay local.
-            try {
-              consoleIdentity = JSON.parse(execFileSync('powershell.exe', [
-                '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', `
-$ErrorActionPreference='Stop'
-try {
-  $directory=$env:CWN_ACCOUNT_FIXTURE_DIRECTORY
-  $failure=Get-Content -LiteralPath (Join-Path $directory 'failure') -Raw | ConvertFrom-Json
-  if ($failure.stage -ne 'attach-console') { @{available=$false} | ConvertTo-Json -Compress; exit }
-  $console=[System.Diagnostics.Process]::GetProcessById([int]$failure.consolePid)
-  try {
-    $started=$console.StartTime.ToUniversalTime()
-    $earliest=[System.IO.Directory]::GetCreationTimeUtc($directory).AddSeconds(-1)
-    $latest=[System.IO.File]::GetLastWriteTimeUtc((Join-Path $directory 'pid'))
-    $image=$console.MainModule.FileName
-    $expected=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'conhost.exe'
-    $leaf=[System.IO.Path]::GetFileName($image).ToLowerInvariant()
-    if ($leaf -notin @('conhost.exe','openconsole.exe')) { $leaf='other' }
-    @{ available=$true; startedBeforeDirectory=($started -lt $earliest); startedAfterReceipt=($started -gt $latest);
-       nativeImageMatches=[string]::Equals($image,$expected,[StringComparison]::OrdinalIgnoreCase);
-       imageKind=$leaf; inspector64Bit=[Environment]::Is64BitProcess } | ConvertTo-Json -Compress
-  } finally { $console.Dispose() }
-} catch { @{available=$false} | ConvertTo-Json -Compress }
-`,
-              ], { encoding: 'utf8', windowsHide: true, timeout: 5000,
-                env: { ...process.env, CWN_ACCOUNT_FIXTURE_DIRECTORY: ownerDirectory } }).trim())
-            } catch { consoleIdentity = { available: false } }
-          },
+          ({ exitCode }) => { ownerExit = exitCode },
           () => { ownerExit = 'rejected' },
         )
         return handle
@@ -189,13 +157,19 @@ try {
       // Preserve the owner's original fixed receipt: cleanup deliberately fails
       // closed and can otherwise hide the first Win32/handshake failure in CI.
       // Never upload argv, environment, terminal content or temporary paths.
-      const ownerFailure: Record<string, string | number> = {}
+      const ownerFailure: Record<string, string | number | boolean> = {}
       if (ownerDirectory) {
         try {
           const receipt = JSON.parse(readFileSync(join(ownerDirectory, 'failure'), 'utf8'))
           const stages = ['await-bootstrap', 'create-job', 'attach-root', 'resolve-console',
             'validate-console-parent', 'attach-console', 'await-stop', 'stop-job', 'confirm-empty']
           if (stages.includes(receipt.stage)) ownerFailure.stage = receipt.stage
+          if (['before-directory', 'after-receipt', 'wrong-image'].includes(receipt.identityReason))
+            ownerFailure.identityReason = receipt.identityReason
+          if (['conhost.exe', 'openconsole.exe', 'other'].includes(receipt.imageKind))
+            ownerFailure.imageKind = receipt.imageKind
+          if (typeof receipt.imageDevicePrefix === 'boolean')
+            ownerFailure.imageDevicePrefix = receipt.imageDevicePrefix
           for (const field of ['hostPid', 'ownerPid', 'consolePid', 'consoleParentPid', 'win32Code'])
             if (Number.isSafeInteger(receipt[field])) ownerFailure[field] = receipt[field]
         } catch { /* A missing receipt is itself useful handshake evidence. */ }
@@ -205,7 +179,7 @@ try {
         fixture: 'synthetic-windows-account-terminal', operation,
         windowsVersion: release(), nodeVersion: process.versions.node,
         runtime: accountRuntime === process.execPath ? 'current-node' : 'explicit-test-runtime',
-        ownerExit, ownerFailure, consoleIdentity,
+        ownerExit, ownerFailure,
         cleanupStage: ['receipt', 'terminal', 'owner', 'directory'].includes(stage) ? stage : null,
         receipts: Object.fromEntries(['owner-ready', 'pid', 'ready', 'cancel', 'stop', 'closed', 'exit']
           .map((name) => [name, !!ownerDirectory && existsSync(join(ownerDirectory, name))])),

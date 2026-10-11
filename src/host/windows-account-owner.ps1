@@ -25,7 +25,22 @@ public sealed class CwnAccountJob : IDisposable {
  public CwnAccountJob() { job=CreateJobObject(IntPtr.Zero,null); if(job==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error()); var l=new ExtendedLimits(); l.Basic.Flags=0x2000; if(!SetInformationJobObject(job,9,ref l,(uint)Marshal.SizeOf(l))) { var error=Marshal.GetLastWin32Error(); Dispose(); throw new Win32Exception(error); } }
  public void Attach(int pid, DateTime receiptTime, DateTime earliest) { root=Process.GetProcessById(pid); var handle=root.Handle; var started=root.StartTime.ToUniversalTime(); if(started>receiptTime || started<earliest) throw new Exception("process identity changed"); if(!AssignProcessToJobObject(job,handle)) throw new Win32Exception(Marshal.GetLastWin32Error()); }
  public static int ConsoleOwner(int pid) { FreeConsole(); if(!AttachConsole((uint)pid)) throw new Win32Exception(Marshal.GetLastWin32Error()); try { uint owner; if(GetWindowThreadProcessId(GetConsoleWindow(),out owner)==0 || owner==0) throw new Win32Exception(Marshal.GetLastWin32Error()); return (int)owner; } finally { FreeConsole(); } }
- public void AttachConsoleHost(int pid, DateTime latest, DateTime earliest) { using(var p=Process.GetProcessById(pid)) { var handle=p.Handle; var started=p.StartTime.ToUniversalTime(); var expected=System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"conhost.exe"); if(started>latest || started<earliest || !String.Equals(p.MainModule.FileName,expected,StringComparison.OrdinalIgnoreCase)) throw new Exception("console identity changed"); if(!AssignProcessToJobObject(job,handle)) throw new Win32Exception(Marshal.GetLastWin32Error()); } }
+ public string ConsoleIdentityReason { get; private set; }
+ public string ConsoleImageKind { get; private set; }
+ public bool ConsoleImageDevicePrefix { get; private set; }
+ public void AttachConsoleHost(int pid, DateTime latest, DateTime earliest) {
+  using(var p=Process.GetProcessById(pid)) {
+   var handle=p.Handle; var started=p.StartTime.ToUniversalTime();
+   var expected=System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"conhost.exe");
+   if(started>latest) { ConsoleIdentityReason="after-receipt"; throw new Exception("console identity changed"); }
+   if(started<earliest) { ConsoleIdentityReason="before-directory"; throw new Exception("console identity changed"); }
+   var image=p.MainModule.FileName; var leaf=System.IO.Path.GetFileName(image);
+   ConsoleImageKind=String.Equals(leaf,"conhost.exe",StringComparison.OrdinalIgnoreCase)?"conhost.exe":String.Equals(leaf,"openconsole.exe",StringComparison.OrdinalIgnoreCase)?"openconsole.exe":"other";
+   ConsoleImageDevicePrefix=image!=null && (image.StartsWith(@"\\?\") || image.StartsWith(@"\??\"));
+   if(!String.Equals(image,expected,StringComparison.OrdinalIgnoreCase)) { ConsoleIdentityReason="wrong-image"; throw new Exception("console identity changed"); }
+   if(!AssignProcessToJobObject(job,handle)) throw new Win32Exception(Marshal.GetLastWin32Error());
+  }
+ }
  public bool RootExited { get { return root.HasExited; } }
  public void Stop() { if(!TerminateJobObject(job,143)) throw new Win32Exception(Marshal.GetLastWin32Error()); }
  public bool Empty { get { Accounting a; if(!QueryInformationJobObject(job,1,out a,(uint)Marshal.SizeOf(typeof(Accounting)),IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error()); return a.ActiveProcesses==0; } }
@@ -81,6 +96,13 @@ try {
   $failure=@{ stage=$stage; hostPid=$HostProcessId; ownerPid=$PID }
   if ($null -ne $consolePid) { $failure.consolePid=$consolePid }
   if ($null -ne $consoleParentPid) { $failure.consoleParentPid=$consoleParentPid }
+  if ($null -ne $job -and $job.ConsoleIdentityReason -in @('before-directory','after-receipt','wrong-image')) {
+    $failure.identityReason=$job.ConsoleIdentityReason
+    if ($job.ConsoleImageKind -in @('conhost.exe','openconsole.exe','other')) {
+      $failure.imageKind=$job.ConsoleImageKind
+      $failure.imageDevicePrefix=$job.ConsoleImageDevicePrefix
+    }
+  }
   $errorObject=$_.Exception
   while ($null -ne $errorObject) {
     if ($errorObject -is [System.ComponentModel.Win32Exception]) { $failure.win32Code=$errorObject.NativeErrorCode; break }
