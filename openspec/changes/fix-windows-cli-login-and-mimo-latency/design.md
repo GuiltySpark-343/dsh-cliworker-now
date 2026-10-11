@@ -37,3 +37,11 @@
 ## Native Windows account evidence
 
 Antigravity 1.3.3 将 Windows OAuth 保存在交互式用户的 Credential Manager 固定目标 `gemini:antigravity`。固定 PowerShell helper 只投影账号状态、稳定主体哈希和安全标签，原生凭据内容不离开该进程；目录及执行边界重读同一来源。SSH 服务会话无法访问该登录存储不代表 Desktop 未登录，验收使用实际交互式 Desktop。
+
+## Windows 终端与识别补充（2026-10-11）
+
+- 移除共享账号终端的粗黑 focus outline，保留块状光标、自动聚焦和轻量主题化状态；不修改各 CLI 自己画出的终端内容。
+- 对照 Harness 原生剪贴板能力与 xterm 键盘/paste 事件，统一用户主动触发的粘贴路径，经 xterm 原生 paste/括号粘贴语义和现有有界输入队列送到 Gateway；防止重复发送、退出后发送以及字符变形。不得后台读取剪贴板或将内容写入日志/持久化。
+- 实際 Windows 用受控无秘密字符串测试 Ctrl+V 与明确粘贴入口，区分键盘逐字输入与系统剪贴板。原剪贴板内容只在本机临时内存保留以恢复，不导出。
+- Codex/Hermes 分开检查 Desktop 实际 PATH、官方默认安装及已核验启动器/包身份；已有有效安装未入旧 PATH 应可发现。未知或缺失入口给准确短原因，不自动安装 CLI、WSL 或将不同平台账号混为一体。
+- ZCode 按实际本机版本和错误阶段修复已证实的启动/环境/协议问题；保持原生账号来源和服务商。原生菜单出现只是入口验证，真实授权或登录请求错误需独立复现；缺少授权保留边界。

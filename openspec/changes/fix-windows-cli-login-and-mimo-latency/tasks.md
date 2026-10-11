@@ -36,6 +36,14 @@
 
 6.1 自动验证（2026-10-11）：`pnpm --config.verifyDepsBeforeRun=false exec vitest run tests/routing.test.ts tests/dispatch-flow.test.ts tests/role-dispatch.test.ts` 为 3 文件 81 项通过；同参数 `typecheck`、本 change 严格校验和范围内 `git diff --check` 通过。后续实际 Windows Desktop 已完成6.2：同名括号别名派遣成功，Gemini 3.8 Flash Low 任务返回 SUCCESS/completed，文件独立核验通过。原生 rc.2 AgentLoop.preStep 从当前 `inbox.claim` 形成已准入消息；实际第二条验收句的误判来自末句工具参数说明被当成第二个未知 selector，不是读取历史。
 
+## 7. 用户追加 Windows 实际回归
+
+- [ ] 7.1 移除所有账号终端外层粗黑焦点描边，保留可见光标；实际 Windows Desktop 聚焦/未聚焦画面核对。
+- [ ] 7.2 修复系统剪贴板粘贴，覆盖快捷键/显式入口、单次投递、Unicode/换行、读取失败与退出竞态；实际 Windows 用受控剪贴板验证并恢复剪贴板，不以键盘输入替代。
+- [ ] 7.3 核验并修复 Codex/Hermes Windows 既有入口识别，覆盖已知路径/旧 PATH/包身份/不可用边界；实际 Desktop 状态与本机入口证据一致。
+- [ ] 7.4 复现 ZCode 登录报错并修复可证实的启动/环境/协议问题，核对实际登录阶段、退出和清理；需要用户授权或外部服务失败的边界保留。
+- [ ] 7.5 相关及完整回归、类型、preview 与 Windows 实际测试后，无活动任务时更新 Desktop；记录剪贴板/界面/各 CLI 实证、清理及阶段提交，不推送。
+
 ## Workflow follow-up
 
 - 只有所有业务验收完成才归档；若授权或原生能力阻塞，保留待办与证据，不以校验通过冒充完成。
