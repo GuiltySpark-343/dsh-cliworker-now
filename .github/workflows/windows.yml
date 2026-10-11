@@ -66,6 +66,9 @@ jobs:
         if: always()
         with:
           name: windows-native-runtime-evidence
+          # Only the explicit synthetic reports below are included, never the
+          # rest of .test-data or any developer connection/account state.
+          include-hidden-files: true
           path: |
             .test-data/windows-ci-tests.json
             .test-data/windows-account-process-*.json

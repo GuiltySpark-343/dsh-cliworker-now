@@ -84,13 +84,45 @@ it.skipIf(process.platform !== 'win32').each(['stop', 'natural-exit'] as const)(
     const accountRuntime = process.env.CLIWORKER_TEST_ELECTRON ?? process.execPath
     let ownerDirectory: string | undefined
     let ownerExit: number | 'pending' | 'rejected' | null = 'pending'
+    let consoleIdentity: Record<string, boolean | string> | undefined
     const backend = {
       spawn: (spec: Parameters<typeof ctx.subprocess.spawn>[0]) => {
         const directoryIndex = spec.argv.indexOf('-Directory')
         if (directoryIndex >= 0) ownerDirectory = spec.argv[directoryIndex + 1]
         const handle = ctx.subprocess.spawn(spec)
         void handle.done.then(
-          ({ exitCode }) => { ownerExit = exitCode },
+          ({ exitCode }) => {
+            ownerExit = exitCode
+            if (exitCode !== 2 || !ownerDirectory) return
+            // Sample before ConPTY cleanup removes the console. Only fixed
+            // classifications are emitted; paths and raw errors stay local.
+            try {
+              consoleIdentity = JSON.parse(execFileSync('powershell.exe', [
+                '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', `
+$ErrorActionPreference='Stop'
+try {
+  $directory=$env:CWN_ACCOUNT_FIXTURE_DIRECTORY
+  $failure=Get-Content -LiteralPath (Join-Path $directory 'failure') -Raw | ConvertFrom-Json
+  if ($failure.stage -ne 'attach-console') { @{available=$false} | ConvertTo-Json -Compress; exit }
+  $console=[System.Diagnostics.Process]::GetProcessById([int]$failure.consolePid)
+  try {
+    $started=$console.StartTime.ToUniversalTime()
+    $earliest=[System.IO.Directory]::GetCreationTimeUtc($directory).AddSeconds(-1)
+    $latest=[System.IO.File]::GetLastWriteTimeUtc((Join-Path $directory 'pid'))
+    $image=$console.MainModule.FileName
+    $expected=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'conhost.exe'
+    $leaf=[System.IO.Path]::GetFileName($image).ToLowerInvariant()
+    if ($leaf -notin @('conhost.exe','openconsole.exe')) { $leaf='other' }
+    @{ available=$true; startedBeforeDirectory=($started -lt $earliest); startedAfterReceipt=($started -gt $latest);
+       nativeImageMatches=[string]::Equals($image,$expected,[StringComparison]::OrdinalIgnoreCase);
+       imageKind=$leaf; inspector64Bit=[Environment]::Is64BitProcess } | ConvertTo-Json -Compress
+  } finally { $console.Dispose() }
+} catch { @{available=$false} | ConvertTo-Json -Compress }
+`,
+              ], { encoding: 'utf8', windowsHide: true, timeout: 5000,
+                env: { ...process.env, CWN_ACCOUNT_FIXTURE_DIRECTORY: ownerDirectory } }).trim())
+            } catch { consoleIdentity = { available: false } }
+          },
           () => { ownerExit = 'rejected' },
         )
         return handle
@@ -173,7 +205,7 @@ it.skipIf(process.platform !== 'win32').each(['stop', 'natural-exit'] as const)(
         fixture: 'synthetic-windows-account-terminal', operation,
         windowsVersion: release(), nodeVersion: process.versions.node,
         runtime: accountRuntime === process.execPath ? 'current-node' : 'explicit-test-runtime',
-        ownerExit, ownerFailure,
+        ownerExit, ownerFailure, consoleIdentity,
         cleanupStage: ['receipt', 'terminal', 'owner', 'directory'].includes(stage) ? stage : null,
         receipts: Object.fromEntries(['owner-ready', 'pid', 'ready', 'cancel', 'stop', 'closed', 'exit']
           .map((name) => [name, !!ownerDirectory && existsSync(join(ownerDirectory, name))])),
