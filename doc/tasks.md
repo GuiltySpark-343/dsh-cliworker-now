@@ -968,3 +968,20 @@
 - [x] Mac 最终实际界面显示 ZCode 已登录、模型与强度控件可用；点击登录后显示中国智谱 BigModel／海外 Z.AI 共用选择界面，选择前未创建账号终端，取消后保留原账号，最后关闭设置。Windows 本次仅只读核验授权，未再次启动调试实例；前一阶段的无调试重启和清理证据继续保留。
 - [x] 本次正式构建、实际 UI 与授权核验、差异检查通过；`pnpm --config.verifyDepsBeforeRun=false spec:check` 为 11/11，OpenSpec 本次 9.2/9.4 完成。源码未更改，完整 1788 passed / 8 skipped 与 Windows 合成生命周期 9/9 为前一实现阶段结果，本次没有重复运行或新增模型调用。历史 3.1/3.3 的 Claude 官方账号/额度跳过及 Kimi 验证边界继续保留，change 为 28/30，不归档。
 - 私有证据：`zcode-bigmodel-auth-verified-20261011.json`、`zcode-mac-final-build.log`、`zcode-mac-final-equivalence.json`、`zcode-mac-final-ui-verified-20261011.json`、`zcode-console-final-followup-20261011.json`，均在 Git 忽略的 `.test-data/windows-remote/desktop-audit/`。此前授权未确认及 Mac 锁屏是历史时点状态，由本节补齐；原报告保留。仅阶段提交本次验收记录，不混入已有文档/素材改动，不推送。
+
+
+### Hermes Nous 登录续期修复与双平台验收（2026-10-11）
+
+- [x] 确认共同缺口：插件在 Nous 短期 invoke JWT 到期前 120 秒及到期后拒绝目录/任务，但没有让已保存的原生刷新凭据续期。Windows 当前原生访问令牌寿命为 3,600 秒；诊断时两端访问令牌仍有效，没有伪造过期现场。已有登录之后的陈旧 terminal error marker 不再单独否定仍有凭据的账号。
+- [x] Mac/Windows 共用 `hermes-renewal` 与固定原生 Python 入口，状态、目录、任务绑定和直接准备均接入；健康状态无额外子进程。短期令牌允许同账号自动续期，网络/服务暂时异常保留登录并允许刷新重试；明确失效或缺少续期凭据才要求重登。主体、组织、client、路由不猜测，外部账号、guest、登录网页和模型生成均不进入续期路径。
+- [x] 续期并发合并，账号操作与最后订阅取消等待有限原生事务落盘和完整范围退出。原生 auth→shared 锁内重核 source/pool；轮换回调先保存，再做后续原生有效性检查。只同步认证字段，保留池 ID、标签、优先级、停用、额度及冷却；同主体较新 shared 可以采用，身份不符及同到期但不同链拒绝。
+- [x] 最终 Host/Client typecheck、完整回归 1,847 passed / 8 skipped（93 文件）、`build:preview` 通过。新增合成用例覆盖过期/临近过期、状态集成、稳定任务绑定、并发取消、账号终端互斥、轮换后失败仍保存、共享来源校验、额度冷却、私有入口及实际解析器依赖。初次 Mac 原生验收揭示 PyYAML 缺失，改为官方 `hermes_yaml` 并补无 PyYAML 回归；失败报告保留，最终实机结果见下。
+- [x] Mac 已安装 Electron 44 + 宿主 SDK 实测原生续期：2026-10-11 07:05:18–07:05:21 UTC，1,070 ms 返回 ready/exit 0，访问与刷新令牌均真正轮换，剩余有效期 1,433→3,599 秒；主体/任务绑定及池元数据不变，provider/pool/shared 一致。健康状态再次检查 0 子进程；实际目录 11 模型、4 模型支持显式强度、8 种强度，1,236 ms。SDK 有一次 Mac 原生平台既有 containment fallback 提示，正常退出已确认，不冒充 Windows Job 级隔离。
+- [x] Windows 已安装 Electron 44 + 真实 SDK Job 在交互会话实测：2026-10-11 07:10:35–07:10:39 UTC，2,085 ms 返回 ready/exit 0，访问与刷新令牌均真正轮换，剩余有效期 487→3,600 秒；主体/任务绑定及池 ID/元数据/数量不变，provider/pool/shared 一致。健康状态 0 子进程；真实目录 11 模型、4 显式强度模型、8 种强度，1,761 ms。仅 1 个受管进程范围，全部退出，SDK 无降级。v5 交互桌面观察覆盖此次动作，90.582 秒 windows=0，hookStopped=true。
+- 真实验收使用仅子进程生效的提前续期阈值触发一次官方 refresh；没有修改用户配置、系统时间或伪造真实令牌到期。过期及并发场景由明确合成夹具验证。两端登录调用 0、模型任务 0；目录成功不代表真实生成通过。
+- [x] Mac 确认 22 条既有 Worker 的活动数为 0、账号/任务桥进程 0，通过应用菜单正常退出后正式构建再启动。Host SHA-256 `f775fa7d4815c5ca3e00c0481c05f12636494e76561eac1dfa20596ba131d23d` 与 preview 一致；四个关键 helper 的 source/lib/preview/types 一致，Client 仅构建路径 region 注释不同。实际设置显示 Nous 已登录、模型下拉和强度控件可用，刷新后仍正常，未保存更改模型，最后关闭设置。
+- [x] Windows 确认活动 Worker/账号终端为 0，正常退出后经原生插件安装器部署最终 preview 包，exit 0，339 个实际打包 lib 文件逐项匹配；包 SHA-256 `aba632b0049ad9eb844acb2a10297478730a93460f1bae59c1f45fcf93d6b3fd`，Host 与 Mac 正式构建相同。正常重启后真实设置显示 Nous 已登录、11 项模型及当前模型 3 项强度，状态刷新正常，最后关闭设置。
+- [x] 最终 Windows v5 观察完整覆盖设置打开、Hermes 模型/强度菜单、状态刷新和关闭：动作 07:20:12.626–07:20:52.144 UTC，观察 07:19:46.938–07:21:17.641 UTC，共 90.703 秒，新增控制台窗口事件 0，hookStopped=true。此前一次观察漏掉最后 2.49 秒，不作为完整覆盖证据；重新执行后的本轮报告为最终依据，不宣称未执行路径永远无窗口。
+- [x] Windows 正常无调试参数运行；活动 Worker、ready 账号 scope、账号 owner、原生 Hermes/auth、观察器任务/launcher、UI/验收临时任务均为 0。Mac 设置已关闭，活动 Worker/账号桥进程为 0；本轮 Mac 未打开调试通道，Windows 使用原生 UI Automation，未开 CDP。未清空历史 Worker、账号或不相关配置。
+- [x] 实现已阶段提交 `d342fc2`；本轮验收记录单独提交，保留用户原有文档/素材改动，不推送。严格规格 11/11；Hermes 10.1–10.4 完成，活动 change 为 32/34。历史 3.1/3.3 的 Claude 官方账号/额度跳过与 Kimi 验证边界不变，不归档整个 change。
+- 私有证据均在 Git 忽略的 `.test-data/windows-remote/desktop-audit/`：`hermes-renewal-full-tests-v2.json`、`hermes-renewal-typecheck.log`、`hermes-renewal-preview-build-v2.log`、`hermes-renewal-mac-parser-actual.json`、`hermes-renewal-mac-formal-equivalence.json`、`hermes-renewal-mac-ui.json`、`hermes-renewal-mac-preflight.json`、`hermes-renewal-windows-parser-native-preview-20261011.json`、`hermes-windows-final-delivery-20261011.json`、`hermes-renewal-windows-final-install-20261011.json`、`hermes-final-complete-ui-actions-20261011.json`、`hermes-final-complete-ui-v5-20261011.json`、`hermes-windows-final-normal-startup-20261011.json`、`hermes-windows-final-cleanup-20261011.json`。账号秘密不写入报告或 Git。
