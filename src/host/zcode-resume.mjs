@@ -1,7 +1,7 @@
 // ZCode ignores configured defaults on --resume. Apply the selected native model
 // through metadata RPC, close the server completely, then run the original argv.
 // The Host owns the surrounding Seatbelt and process range; never detach or shell.
-import { spawn } from 'node:child_process'
+import { spawnNativeProcess } from './native-spawn.mjs'
 import { constants } from 'node:fs'
 import { open, lstat, realpath, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve } from 'node:path'
@@ -25,7 +25,7 @@ const checkActive = () => {
 
 function start(argv, project, pipes) {
   checkActive()
-  const child = spawn(argv[0], argv.slice(1), {
+  const child = spawnNativeProcess(argv[0], argv.slice(1), {
     cwd: project,
     env: process.env,
     detached: false,

@@ -6,9 +6,96 @@ const prompt = 'Open this URL to sign in:'
 const query =
   'client_id=SYNTHETIC&redirect_uri=https%3A%2F%2Fexample.invalid%2Fcallback&state=SYNTHETIC%2Bstate&response_type=code'
 const url = `https://chat.z.ai/api/oauth/authorize?${query}`
+const bigmodelUrl =
+  'https://bigmodel.cn/login?appId=SYNTHETIC&redirect=https%3A%2F%2Fexample.invalid%2Fcallback&state=SYNTHETIC%2Bstate'
 const frame = (value = url) => `${prompt}\r\n${value}\r\n`
 
 describe('user-operated ZCode native login link parsing', () => {
+  it('binds Z.AI navigation to the explicitly selected provider and never guesses unknown providers', () => {
+    expect(createZcodeLoginLinkParser('zai').write(frame())).toBe(url)
+    for (const provider of ['bigmodel', '', 'native', 'unknown', null] as const)
+      expect(createZcodeLoginLinkParser(provider as any).write(frame())).toBeUndefined()
+  })
+
+  it('binds the observed BigModel endpoint and its distinct native query contract to BigModel only', () => {
+    expect(createZcodeLoginLinkParser('bigmodel').write(frame(bigmodelUrl))).toBe(bigmodelUrl)
+    expect(createZcodeLoginLinkParser('zai').write(frame(bigmodelUrl))).toBeUndefined()
+    expect(createZcodeLoginLinkParser().write(frame(bigmodelUrl))).toBeUndefined()
+    expect(
+      createZcodeLoginLinkParser('bigmodel').write(frame(`https://bigmodel.cn/login?${query}`)),
+    ).toBeUndefined()
+  })
+
+  it('preserves BigModel bytes across every split, ConPTY initialization, SGR and an explicit TLS port', () => {
+    const original = `${bigmodelUrl.replace('bigmodel.cn/', 'bigmodel.cn:443/')}&native_extra=a%2Bb%26c`
+    const output = `\x1b[?25l\x1b[2J\x1b[m\x1b[H\x1b]0;SYNTHETIC ZCODE\x07\x1b[?25h\x1b[1m${prompt}\x1b[0m\r\n\x1b[36m${original}\x1b[0m\r\n`
+    for (let index = 0; index < output.length; index++) {
+      const parser = createZcodeLoginLinkParser('bigmodel')
+      expect(parser.write(output.slice(0, index))).toBeUndefined()
+      expect(parser.write(output.slice(index))).toBe(original)
+    }
+    const parser = createZcodeLoginLinkParser('bigmodel')
+    expect([...output].map((character) => parser.write(character)).filter(Boolean)).toEqual([original])
+  })
+
+  it.each(['appId', 'redirect', 'state'])(
+    'requires exactly one nonempty BigModel %s parameter',
+    (parameter) => {
+      const value = new URL(bigmodelUrl)
+      value.searchParams.delete(parameter)
+      expect(createZcodeLoginLinkParser('bigmodel').write(frame(value.href))).toBeUndefined()
+      value.searchParams.set(parameter, '')
+      expect(createZcodeLoginLinkParser('bigmodel').write(frame(value.href))).toBeUndefined()
+      value.searchParams.set(parameter, ' ')
+      expect(createZcodeLoginLinkParser('bigmodel').write(frame(value.href))).toBeUndefined()
+      expect(
+        createZcodeLoginLinkParser('bigmodel').write(frame(`${bigmodelUrl}&${parameter}=DUPLICATE`)),
+      ).toBeUndefined()
+    },
+  )
+
+  it.each([
+    bigmodelUrl.replace('https:', 'http:'),
+    bigmodelUrl.replace('bigmodel.cn', 'bigmodel.cn.example.invalid'),
+    bigmodelUrl.replace('bigmodel.cn', 'open.bigmodel.cn'),
+    bigmodelUrl.replace('bigmodel.cn', 'example.invalid@bigmodel.cn'),
+    bigmodelUrl.replace('bigmodel.cn', 'bigmodel.cn:444'),
+    bigmodelUrl.replace('/login?', '/login/else?'),
+    bigmodelUrl.replace('/login?', '/other/../login?'),
+    bigmodelUrl.replace('/login?', '/%6Cogin?'),
+    bigmodelUrl.replace('appId=', 'appid='),
+    `${bigmodelUrl}#`,
+    `${bigmodelUrl}#fragment`,
+    bigmodelUrl.replace('SYNTHETIC&', 'SYNTHETIC &'),
+    bigmodelUrl.replace('SYNTHETIC&', 'SYNTHETIC\t&'),
+    bigmodelUrl.replace('https://', 'https:\\\\'),
+    `${bigmodelUrl}&padding=${'x'.repeat(8_192)}`,
+  ])('rejects BigModel lookalikes, non-native paths and unsafe URLs (%#)', (value) => {
+    expect(createZcodeLoginLinkParser('bigmodel').write(frame(value))).toBeUndefined()
+  })
+
+  it('never promotes BigModel links without the fixed native prompt or inside terminal editing/OSC', () => {
+    for (const output of [
+      `${bigmodelUrl}\n`,
+      `Fallback URL:\n${bigmodelUrl}\n`,
+      `${prompt}\nOther output\n${bigmodelUrl}\n`,
+      `${prompt}\n${bigmodelUrl}`,
+      `${prompt}\n\x1b[H${bigmodelUrl}\n`,
+      `${prompt}\n${bigmodelUrl}\rhidden\n`,
+      `\x1b]8;;${bigmodelUrl}\x07${frame(bigmodelUrl)}`,
+    ])
+      expect(createZcodeLoginLinkParser('bigmodel').write(output)).toBeUndefined()
+  })
+
+  it('deduplicates and resets BigModel URLs only within the current login flow', () => {
+    const parser = createZcodeLoginLinkParser('bigmodel')
+    expect(parser.write(frame(bigmodelUrl))).toBe(bigmodelUrl)
+    expect(parser.write(frame(bigmodelUrl))).toBeUndefined()
+    parser.write(`${prompt}\n`)
+    parser.reset()
+    expect(parser.write(`${bigmodelUrl}\n`)).toBeUndefined()
+    expect(parser.write(frame(bigmodelUrl))).toBe(bigmodelUrl)
+  })
   it('preserves the complete original query, encoding and order', () => {
     const parser = createZcodeLoginLinkParser()
     const original = `${url}&synthetic_extra=a%2Bb%26c`

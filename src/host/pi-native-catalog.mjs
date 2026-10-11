@@ -1,7 +1,7 @@
 // Native metadata only. No prompts, API keys, OAuth objects, headers or raw errors leave this boundary.
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { spawn } from 'node:child_process'
+import { spawnNativeProcess } from './native-spawn.mjs'
 import { inspectPiInstallation } from './pi-installation.mjs'
 import { nativeLaunchArgv } from './native-launch.mjs'
 
@@ -144,7 +144,7 @@ async function nativeCandidates(
   }
   const args = ['models', '--json', '--no-extensions', '--config', join(directory, 'config.yml')]
   const nativeArgs = nativeLaunchArgv([executable, ...args])
-  const child = spawn(nativeArgs[0], nativeArgs.slice(1), {
+  const child = spawnNativeProcess(nativeArgs[0], nativeArgs.slice(1), {
     cwd: directory,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],

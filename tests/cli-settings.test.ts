@@ -132,6 +132,49 @@ function fixture() {
 }
 
 describe('profile-wide CLI enablement', () => {
+  it.each(['bigmodel', 'zai'] as const)(
+    'forwards the selected ZCode %s provider through the guarded account endpoint',
+    async (provider) => {
+      const f = fixture()
+      ;(f.service as any).accountParents.set('parent', () => {})
+      f.accounts.start.mockResolvedValue({ id: 'synthetic-account', instruction: 'Synthetic login' })
+      const result = await f.service.accountStartForProvider('parent', 'zcode', 'login', provider, f.signal)
+      expect(JSON.parse(result).id).toBe('synthetic-account')
+      expect(f.accounts.start).toHaveBeenCalledExactlyOnceWith(
+        'parent',
+        'zcode',
+        'login',
+        f.project,
+        f.signal,
+        undefined,
+        provider,
+      )
+      f.storage.setCliEnabled('zcode', false)
+      await expect(
+        f.service.accountStartForProvider('parent', 'zcode', 'login', provider, f.signal),
+      ).rejects.toThrow('已关闭')
+      expect(f.accounts.start).toHaveBeenCalledOnce()
+    },
+  )
+  it.each([
+    ['codex', 'login', 'bigmodel'],
+    ['zcode', 'logout', 'bigmodel'],
+    ['zcode', 'manage', 'zai'],
+    ['zcode', 'login', 'native'],
+    ['zcode', 'login', 'https://foreign.invalid'],
+    ['zcode', 'login', ''],
+  ])(
+    'rejects unsupported provider endpoint arguments %s/%s/%s before reading the parent or launching',
+    async (cli, action, provider) => {
+      const f = fixture()
+      await expect(
+        f.service.accountStartForProvider('parent', cli, action, provider, f.signal),
+      ).rejects.toThrow()
+      expect((f.service as any).parent).not.toHaveBeenCalled()
+      expect(f.accounts.start).not.toHaveBeenCalled()
+      expect(f.backend.spawn).not.toHaveBeenCalled()
+    },
+  )
   it('defaults all CLIs on, persists independently, and stores only private validated booleans', () => {
     const { storage } = fixture()
     expect(storage.cliSettings().enabled).toEqual(Object.fromEntries(CLI_IDS.map((id) => [id, true])))

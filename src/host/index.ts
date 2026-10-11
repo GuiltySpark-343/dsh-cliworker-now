@@ -861,12 +861,31 @@ export class CliWorkerService extends TypertRemoteService {
     }
   }
 
+  /** @param provider - Explicit ZCode native login provider, never a URL or logout source. */
+  @Remote('accountStartForProvider')
+  async accountStartForProvider(
+    parentSessionId: string,
+    cli: string,
+    action: string,
+    provider: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    try {
+      const selected = validate.enum(['bigmodel', 'zai']).parse(provider)
+      if (cli !== 'zcode' || action !== 'login') throw new Error('不支持的 ZCode 授权来源')
+      return this.startAccount(parentSessionId, cli, action, signal, undefined, selected)
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+
   private async startAccount(
     parentSessionId: string,
     cli: string,
     action: string,
     signal: AbortSignal,
     source?: 'native' | 'plugin',
+    provider?: 'bigmodel' | 'zai',
   ): Promise<string> {
     try {
       const id = validate.enum(CLI_IDS).parse(cli)
@@ -886,7 +905,7 @@ export class CliWorkerService extends TypertRemoteService {
         this.accountParents.set(parent.id, dispose)
       }
       return JSON.stringify(
-        await this.accounts.start(parent.id, id, operation, this.project(parent), signal, source),
+        await this.accounts.start(parent.id, id, operation, this.project(parent), signal, source, provider),
       )
     } catch (error) {
       throw failure(error)

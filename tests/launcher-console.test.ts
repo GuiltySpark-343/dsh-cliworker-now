@@ -14,7 +14,7 @@ const args = ['--synthetic-only', '中文 路径', '& whoami', 'literal"quote', 
 // These real, isolated Node helpers replace only their native child with an
 // EventEmitter. No installed CLI, account, browser, clipboard or desktop is used.
 // Capture the spawn boundary without changing the test runner's umask/signals.
-async function run(kind: 'private' | 'account', mode: 'close' | 'error' | 'signal' | 'cancel' = 'close') {
+async function run(kind: 'private' | 'account', mode: 'close' | 'error' | 'signal' | 'cancel' = 'close', windows = process.platform === 'win32') {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'cwn-console-synthetic-')))
   roots.push(root)
   const preload = join(root, 'preload.mjs')
@@ -24,10 +24,12 @@ async function run(kind: 'private' | 'account', mode: 'close' | 'error' | 'signa
 import cp from 'node:child_process';
 import tty from 'node:tty';
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { syncBuiltinESMExports } from 'node:module';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 const emit = value => process.stdout.write(JSON.stringify(value) + '\\n');
+if (process.env.CWN_SYNTHETIC_WINDOWS === '1') Object.defineProperty(process,'platform',{value:'win32'});
 // A synthetic PTY handle: the native ConPTY/TTY behavior has separate OS tests.
 tty.isatty = () => true;
 cp.spawn = (executable, argv, options) => {
@@ -35,13 +37,15 @@ cp.spawn = (executable, argv, options) => {
     shell: options.shell ?? false, detached: options.detached ?? false,
     environmentPreserved: options.env.CWN_SYNTHETIC_ENV === 'unchanged' });
   const child = new EventEmitter();
-  child.kill = signal => { emit({ forwardedSignal: signal }); queueMicrotask(() => child.emit('close', null, signal)); };
+  child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();
+  const close=(code,signal)=>{child.emit('exit',code,signal);child.stdout.end();child.stderr.end();child.emit('close',code,signal)};
+  child.kill = signal => { emit({ forwardedSignal: signal }); queueMicrotask(() => close(null, signal)); };
   setTimeout(() => {
     if (process.env.CWN_SYNTHETIC_MODE === 'signal') process.emit('SIGTERM');
     else if (process.env.CWN_SYNTHETIC_MODE === 'error') {
       child.emit('error', new Error('synthetic native error must not be printed'));
-      child.emit('close', null, null);
-    } else child.emit('close', 7, null);
+      close(null, null);
+    } else close(7, null);
   }, 10);
   return child;
 };
@@ -70,6 +74,7 @@ if (process.env.CWN_SYNTHETIC_KIND === 'account') {
       CWN_SYNTHETIC_MODE: mode,
       CWN_SYNTHETIC_ROOT: root,
       CWN_SYNTHETIC_ENV: 'unchanged',
+      CWN_SYNTHETIC_WINDOWS: windows ? '1' : '0',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
@@ -119,7 +124,7 @@ describe('plugin native launch console presentation (synthetic child, real wrapp
         {
           executable: process.execPath,
           argv: expectedArgs,
-          stdio: kind === 'private' ? 'inherit' : [0, 1, 2],
+          stdio: kind === 'private' ? (process.platform === 'win32' ? ['pipe', 'pipe', 'pipe'] : 'inherit') : [0, 1, 2],
           windowsHide: true,
           shell: false,
           detached: false,
@@ -141,6 +146,14 @@ describe('plugin native launch console presentation (synthetic child, real wrapp
     const result = await run('private', 'signal')
     expect(result.records[1]).toEqual({ forwardedSignal: 'SIGTERM' })
     expect(result.code).toBe(143)
+  })
+  it('uses newly created background pipes for the Windows private helper while retaining its outcome', async () => {
+    const result = await run('private', 'close', true)
+    expect(result.records[0].stdio).toEqual(['pipe', 'pipe', 'pipe'])
+    expect(result.records[0].argv).toEqual(args)
+    expect(result.records[0].windowsHide).toBe(true)
+    expect(result.code).toBe(7)
+    expect(result.stderr).toBe('')
   })
   it.each(['private', 'account'] as const)(
     '%s keeps native launch failures visible without raw errors',

@@ -1,5 +1,5 @@
 // Native ACP initialize only: no session creation, auth request or prompt.
-import { spawn } from 'node:child_process'
+import { spawnNativeProcess } from './native-spawn.mjs'
 import { StringDecoder } from 'node:string_decoder'
 import { nativeLaunchArgv } from './native-launch.mjs'
 
@@ -7,7 +7,7 @@ process.umask(0o077)
 const [executable, cwd] = process.argv.slice(2)
 if (!executable || !cwd || process.argv.length !== 4) throw new Error('Invalid catalog arguments')
 const argv = nativeLaunchArgv([executable, 'agent', '--no-leader', 'stdio'])
-const child = spawn(argv[0], argv.slice(1), {
+const child = spawnNativeProcess(argv[0], argv.slice(1), {
   cwd,
   env: process.env,
   detached: false,

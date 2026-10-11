@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Button, StateDot, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { AccountAction, AccountFrame, AccountSource } from '../shared/accounts.ts'
+import type { AccountAction, AccountFrame, AccountSource, ZCodeLoginProvider } from '../shared/accounts.ts'
 import { CLI_LABELS, type CliId } from '../shared/types.ts'
 import { value, type API } from './workers.ts'
 import { accountTerminalCSS } from './account-terminal-css.ts'
@@ -22,8 +22,12 @@ function isPasteShortcut(event: KeyboardEvent): boolean {
 }
 
 function isCopyShortcut(event: KeyboardEvent): boolean {
-  return !event.altKey && !event.isComposing &&
-    (event.key.toLowerCase() === 'c' || event.code === 'KeyC') && event.ctrlKey !== event.metaKey
+  return (
+    !event.altKey &&
+    !event.isComposing &&
+    (event.key.toLowerCase() === 'c' || event.code === 'KeyC') &&
+    event.ctrlKey !== event.metaKey
+  )
 }
 
 export type AccountCloseControl = MutableRefObject<(() => Promise<boolean>) | undefined>
@@ -45,6 +49,10 @@ function startupMessage(error: unknown): string {
     '当前 ZCode 未声明原生终端界面，请检查 CLI 安装',
     '当前 ZCode 未声明原生退出登录能力，请检查 CLI 安装',
     'ZCode 配套资源不可用，请检查 CLI 安装或配置 zcodeBuiltinConfig',
+    '当前插件 Host 不支持 ZCode 授权来源选择，请更新插件后重试',
+    '不支持的 ZCode 授权来源',
+    '授权来源只支持 ZCode 登录时选择智谱 BigModel 或 Z.AI',
+    '当前 ZCode CLI 不支持智谱 BigModel 授权，请更新为支持 login bigmodel 的官方完整 CLI 后重试；不会改用 Z.AI 登录。',
     'OMP 执行入口身份不匹配，请检查该 CLI 的安装和路径',
     'Pi 执行入口身份不匹配，请检查该 CLI 的安装和路径',
     'Codex Windows 应用包入口无法确认，请检查安装',
@@ -82,6 +90,7 @@ export function AccountTerminal({
   cli,
   action,
   source,
+  provider,
   onClose,
   onFinished,
   closeControl,
@@ -91,6 +100,7 @@ export function AccountTerminal({
   cli: CliId
   action: AccountAction
   source?: AccountSource
+  provider?: ZCodeLoginProvider
   onClose: () => void
   onFinished: () => void
   closeControl?: AccountCloseControl
@@ -133,7 +143,8 @@ export function AccountTerminal({
     let readingClipboard = false
     // Only the current native login prompt may authorize browser navigation.
     // Keep parsed URLs in this terminal's memory, outside persistent UI state.
-    const loginLinkParser = cli === 'zcode' && action === 'login' ? createZcodeLoginLinkParser() : undefined
+    const loginLinkParser =
+      cli === 'zcode' && action === 'login' ? createZcodeLoginLinkParser(provider) : undefined
     let loginUrl: string | undefined
     const openedLoginUrls = new Set<string>()
     const clearLoginLink = () => {
@@ -240,9 +251,10 @@ export function AccountTerminal({
           setNotice('无法打开登录网页，请在终端中查看原生登录提示')
         }
       }
-      if (loginLinkParser) loginLinks = view.registerLinkProvider(
-        createZcodeLoginLinkProvider(view, () => canWrite() ? loginUrl : undefined, openLoginUrl),
-      )
+      if (loginLinkParser)
+        loginLinks = view.registerLinkProvider(
+          createZcodeLoginLinkProvider(view, () => (canWrite() ? loginUrl : undefined), openLoginUrl),
+        )
       const pasteText = (text: string) => {
         if (!canWrite()) return
         if (!text) {
@@ -379,11 +391,15 @@ export function AccountTerminal({
       }, STARTUP_TIMEOUT_MS)
       void (async () => {
         try {
+          if (provider && typeof api.cliworker.accountStartForProvider !== 'function')
+            throw new Error('当前插件 Host 不支持 ZCode 授权来源选择，请更新插件后重试')
           const result = JSON.parse(
             value(
-              await (source
-                ? api.cliworker.accountStartForSource(sessionId, cli, action, source, startup.signal)
-                : api.cliworker.accountStart(sessionId, cli, action, startup.signal)),
+              await (provider
+                ? api.cliworker.accountStartForProvider(sessionId, cli, action, provider, startup.signal)
+                : source
+                  ? api.cliworker.accountStartForSource(sessionId, cli, action, source, startup.signal)
+                  : api.cliworker.accountStart(sessionId, cli, action, startup.signal)),
             ),
           ) as { id: string; instruction: string }
           clearTimeout(startupTimer)
@@ -461,7 +477,7 @@ export function AccountTerminal({
       void stopSession().catch(() => undefined)
       void disposeStream().catch(() => undefined)
     }
-  }, [api, sessionId, cli, action, source, attempt])
+  }, [api, sessionId, cli, action, source, provider, attempt])
 
   const close = (retry = false): Promise<boolean> => {
     if (closing.current) return closing.current

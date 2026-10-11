@@ -1,6 +1,6 @@
 // Subprocess protocol bridge. The Host owns the external sandbox, credentials,
 // deadlines, directory/session locks, and descendant cleanup. No shell is used.
-import { spawn } from 'node:child_process'
+import { spawnNativeProcess } from './native-spawn.mjs'
 import { createHash, randomBytes } from 'node:crypto'
 import { mkdir, writeFile, rename, realpath, unlink, rmdir, lstat, open, rm } from 'node:fs/promises'
 import { constants } from 'node:fs'
@@ -360,7 +360,7 @@ try {
     ]
     const launch = nativeLaunchArgv([config.executable, ...nativeArgs])
     if (stopped) throw new Error('任务已停止')
-    child = spawn(launch[0], launch.slice(1), {
+    child = spawnNativeProcess(launch[0], launch.slice(1), {
       cwd: config.project,
       env,
       detached: false,

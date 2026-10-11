@@ -942,3 +942,19 @@
 - 证据保存在 Git 忽略的 `.test-data/windows-remote/desktop-audit/`：`models-windows-accepted-report.json`、`models-cleanup-local-full-approved.json`、`models-after-*.json`、`omp-after-first-detection-ui.json`、`opencode-console-after.json`、`opencode-after-terminal-ui.json`、`models-final-live-repeat.json`、`models-query-cleanup-verified.json`、`models-cleanup-install-result.json` 和下拉画面。仅记录安全模型能力、计数、耗时及状态，不保存授权码或令牌。
 - 边界：本轮真实模型调用为 0；Kimi 当前凭据已过期，未验证正向账号热读；Claude 官方账号/额度按用户要求跳过，历史 OpenSpec 3.1/3.3 保留未勾选，不归档。ZCode 继续官方默认流程。此阶段本地提交、不推送。
 - [x] 收尾：Windows 已无调试参数正常启动，Windows/Mac 19487 监听为 0；账号 ready scope、临时 UI 任务及任务归属 PowerShell 为 0；3 条历史 Worker 为 interrupted/completed/completed，活动为 0。Mac 最终正式包已正常加载，当前无登录终端。清理结果见 `models-final-cleanup.json`。
+
+
+## 2026-10-11 ZCode 国内/海外授权选择与后台终端窗口复核
+
+- [x] 按最新要求增加 Mac/Windows 共用的“中国智谱 BigModel / 海外 Z.AI”原生登录选择。选择前不创建终端，关闭后重置；Host 单独验证 ZCode/login/provider，旧 Host 明确提示更新，不回落到另一来源。既有原生账号、项目偏好及凭据未迁移。
+- [x] Windows Desktop 附带的 0.16.9 仅声明 Z.AI；官方完整 CLI 同版本号支持 `login [zai|bigmodel]`，不能只看版本判断。部署官方完整源树 `29628c9acdb81b703bbd4080c207a0e7ce5e276e` 和对应 Windows x64 原生依赖到插件 managed runtime，3,872 个文件哈希核验通过。完整运行时 ZIP SHA-256 `28930bcb9fcc6689ed28a78f488974d63f60eb286582e5c71e8101aab3e94be4`；没有覆盖 ZCode Desktop。
+- [x] 实际 Windows 两选项分别打开 `bigmodel.cn/login` 和 `chat.z.ai/api/oauth/authorize`（原生跳转 `/auth`），原始参数完整，URL 不写入报告或 Git。中国授权等待用户交互期间原生 CLI 先退出，未获授权完成确认，未判断具体退出原因；海外入口核验后主动关闭。两者均不计作账号授权成功或模型执行通过。Mac 实际共享选择界面和选择前取消已验证，原账号保留。
+- [x] 插件普通后台进程统一 GUI bootstrap + `windowsHide` + 独立 stdio 管道，修复只隐藏包装进程、继承数字 fd 导致缺少 CREATE_NO_WINDOW 的路径。独立原生退出回执与 SDK Job 的范围退出分离，真实 CLI 退出后仍持有输出的后代必须确认清理。未修改 Harness 核心、ConPTY 技术栈或用户默认终端设置。
+- [x] 最终源码完整测试 90 文件通过、1 文件跳过，1,788 passed / 8 skipped；Host/Client typecheck、preview 与严格规格 11/11 通过。Windows 实际 Electron 44/SDK Job 合成验收 9/9：参数及环境保留、二进制 stdin、分离输出/非零退出、收集输出、每路 2 MiB 背压/EOF、提前退出关闭输入、ENOENT、停止/取消 detached 后代，以及经 private launcher 的自然退出但后代仍持有管道；无 Job 降级，所有范围退出、无残留 fixture PID。合成测试不冒充真实模型调用。
+- [x] 无活动任务时经 Windows 原生插件安装器更新最终 preview 包，334 个 lib 文件逐项匹配，包 SHA-256 `ec0657cc5c1b61d42b3437440dfcda1f13ebd8088f7bc707a06f0befeed69817`，Host SHA-256 `96b9150e58639a1da318ee4597a615376a20b11824ad45edee9a2189341d419f`。早期验收清单误含构建缓存 tsbuildinfo 时校验拒绝；后续清单对实际打包内容重建并通过，保留失败记录。
+- 窗口观测保留方法边界：最早 PowerShell 观察器启动可能引入自身窗口；改为 GUI 子系统、CreateNoWindow 启动。v3 的 PID 单值父链会受编号重用影响，不能用于归属；其全局窗口 SHOW 事件仍有效，其中一轮 150 秒观察有一次未解释的可见 Windows Terminal。v5 改为进程创建/退出时间和 PID 实例关联，保留全量进程名与时间，不记录命令行/原始窗口标题。最终结果及边界见后续追加。
+- 本轮真实模型调用为 0。实际目录刷新中 Codex、MiMo、OMP、Pi、OpenCode、Antigravity 模型及强度控件可用；Claude 无官方账号/额度、Kimi/Hermes 账号过期、Grok 未配置、ZCode 授权未完成的边界如实保留。历史 OpenSpec 3.1/3.3 不勾选，不归档。
+- Mac 已验证本轮 ZCode 共享 UI，但最终 Windows pipe 补丁的根目录正式构建尚未更新：Mac 锁屏，无法通过应用菜单正常退出 Harness，已请求解锁；未在宿主运行期间覆盖链接包。此项不计为两平台最终安装完成。
+- 私有证据位于 `.test-data/windows-remote/desktop-audit/`：`zcode-console-acceptance.json`、`zcode-provider-ui-evidence.json`、`windows-hidden-process-pipes-result.json`、`zcode-console-pipes-tests.log`、`zcode-console-pipes-typecheck.log`、`zcode-console-pipes-spec.log`、最终包与逐文件清单、v3/v5 窗口和动作时间报告。
+- 最终 v5 实机观测：已运行实例重开设置并刷新全部 11 个 CLI，120.906 秒窗口事件为 0；再次正常重启后首次打开设置、全部 11 个 CLI 刷新、OpenCode 原生 Add credential 登录菜单和关闭，141.629 秒窗口事件为 0，hook 均确认结束。两轮动作 UTC 与报告对应；这两次通过不抹去前述 v3 未归属事件，不宣称所有系统状态下绝无闪窗。
+- [x] 收尾：Windows 正常无调试参数启动，两端 19487 监听为 0；账号 ready scope、观察器/临时 UI 计划任务、本轮 PowerShell 和 GUI launcher 均为 0，3 条既有 Worker 状态仍为 interrupted/completed/completed，活动 Worker 为 0。清理证据为 `zcode-final-cleanup.json`；阶段提交仅包含本轮代码/规格/新增记录，不包括用户原有图标及文档改动，不推送。

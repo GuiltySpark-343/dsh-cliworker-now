@@ -15,7 +15,9 @@ for (const name of [
   'private-launch',
   'windows-account-launch',
   'windows-account-stdio',
+  'windows-hidden-launch',
   'native-launch',
+  'native-spawn',
   'pi-omp-environment',
   'terminal-bridge',
   'pi-omp-bridge',
@@ -40,6 +42,8 @@ cpSync('src/host/pi-installation.mjs', 'lib/types/host/pi-installation.mjs')
 cpSync('src/host/pi-installation.d.mts', 'lib/types/host/pi-installation.d.mts')
 cpSync('src/host/native-launch.mjs', 'lib/types/host/native-launch.mjs')
 cpSync('src/host/native-launch.d.mts', 'lib/types/host/native-launch.d.mts')
+cpSync('src/host/native-spawn.mjs', 'lib/types/host/native-spawn.mjs')
+cpSync('src/host/private-launch.mjs', 'lib/types/host/private-launch.mjs')
 cpSync('src/host/pi-omp-environment.mjs', 'lib/types/host/pi-omp-environment.mjs')
 cpSync('src/host/pi-omp-environment.d.mts', 'lib/types/host/pi-omp-environment.d.mts')
 for (const name of ['own-account-lease', 'pi-omp-refresh']) {
@@ -56,6 +60,7 @@ cpSync('src/host/windows-account-bootstrap.ps1', 'lib/windows-account-bootstrap.
 cpSync('src/host/windows-account-bootstrap.ps1', 'lib/types/host/windows-account-bootstrap.ps1')
 cpSync('src/host/windows-account-launch.mjs', 'lib/types/host/windows-account-launch.mjs')
 cpSync('src/host/windows-account-stdio.mjs', 'lib/types/host/windows-account-stdio.mjs')
+cpSync('src/host/windows-hidden-launch.mjs', 'lib/types/host/windows-hidden-launch.mjs')
 cpSync('src/host/windows-agy-account.ps1', 'lib/windows-agy-account.ps1')
 cpSync('src/host/windows-agy-account.ps1', 'lib/types/host/windows-agy-account.ps1')
 await build({

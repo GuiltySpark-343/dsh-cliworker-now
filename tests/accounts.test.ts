@@ -23,6 +23,7 @@ import { AccountManager } from '../src/host/accounts.ts'
 import { DEFAULT_CONFIG, type ProcessBackend, type RuntimeConfig } from '../src/host/process.ts'
 import type { CliId } from '../src/shared/types.ts'
 import type { AccountIdentitySource } from '../src/host/account-identity.ts'
+import * as zcodeAccounts from '../src/host/zcode-grok-accounts.ts'
 // Manager transport/lifecycle tests use a simulated PTY on every platform.
 // Windows Job/ConPTY ownership has its own simulated and real-OS suites.
 vi.mock('../src/host/windows-account-terminal.ts', async (load) => ({
@@ -926,6 +927,56 @@ describe('user-operated account terminals (synthetic PTY)', () => {
 })
 
 describe('extended CLI account capabilities (synthetic credentials and PTYs)', () => {
+  it.each(['bigmodel', 'zai'] as const)(
+    'passes explicit %s to ZCode preparation without changing logout storage sources',
+    async (provider) => {
+      const f = fixture()
+      const prepare = vi.spyOn(zcodeAccounts, 'zcodeGrokAccountLaunch').mockResolvedValueOnce({
+        argv: ['/synthetic/zcode.cjs', 'login', provider],
+        cwd: f.cwd,
+        env: {},
+        instruction: 'Synthetic provider-selected login',
+      })
+      try {
+        const opened = await f.manager.start('parent', 'zcode', 'login', f.cwd, f.signal, undefined, provider)
+        expect(prepare).toHaveBeenCalledExactlyOnceWith(
+          'zcode',
+          'login',
+          expect.any(String),
+          f.config,
+          f.backend,
+          expect.any(AbortSignal),
+          { loginProvider: provider },
+        )
+        expect(f.backend.spawnTerminal).toHaveBeenCalledOnce()
+        expect(f.terminal.write).not.toHaveBeenCalled()
+        await f.manager.stop('parent', opened.id)
+        expect(f.manager.isBusy('zcode')).toBe(false)
+      } finally {
+        prepare.mockRestore()
+      }
+    },
+  )
+  it.each([
+    ['codex', 'login', 'bigmodel'],
+    ['zcode', 'logout', 'bigmodel'],
+    ['zcode', 'manage', 'zai'],
+    ['zcode', 'login', 'native'],
+    ['zcode', 'login', 'https://foreign.invalid'],
+    ['zcode', 'login', ''],
+  ])(
+    'rejects invalid provider arguments %s/%s/%s before reserving or resolving a process',
+    (cli, action, provider) => {
+      const f = fixture()
+      expect(() =>
+        f.manager.start('parent', cli as any, action as any, f.cwd, f.signal, undefined, provider as any),
+      ).toThrow('不支持的 ZCode 授权来源')
+      expect(f.manager.isBusy('zcode')).toBe(false)
+      expect(f.backend.resolveExecutable).not.toHaveBeenCalled()
+      expect(f.backend.spawnTerminal).not.toHaveBeenCalled()
+      expect(f.backend.spawn).not.toHaveBeenCalled()
+    },
+  )
   it('offers account actions for all six extended CLIs without starting any login process', async () => {
     const f = fixture()
     for (const cli of ['zcode', 'grok', 'omp', 'pi', 'hermes', 'opencode'] as const) {
@@ -982,7 +1033,7 @@ describe('extended CLI account capabilities (synthetic credentials and PTYs)', (
         '/synthetic/grok',
         ...(action === 'login' ? ['login'] : []),
       ])
-    expect(spec.env?.GROK_HOME).toMatch(/[\\/]\.grok$/)
+      expect(spec.env?.GROK_HOME).toMatch(/[\\/]\.grok$/)
       expect(spec.env?.ELECTRON_RUN_AS_NODE).toBe('1')
       expect(spec.cwd).toBe(join(f.config.stateDirectory!, 'accounts/grok-terminal/workspace'))
       expect(f.backend.spawn).not.toHaveBeenCalled()

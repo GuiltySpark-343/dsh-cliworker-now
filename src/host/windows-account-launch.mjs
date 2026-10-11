@@ -2,7 +2,7 @@
 // assigned to the separate lifecycle Job owner; no task sandbox is applied.
 import { accountInput } from './windows-account-stdio.mjs'
 import { fileURLToPath } from 'node:url'
-import { spawn } from 'node:child_process'
+import { spawnNativeProcess } from './native-spawn.mjs'
 import { writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -37,7 +37,7 @@ if (!existsSync(join(directory, 'cancel')) && !existsSync(join(directory, 'stop'
       argv.unshift('--import', new URL('./windows-account-stdio.mjs', import.meta.url).href)
     // Keep the existing ConPTY handles; a GUI-subsystem parent must not cause
     // the native CLI to present an additional Windows console window.
-    const child = spawn(executable, argv, { env: process.env, stdio: [accountInput, 1, 2], windowsHide: true })
+    const child = spawnNativeProcess(executable, argv, { env: process.env, stdio: [accountInput, 1, 2] })
     child.once('error', () => { process.stderr.write('CLI launch failed\r\n') })
     child.once('close', recordExit)
   } catch {

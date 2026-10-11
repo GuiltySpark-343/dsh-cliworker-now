@@ -558,3 +558,12 @@ Windows 官方源码安装的 distlib 入口在隔离 `HERMES_HOME` 下无法定
 - private-launch 与 Windows 账号 launcher 的真实子进程显式 windowsHide，保留原有 stdio/ConPTY 输入输出和进程范围清理。OpenCode 登录终端继续显示在插件内。
 - MiMo 既有能力缓存保留；Kimi 仅对已验证 managed OAuth 来源缓存非秘密原生模型能力，Claude 仅缓存 help 支持能力。各缓存 30 秒、最多 16 项，键包含原生入口/运行时/项目/相关配置与账号材料摘要/环境；每次重读当前凭据、过期状态及远端授权，失败不缓存。显示快照和本地能力均不能替代额度或身份核验。
 - Windows Antigravity 单次模型目录内部复用安全身份投影，将原生身份读取从三次减为两次；最终授权绑定仍独立重读。作用域退出即失效，不跨请求、不同 backend/config/signal 或 Mac 共用。MiMo 冷启动命令保持串行，未确认 SQLite/原生初始化可安全并发前不并行。
+
+
+## 2026-10-11：ZCode 国内/海外授权选择与 Windows 后台窗口
+
+- 最新用户要求覆盖此前“官方默认不修改”：两平台共用登录来源选择，中国智谱 BigModel / 海外 Z.AI。选择前不启动账号进程；专用 Gateway 严格验证 CLI、action 和 provider，不把授权服务商混作凭据退出来源。关闭选择重置，旧 Host 不支持新接口时明确提示更新，不回落默认海外登录。
+- 仅使用 ZCode 原生 `login bigmodel` / `login zai` 与 capability help；旧版本缺少国内能力时明确要求更新，不猜参数、不模拟 Desktop 授权、不填写应用密钥。两平台统一在显式配置之后优先核验完整 managed CLI；Windows Desktop 自带旧入口仅支持海外，不能因版本字符串相同就认定协议相同。
+- Windows 完整 runtime 来自已验证官方源树 `29628c9acdb81b703bbd4080c207a0e7ce5e276e`，补充精确版本 Windows x64 原生包并核验 registry integrity、包身份、PE 与逐文件哈希；账号仍保存在 ZCode 自己的原生目录，不迁移或覆盖 Desktop 登录数据。
+- Windows `--no-browser` 保留原生 deviceflow init/poll/保存；共享解析器按已选 provider 绑定精确 HTTPS 域名、路径和参数集合（BigModel `bigmodel.cn/login`，Z.AI `chat.z.ai/api/oauth/authorize`），原样 URL 只在当前内存使用。自动打开一次、原生网址可点和选择复制，未新增额外按钮。
+- 普通 Windows Electron 后台进程经过固定 GUI bootstrap，原生程序由 Node `windowsHide` 启动；使用独立管道原样传递字节、EOF 和背压，防止继承 fd 导致 libuv 仅 SW_HIDE、没有 CREATE_NO_WINDOW。SDK Job 继续拥有完整进程范围；原生退出事实经有界私有控制通道返回，失败/取消不伪装成功。Mac 与嵌入式 ConPTY 登录保持原路径。参考 libuv 官方 `src/win/process.c` 的 Windows hide/stdin 继承规则。

@@ -1,28 +1,46 @@
+import type { ZCodeLoginProvider } from '../shared/accounts.ts'
+
 const nativePrompt = 'Open this URL to sign in:'
 const maxLineLength = 8_192
-const requiredParameters = ['client_id', 'redirect_uri', 'state', 'response_type'] as const
+// Fixed endpoints observed from the official CLI's provider-specific device
+// flows. Preserve the server-returned URL; never construct or rewrite one.
+const nativeEndpoints = {
+  zai: {
+    prefix: /^https:\/\/chat\.z\.ai(?::443)?\/api\/oauth\/authorize\?/,
+    origin: 'https://chat.z.ai',
+    path: '/api/oauth/authorize',
+    parameters: ['client_id', 'redirect_uri', 'state', 'response_type'],
+  },
+  bigmodel: {
+    prefix: /^https:\/\/bigmodel\.cn(?::443)?\/login\?/,
+    origin: 'https://bigmodel.cn',
+    path: '/login',
+    parameters: ['appId', 'redirect', 'state'],
+  },
+} as const
 
 /** Validate only the observed native authorization endpoint; return the original bytes. */
-function nativeLoginUrl(line: string): string | undefined {
-  if (
-    line.length > maxLineLength ||
-    !/^https:\/\/chat\.z\.ai(?::443)?\/api\/oauth\/authorize\?/.test(line) ||
-    /[\s\p{C}<>"'\\#]/u.test(line)
-  )
+function nativeLoginUrl(line: string, provider: ZCodeLoginProvider | undefined): string | undefined {
+  // Older callers retain their Z.AI-only contract. Unknown providers never
+  // broaden navigation to either region or a caller-supplied destination.
+  const selected = provider === undefined ? 'zai' : provider
+  if (selected !== 'zai' && selected !== 'bigmodel') return undefined
+  const endpoint = nativeEndpoints[selected]
+  if (line.length > maxLineLength || !endpoint.prefix.test(line) || /[\s\p{C}<>"'\\#]/u.test(line))
     return undefined
   try {
     const url = new URL(line)
     if (
       url.protocol !== 'https:' ||
-      url.origin !== 'https://chat.z.ai' ||
-      url.pathname !== '/api/oauth/authorize' ||
+      url.origin !== endpoint.origin ||
+      url.pathname !== endpoint.path ||
       url.username ||
       url.password ||
       url.hash ||
       (url.port && url.port !== '443')
     )
       return undefined
-    for (const parameter of requiredParameters) {
+    for (const parameter of endpoint.parameters) {
       const values = url.searchParams.getAll(parameter)
       if (values.length !== 1 || !values[0]?.trim()) return undefined
     }
@@ -40,13 +58,14 @@ export interface ZcodeLoginLinkParser {
 }
 
 /**
- * The caller must enable this only for a ZCode login session. URLs stay in memory.
+ * The caller must enable this only for a ZCode login session and pass the selected
+ * provider so one region cannot open the other region's URL. URLs stay in memory.
  * Accept a single complete line immediately after the fixed native --no-browser
  * prompt. SGR/cursor visibility do not affect text. The observed ConPTY blank
  * screen initialization is accepted only before any prompt/URL text; arbitrary
  * cursor edits do not become trusted text. OSC payloads are never stored.
  */
-export function createZcodeLoginLinkParser(): ZcodeLoginLinkParser {
+export function createZcodeLoginLinkParser(provider?: ZCodeLoginProvider): ZcodeLoginLinkParser {
   let mode: 'text' | 'escape' | 'csi' | 'osc' | 'osc-escape' = 'text'
   let line = ''
   let invalidLine = false
@@ -83,7 +102,7 @@ export function createZcodeLoginLinkParser(): ZcodeLoginLinkParser {
       awaitingUrl = true
       return undefined
     }
-    const candidate = awaitingUrl ? nativeLoginUrl(complete) : undefined
+    const candidate = awaitingUrl ? nativeLoginUrl(complete, provider) : undefined
     awaitingUrl = false
     if (!candidate || candidate === previousUrl) return undefined
     previousUrl = candidate

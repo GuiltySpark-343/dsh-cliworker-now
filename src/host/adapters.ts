@@ -64,6 +64,9 @@ export const executableFor = (cli: CliId, config: RuntimeConfig): string => {
   if (cli === 'antigravity') return config.executable
   const configured = config[`${cli}Executable`]
   if (configured && configured !== cli) return configured
+  // A deployed standalone runtime is shared across platforms. An explicit
+  // custom executable still wins, and a missing deployment keeps native lookup.
+  if (cli === 'zcode' && entryPresent(managedZCodeEntry())) return managedZCodeEntry()
   if (process.platform === 'win32') {
     const roots = [
       join(homedir(), '.local', 'bin'),
@@ -100,9 +103,7 @@ export const executableFor = (cli: CliId, config: RuntimeConfig): string => {
     return configured || cli
   }
   if (cli === 'zcode')
-    return existsSync(managedZCodeEntry())
-      ? managedZCodeEntry()
-      : '/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs'
+    return '/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs'
   if (cli === 'grok') return join(homedir(), '.grok/bin/grok')
   if (cli === 'pi') {
     const native = join(homedir(), '.local/bin/pi')

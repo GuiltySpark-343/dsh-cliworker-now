@@ -298,6 +298,90 @@ describe('ZCode/Grok user-operated account helpers', () => {
     expect(launch.instruction).toContain('BigModel')
   })
 
+  it.each(['bigmodel', 'zai'] as const)(
+    'routes an explicit %s selection through the native provider argument on both platforms',
+    async (loginProvider) => {
+      const f = fixture(
+        '  login [zai|bigmodel]  Sign in through browser authorization\n  --no-browser  Print the OAuth URL without opening a browser\n',
+      )
+      const auth = join(f.stateDirectory, 'accounts/zcode/.zcode/v2')
+      mkdirSync(auth, { recursive: true })
+      const credentialPath = join(auth, 'credentials.json')
+      const credentials = '{"synthetic":"EXISTING-ACCOUNT-MUST-NOT-CHANGE"}'
+      writeFileSync(credentialPath, credentials, { mode: 0o600 })
+      for (const platform of ['win32', 'darwin'] as const) {
+        const launch = await zcodeGrokAccountLaunch(
+          'zcode',
+          'login',
+          '/synthetic/zcode.cjs',
+          f.config,
+          f.backend,
+          f.signal,
+          { ...f, platform, loginProvider },
+        )
+        expect(launch.argv).toEqual(
+          wrapped([
+            process.execPath,
+            '/synthetic/zcode.cjs',
+            'login',
+            loginProvider,
+            ...(platform === 'win32' ? ['--no-browser'] : []),
+          ]),
+        )
+        expect(launch.instruction).toContain(loginProvider === 'bigmodel' ? 'BigModel 授权' : 'Z.AI 授权')
+        expect(launch.instruction).not.toContain('仅支持')
+        expect(readFileSync(credentialPath, 'utf8')).toBe(credentials)
+      }
+      expect(vi.mocked(f.backend.spawn).mock.calls.every(([spec]) => spec.argv.at(-1) === '--help')).toBe(
+        true,
+      )
+    },
+  )
+
+  it('refuses a BigModel choice on a Z.AI-only CLI before any login or credential mutation', async () => {
+    const f = fixture('  login      Sign in with Z.AI OAuth for model access\n')
+    await expect(
+      zcodeGrokAccountLaunch('zcode', 'login', '/synthetic/old.cjs', f.config, f.backend, f.signal, {
+        ...f,
+        loginProvider: 'bigmodel',
+      }),
+    ).rejects.toThrow('不会改用 Z.AI 登录')
+    expect(f.backend.spawn).toHaveBeenCalledOnce()
+    expect(vi.mocked(f.backend.spawn).mock.calls[0]![0].argv.at(-1)).toBe('--help')
+    expect(f.children[0]?.waitForExit).toHaveBeenCalledOnce()
+    const launch = await zcodeGrokAccountLaunch(
+      'zcode',
+      'login',
+      '/synthetic/old.cjs',
+      f.config,
+      f.backend,
+      f.signal,
+      { ...f, loginProvider: 'zai' },
+    )
+    expect(launch.argv).toEqual(wrapped([process.execPath, '/synthetic/old.cjs', 'login']))
+    expect(launch.instruction).toContain('Z.AI 授权')
+  })
+
+  it.each([
+    ['grok', 'login', 'bigmodel'],
+    ['zcode', 'logout', 'bigmodel'],
+    ['zcode', 'manage', 'zai'],
+    ['zcode', 'login', 'synthetic-unsupported'],
+    ['zcode', 'login', null],
+  ] as const)(
+    'rejects an invalid provider option for %s %s before preparing any terminal',
+    async (cli, action, provider) => {
+      const f = fixture()
+      await expect(
+        zcodeGrokAccountLaunch(cli, action, '/synthetic/entry', f.config, f.backend, f.signal, {
+          ...f,
+          loginProvider: provider as any,
+        }),
+      ).rejects.toThrow('授权来源只支持 ZCode 登录时选择智谱 BigModel 或 Z.AI')
+      expect(f.backend.spawn).not.toHaveBeenCalled()
+    },
+  )
+
   it('bounds capability responses, cleans up, and never reports raw CLI output', async () => {
     const f = fixture('SECRET'.repeat(12_000))
     const failure = await zcodeGrokAccountLaunch(

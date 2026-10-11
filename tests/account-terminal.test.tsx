@@ -3,7 +3,12 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { AccountTerminal, type AccountCloseControl } from '../src/client/account-terminal.tsx'
 import type { API } from '../src/client/workers.ts'
-import type { AccountAction, AccountFrame, AccountSource } from '../src/shared/accounts.ts'
+import type {
+  AccountAction,
+  AccountFrame,
+  AccountSource,
+  ZCodeLoginProvider,
+} from '../src/shared/accounts.ts'
 import type { CliId } from '../src/shared/types.ts'
 
 // Simulated PTY/Gateway and renderer only; these tests never invoke an installed CLI.
@@ -66,7 +71,11 @@ vi.mock('@xterm/addon-fit', () => ({
 // Link range/wrap matching is tested in zcode-login-link-provider.test.ts. This
 // fixture exposes callbacks solely to verify terminal lifetime and navigation.
 vi.mock('../src/client/zcode-login-link-provider.ts', () => ({
-  createZcodeLoginLinkProvider: (_terminal: unknown, currentUrl: () => string | undefined, open: (url: string) => void) => ({ currentUrl, activate: open }),
+  createZcodeLoginLinkProvider: (
+    _terminal: unknown,
+    currentUrl: () => string | undefined,
+    open: (url: string) => void,
+  ) => ({ currentUrl, activate: open }),
 }))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: ({ children, variant: _variant, size: _size, ...props }: any) =>
@@ -171,6 +180,7 @@ async function setup(initiallyOpen = true) {
   }
   const accountStart = vi.fn(pendingStart)
   const accountStartForSource = vi.fn(pendingStart)
+  const accountStartForProvider = vi.fn(pendingStart)
   const accountWrite = vi.fn().mockResolvedValue(ok())
   const accountStop = vi.fn().mockResolvedValue(ok())
   const accountResize = vi.fn().mockResolvedValue(ok())
@@ -181,19 +191,33 @@ async function setup(initiallyOpen = true) {
   })
   const api = {
     $stream: (options: any) => options.open(new AbortController().signal),
-    cliworker: { accountStart, accountStartForSource, accountWatch, accountWrite, accountStop, accountResize },
+    cliworker: {
+      accountStart,
+      accountStartForSource,
+      accountStartForProvider,
+      accountWatch,
+      accountWrite,
+      accountStop,
+      accountResize,
+    },
   } as unknown as API
   const onClose = vi.fn(),
     onFinished = vi.fn()
   const closeControl: AccountCloseControl = { current: undefined }
   const container = new EventTarget()
-  const render = (cli: CliId = 'codex', action: AccountAction = 'login', source?: AccountSource) => (
+  const render = (
+    cli: CliId = 'codex',
+    action: AccountAction = 'login',
+    source?: AccountSource,
+    provider?: ZCodeLoginProvider,
+  ) => (
     <AccountTerminal
       api={api}
       sessionId="parent"
       cli={cli}
       action={action}
       source={source}
+      provider={provider}
       onClose={onClose}
       onFinished={onFinished}
       closeControl={closeControl}
@@ -206,9 +230,14 @@ async function setup(initiallyOpen = true) {
     })
     mounted.push(renderer)
   })
-  const update = async (cli: CliId = 'codex', action: AccountAction = 'login', source?: AccountSource) => {
+  const update = async (
+    cli: CliId = 'codex',
+    action: AccountAction = 'login',
+    source?: AccountSource,
+    provider?: ZCodeLoginProvider,
+  ) => {
     await act(async () => {
-      renderer.update(render(cli, action, source))
+      renderer.update(render(cli, action, source, provider))
     })
   }
   const start = async (id = 'terminal-a', index = 0) => {
@@ -228,7 +257,8 @@ async function setup(initiallyOpen = true) {
   const contextClipboard = async () => {
     await act(async () => {
       renderer.root.findByProps({ className: 'cwn-account-terminal-view' }).props.onContextMenuCapture({
-        preventDefault: vi.fn(), stopPropagation: vi.fn(),
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
       })
     })
   }
@@ -244,6 +274,8 @@ async function setup(initiallyOpen = true) {
     streams,
     accountStart,
     accountStartForSource,
+    accountStartForProvider,
+    api,
     accountWatch,
     accountWrite,
     accountStop,
@@ -273,14 +305,18 @@ it('starts an account action only when explicitly mounted and never enters a pro
   expect(terminals[0].options.cursorBlink).toBe(true)
   expect(terminals[0].options.theme.cursor).not.toBe(terminals[0].options.theme.cursorAccent)
   expect(terminals[0].focus).toHaveBeenCalledOnce()
-  await act(async () => fixture.renderer.root.findByProps({ className: 'cwn-account-terminal-view' }).props.onClick())
+  await act(async () =>
+    fixture.renderer.root.findByProps({ className: 'cwn-account-terminal-view' }).props.onClick(),
+  )
   expect(terminals[0].focus).toHaveBeenCalledTimes(2)
   expect(fixture.accountWatch).toHaveBeenCalledWith('parent', 'terminal-a', expect.any(AbortSignal))
   expect(fixture.accountWrite).not.toHaveBeenCalled()
   const text = JSON.stringify(fixture.renderer.toJSON())
   expect(text).toContain('模拟账号交互')
   expect(text).not.toMatch(/插件不保存|关闭此窗口会结束|cwn-account-privacy/)
-  expect(fixture.renderer.root.findAllByType('button').map((button) => button.children.join(''))).toEqual(['关闭终端'])
+  expect(fixture.renderer.root.findAllByType('button').map((button) => button.children.join(''))).toEqual([
+    '关闭终端',
+  ])
   expect(text).not.toContain('闪烁方块表示输入位置')
   expect(text).not.toContain('outline: 2px')
   expect(navigator.clipboard.readText).not.toHaveBeenCalled()
@@ -288,7 +324,9 @@ it('starts an account action only when explicitly mounted and never enters a pro
 
 function clipboardEvent(text: string): Event {
   const event = new Event('paste', { cancelable: true })
-  Object.defineProperty(event, 'clipboardData', { value: { getData: (type: string) => type === 'text/plain' ? text : '' } })
+  Object.defineProperty(event, 'clipboardData', {
+    value: { getData: (type: string) => (type === 'text/plain' ? text : '') },
+  })
   return event
 }
 
@@ -301,15 +339,25 @@ it.each([
   const f = await setup()
   await f.start()
   const shortcut = {
-    key: '', code: '', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false,
-    type: 'keydown', stopPropagation: vi.fn(), preventDefault: vi.fn(), ...keys,
+    key: '',
+    code: '',
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    altKey: false,
+    type: 'keydown',
+    stopPropagation: vi.fn(),
+    preventDefault: vi.fn(),
+    ...keys,
   }
   expect(terminals[0].keyHandler(shortcut)).toBe(false)
   expect(shortcut.preventDefault).not.toHaveBeenCalled()
   expect(f.accountWrite).not.toHaveBeenCalled()
   const text = '模拟授权值 中文😀\r\n第二行\n第三行'
   const event = clipboardEvent(text)
-  await act(async () => { f.container.dispatchEvent(event) })
+  await act(async () => {
+    f.container.dispatchEvent(event)
+  })
   expect(event.defaultPrevented).toBe(true)
   expect(terminals[0].paste).toHaveBeenCalledExactlyOnceWith(text)
   expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', text)
@@ -328,20 +376,30 @@ it('preserves ordinary terminal keys and IME combinations', async () => {
     { key: 'v', ctrlKey: true, isComposing: true },
     { key: 'v', metaKey: true, isComposing: true },
     { key: 'Insert' },
-  ]) expect(terminals[0].keyHandler({ ctrlKey: false, metaKey: false, ...keys })).toBe(true)
+  ])
+    expect(terminals[0].keyHandler({ ctrlKey: false, metaKey: false, ...keys })).toBe(true)
 })
 
 it('keeps the Mac Command-V key lifecycle native and does not paste again on keyup', async () => {
   const f = await setup()
   await f.start()
   const key = (type: string) => ({
-    type, key: 'v', code: 'KeyV', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false,
-    preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    type,
+    key: 'v',
+    code: 'KeyV',
+    metaKey: true,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
   })
   const down = key('keydown')
   expect(terminals[0].keyHandler(down)).toBe(false)
   expect(down.preventDefault).not.toHaveBeenCalled()
-  await act(async () => { f.container.dispatchEvent(clipboardEvent('Mac 原生粘贴😀')) })
+  await act(async () => {
+    f.container.dispatchEvent(clipboardEvent('Mac 原生粘贴😀'))
+  })
   for (const type of ['keypress', 'keyup']) {
     const event = key(type)
     expect(terminals[0].keyHandler(event)).toBe(false)
@@ -356,7 +414,9 @@ it('accepts native Edit-menu paste without a keyboard event or async clipboard p
   const f = await setup()
   await f.start()
   vi.stubGlobal('navigator', {})
-  await act(async () => { f.container.dispatchEvent(clipboardEvent('菜单粘贴\n第二行')) })
+  await act(async () => {
+    f.container.dispatchEvent(clipboardEvent('菜单粘贴\n第二行'))
+  })
   expect(terminals[0].paste).toHaveBeenCalledExactlyOnceWith('菜单粘贴\n第二行')
   expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', '菜单粘贴\n第二行')
 })
@@ -373,26 +433,38 @@ it('reads the clipboard only on a deliberate right-click paste and adds no submi
   expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', text)
 })
 
-it.each([{ ctrlKey: true }, { metaKey: true }])('lets selected Ctrl/Command-C use xterm native copy without also writing the clipboard', async (modifier) => {
-  const f = await setup()
-  await f.start()
-  terminals[0].hasSelection.mockReturnValue(true)
-  const event = {
-    key: 'c', code: 'KeyC', type: 'keydown', ctrlKey: false, metaKey: false, altKey: false,
-    preventDefault: vi.fn(), stopPropagation: vi.fn(), ...modifier,
-  }
-  expect(terminals[0].keyHandler(event)).toBe(false)
-  expect(event.preventDefault).not.toHaveBeenCalled()
-  expect(clipboardWrites).not.toHaveBeenCalled()
-  expect(navigator.clipboard.readText).not.toHaveBeenCalled()
-  expect(f.accountWrite).not.toHaveBeenCalled()
-})
+it.each([{ ctrlKey: true }, { metaKey: true }])(
+  'lets selected Ctrl/Command-C use xterm native copy without also writing the clipboard',
+  async (modifier) => {
+    const f = await setup()
+    await f.start()
+    terminals[0].hasSelection.mockReturnValue(true)
+    const event = {
+      key: 'c',
+      code: 'KeyC',
+      type: 'keydown',
+      ctrlKey: false,
+      metaKey: false,
+      altKey: false,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+      ...modifier,
+    }
+    expect(terminals[0].keyHandler(event)).toBe(false)
+    expect(event.preventDefault).not.toHaveBeenCalled()
+    expect(clipboardWrites).not.toHaveBeenCalled()
+    expect(navigator.clipboard.readText).not.toHaveBeenCalled()
+    expect(f.accountWrite).not.toHaveBeenCalled()
+  },
+)
 
 it('keeps unselected Ctrl-C as the CLI interrupt instead of copying', async () => {
   const f = await setup()
   await f.start()
   expect(terminals[0].keyHandler({ key: 'c', ctrlKey: true, metaKey: false })).toBe(true)
-  await act(async () => { terminals[0].input('\x03') })
+  await act(async () => {
+    terminals[0].input('\x03')
+  })
   expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', '\x03')
   expect(clipboardWrites).not.toHaveBeenCalled()
 })
@@ -420,7 +492,9 @@ it('does not refocus or clear another terminal when a selected copy completes af
   terminals[0].getSelection.mockReturnValue('模拟待完成复制')
   await f.contextClipboard()
   await f.close()
-  await act(async () => { copied.resolve(true) })
+  await act(async () => {
+    copied.resolve(true)
+  })
   expect(terminals[0].clearSelection).not.toHaveBeenCalled()
   expect(terminals[0].focus).toHaveBeenCalledOnce()
   expect(navigator.clipboard.readText).not.toHaveBeenCalled()
@@ -448,32 +522,41 @@ it('does not race duplicate clipboard reads or strip the bracketed paste emitted
   await f.contextClipboard()
   await f.contextClipboard()
   expect(navigator.clipboard.readText).toHaveBeenCalledOnce()
-  await act(async () => { read.resolve('模拟中文😀\n第二行') })
+  await act(async () => {
+    read.resolve('模拟中文😀\n第二行')
+  })
   expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', bracketed)
 })
 
-it.each(['close', 'change', 'unmount'])('discards a clipboard read that finishes after %s without leaking into another terminal', async (action) => {
-  const f = await setup()
-  await f.start()
-  const read = deferred<string>()
-  vi.mocked(navigator.clipboard.readText).mockReturnValue(read.promise)
-  await f.contextClipboard()
-  if (action === 'close') await f.close()
-  else if (action === 'unmount') await f.unmount()
-  else {
-    await f.update('kimi')
-    await f.start('next-terminal', 1)
-  }
-  await act(async () => { read.resolve('模拟迟到授权值') })
-  expect(f.accountWrite).not.toHaveBeenCalled()
-  expect(terminals[0].paste).not.toHaveBeenCalled()
-  if (action === 'change') expect(terminals[1].paste).not.toHaveBeenCalled()
-})
+it.each(['close', 'change', 'unmount'])(
+  'discards a clipboard read that finishes after %s without leaking into another terminal',
+  async (action) => {
+    const f = await setup()
+    await f.start()
+    const read = deferred<string>()
+    vi.mocked(navigator.clipboard.readText).mockReturnValue(read.promise)
+    await f.contextClipboard()
+    if (action === 'close') await f.close()
+    else if (action === 'unmount') await f.unmount()
+    else {
+      await f.update('kimi')
+      await f.start('next-terminal', 1)
+    }
+    await act(async () => {
+      read.resolve('模拟迟到授权值')
+    })
+    expect(f.accountWrite).not.toHaveBeenCalled()
+    expect(terminals[0].paste).not.toHaveBeenCalled()
+    if (action === 'change') expect(terminals[1].paste).not.toHaveBeenCalled()
+  },
+)
 
 it('reports unavailable or empty clipboard without exposing data or suppressing later native paste', async () => {
   const f = await setup()
   await f.start()
-  vi.mocked(navigator.clipboard.readText).mockRejectedValueOnce(new Error('secret simulated clipboard failure'))
+  vi.mocked(navigator.clipboard.readText).mockRejectedValueOnce(
+    new Error('secret simulated clipboard failure'),
+  )
   await f.contextClipboard()
   expect(JSON.stringify(f.renderer.toJSON())).toContain('无法读取剪贴板')
   expect(JSON.stringify(f.renderer.toJSON())).not.toContain('secret')
@@ -481,18 +564,24 @@ it('reports unavailable or empty clipboard without exposing data or suppressing 
   await f.contextClipboard()
   expect(JSON.stringify(f.renderer.toJSON())).toContain('剪贴板中没有可粘贴的文本')
   expect(f.accountWrite).not.toHaveBeenCalled()
-  await act(async () => { f.container.dispatchEvent(clipboardEvent('可用的原生粘贴')) })
+  await act(async () => {
+    f.container.dispatchEvent(clipboardEvent('可用的原生粘贴'))
+  })
   expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', '可用的原生粘贴')
 })
 
 it('bounds pasted UTF-8 bytes before Gateway writes and removes the native paste listener on unmount', async () => {
   const f = await setup()
   await f.start()
-  await act(async () => { f.container.dispatchEvent(clipboardEvent('中'.repeat(6_000))) })
+  await act(async () => {
+    f.container.dispatchEvent(clipboardEvent('中'.repeat(6_000)))
+  })
   expect(f.accountWrite).not.toHaveBeenCalled()
   expect(JSON.stringify(f.renderer.toJSON())).toContain('输入过长或仍在发送')
   const accepted = '😀'.repeat(4_000)
-  await act(async () => { f.container.dispatchEvent(clipboardEvent(accepted)) })
+  await act(async () => {
+    f.container.dispatchEvent(clipboardEvent(accepted))
+  })
   expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', accepted)
   await f.unmount()
   const event = clipboardEvent('卸载后的内容')
@@ -502,8 +591,11 @@ it('bounds pasted UTF-8 bytes before Gateway writes and removes the native paste
 })
 
 // Simulated native prompt and OAuth URL only; never real authorization material.
-const simulatedLoginUrl = 'https://chat.z.ai/api/oauth/authorize?client_id=fixture&state=simulated-state&redirect_uri=https%3A%2F%2Fexample.invalid%2Fcallback&response_type=code'
+const simulatedLoginUrl =
+  'https://chat.z.ai/api/oauth/authorize?client_id=fixture&state=simulated-state&redirect_uri=https%3A%2F%2Fexample.invalid%2Fcallback&response_type=code'
 const simulatedLoginPrompt = `Open this URL to sign in:\r\n${simulatedLoginUrl}\r\n`
+const simulatedBigModelUrl =
+  'https://bigmodel.cn/login?appId=fixture&redirect=https%3A%2F%2Fexample.invalid%2Fcallback&state=simulated-state'
 
 it('opens a parsed ZCode login page once and registers its native terminal link without extra controls', async () => {
   const f = await setup(false)
@@ -525,18 +617,75 @@ it('opens a parsed ZCode login page once and registers its native terminal link 
     f.streams[0].push({ seq: 3, data: simulatedLoginPrompt })
   })
   expect(window.open).toHaveBeenCalledOnce()
-  await act(async () => { terminals[0].linkProvider.activate(simulatedLoginUrl) })
+  await act(async () => {
+    terminals[0].linkProvider.activate(simulatedLoginUrl)
+  })
   expect(window.open).toHaveBeenCalledTimes(2)
   expect(f.accountWrite).not.toHaveBeenCalled()
 })
 
+it('does not open a Z.AI link during an explicitly selected BigModel login', async () => {
+  const f = await setup(false)
+  await f.update('zcode', 'login', undefined, 'bigmodel')
+  await f.start()
+  await act(async () => {
+    f.streams[0].push({ seq: 1, data: simulatedLoginPrompt })
+  })
+  expect(window.open).not.toHaveBeenCalled()
+  expect(terminals[0].linkProvider.currentUrl()).toBeUndefined()
+  expect(f.accountWrite).not.toHaveBeenCalled()
+})
+
 it.each([
-  ['codex', 'login'], ['claude', 'login'], ['zcode', 'manage'], ['zcode', 'logout'],
+  ['bigmodel', simulatedBigModelUrl, simulatedLoginUrl],
+  ['zai', simulatedLoginUrl, simulatedBigModelUrl],
+] as const)(
+  'automatically opens only the selected %s login URL once, preserving clickable text and cleanup',
+  async (provider, selectedUrl, otherUrl) => {
+    const f = await setup(false)
+    await f.update('zcode', 'login', undefined, provider)
+    await f.start()
+    const prompt = `Open this URL to sign in:\r\n${selectedUrl}\r\n`
+    await act(async () => {
+      f.streams[0].push({ seq: 1, data: `Open this URL to sign in:\r\n${otherUrl}\r\n` })
+    })
+    expect(window.open).not.toHaveBeenCalled()
+    await act(async () => {
+      f.streams[0].push({ seq: 2, data: prompt.slice(0, 47) })
+      f.streams[0].push({ seq: 3, data: prompt.slice(47) })
+      f.streams[0].push({ seq: 4, data: prompt })
+    })
+    expect(window.open).toHaveBeenCalledExactlyOnceWith(selectedUrl, '_blank', 'noopener,noreferrer')
+    const link = terminals[0].linkProvider
+    expect(link.currentUrl()).toBe(selectedUrl)
+    expect(JSON.stringify(f.renderer.toJSON())).not.toContain('simulated-state')
+    expect(JSON.stringify(f.renderer.toJSON())).not.toContain('打开登录网页')
+    await act(async () => {
+      link.activate(selectedUrl)
+    })
+    expect(window.open).toHaveBeenCalledTimes(2)
+    expect(f.accountWrite).not.toHaveBeenCalled()
+    await f.close()
+    expect(link.currentUrl()).toBeUndefined()
+    await act(async () => {
+      link.activate(selectedUrl)
+    })
+    expect(window.open).toHaveBeenCalledTimes(2)
+  },
+)
+
+it.each([
+  ['codex', 'login'],
+  ['claude', 'login'],
+  ['zcode', 'manage'],
+  ['zcode', 'logout'],
 ] as const)('does not promote login-looking output to navigation for %s %s', async (cli, action) => {
   const f = await setup(false)
   await f.update(cli, action)
   await f.start()
-  await act(async () => { f.streams[0].push({ seq: 1, data: simulatedLoginPrompt }) })
+  await act(async () => {
+    f.streams[0].push({ seq: 1, data: simulatedLoginPrompt })
+  })
   expect(JSON.stringify(f.renderer.toJSON())).not.toContain('打开登录网页')
   expect(terminals[0].registerLinkProvider).not.toHaveBeenCalled()
   expect(window.open).not.toHaveBeenCalled()
@@ -547,39 +696,59 @@ it('does not navigate arbitrary terminal links or OSC hyperlinks', async () => {
   await f.update('zcode', 'login')
   await f.start()
   await act(async () => {
-    f.streams[0].push({ seq: 1, data: `https://example.invalid/login\r\n\u001b]8;;${simulatedLoginUrl}\u0007click\u001b]8;;\u0007\r\n` })
-    f.streams[0].push({ seq: 2, data: 'Open this URL to sign in:\r\nhttps://example.invalid/api/oauth/authorize\r\n' })
+    f.streams[0].push({
+      seq: 1,
+      data: `https://example.invalid/login\r\n\u001b]8;;${simulatedLoginUrl}\u0007click\u001b]8;;\u0007\r\n`,
+    })
+    f.streams[0].push({
+      seq: 2,
+      data: 'Open this URL to sign in:\r\nhttps://example.invalid/api/oauth/authorize\r\n',
+    })
   })
   terminals[0].options.linkHandler.activate({}, simulatedLoginUrl)
   expect(JSON.stringify(f.renderer.toJSON())).not.toContain('打开登录网页')
   expect(window.open).not.toHaveBeenCalled()
 })
 
-it.each(['close', 'closed', 'failed', 'change', 'retry', 'unmount'])('invalidates the native login link on %s, including a stale link callback', async (action) => {
-  const f = await setup(false)
-  await f.update('zcode', 'login')
-  await f.start()
-  await act(async () => { f.streams[0].push({ seq: 1, data: simulatedLoginPrompt }) })
-  const link = terminals[0].linkProvider
-  expect(window.open).toHaveBeenCalledOnce()
-  if (action === 'close') await f.close()
-  else if (action === 'change') {
-    await f.update('kimi', 'login')
-    await f.start('next-terminal', 1)
-  } else if (action === 'unmount') await f.unmount()
-  else {
-    await act(async () => { f.streams[0].push({ seq: 2, status: action === 'failed' ? 'failed' : 'closed', cleanupConfirmed: true }) })
-    if (action === 'retry') {
-      await f.click('重新打开终端')
-      await f.start('retry-terminal', 1)
+it.each(['close', 'closed', 'failed', 'change', 'retry', 'unmount'])(
+  'invalidates the native login link on %s, including a stale link callback',
+  async (action) => {
+    const f = await setup(false)
+    await f.update('zcode', 'login')
+    await f.start()
+    await act(async () => {
+      f.streams[0].push({ seq: 1, data: simulatedLoginPrompt })
+    })
+    const link = terminals[0].linkProvider
+    expect(window.open).toHaveBeenCalledOnce()
+    if (action === 'close') await f.close()
+    else if (action === 'change') {
+      await f.update('kimi', 'login')
+      await f.start('next-terminal', 1)
+    } else if (action === 'unmount') await f.unmount()
+    else {
+      await act(async () => {
+        f.streams[0].push({
+          seq: 2,
+          status: action === 'failed' ? 'failed' : 'closed',
+          cleanupConfirmed: true,
+        })
+      })
+      if (action === 'retry') {
+        await f.click('重新打开终端')
+        await f.start('retry-terminal', 1)
+      }
     }
-  }
-  await act(async () => { link.activate(simulatedLoginUrl) })
-  expect(link.currentUrl()).toBeUndefined()
-  expect(window.open).toHaveBeenCalledOnce()
-  if (action !== 'unmount') expect(JSON.stringify(f.renderer.toJSON())).not.toContain('打开登录网页')
-  if (['change', 'retry', 'unmount'].includes(action)) expect(terminals[0].linkDisposal).toHaveBeenCalledOnce()
-})
+    await act(async () => {
+      link.activate(simulatedLoginUrl)
+    })
+    expect(link.currentUrl()).toBeUndefined()
+    expect(window.open).toHaveBeenCalledOnce()
+    if (action !== 'unmount') expect(JSON.stringify(f.renderer.toJSON())).not.toContain('打开登录网页')
+    if (['change', 'retry', 'unmount'].includes(action))
+      expect(terminals[0].linkDisposal).toHaveBeenCalledOnce()
+  },
+)
 
 it('does not restore a login link from output arriving during a pending close', async () => {
   const f = await setup(false)
@@ -588,33 +757,112 @@ it('does not restore a login link from output arriving during a pending close', 
   const cleanup = deferred()
   f.accountStop.mockReturnValueOnce(cleanup.promise)
   await f.close()
-  await act(async () => { f.streams[0].push({ seq: 1, data: simulatedLoginPrompt }) })
+  await act(async () => {
+    f.streams[0].push({ seq: 1, data: simulatedLoginPrompt })
+  })
   expect(JSON.stringify(f.renderer.toJSON())).not.toContain('打开登录网页')
   expect(window.open).not.toHaveBeenCalled()
-  await act(async () => { cleanup.resolve(ok()) })
+  await act(async () => {
+    cleanup.resolve(ok())
+  })
 })
-it.each(['native', 'plugin'] as const)('starts only the explicit %s account source through the scoped API', async (source) => {
-  const fixture = await setup(false)
-  await fixture.update('omp', 'logout', source)
-  expect(fixture.accountStart).not.toHaveBeenCalled()
-  expect(fixture.accountStartForSource).toHaveBeenCalledExactlyOnceWith('parent', 'omp', 'logout', source, expect.any(AbortSignal))
-  await fixture.start()
-  expect(fixture.accountWrite).not.toHaveBeenCalled()
-  await fixture.close()
-  expect(fixture.accountStop).toHaveBeenCalledWith('parent', 'terminal-a')
+it.each(['bigmodel', 'zai'] as const)(
+  'starts only the explicit ZCode %s provider and preserves cleanup',
+  async (provider) => {
+    const f = await setup(false)
+    await f.update('zcode', 'login', undefined, provider)
+    expect(f.accountStartForProvider).toHaveBeenCalledExactlyOnceWith(
+      'parent',
+      'zcode',
+      'login',
+      provider,
+      expect.any(AbortSignal),
+    )
+    expect(f.accountStart).not.toHaveBeenCalled()
+    expect(f.accountStartForSource).not.toHaveBeenCalled()
+    await f.start()
+    expect(f.accountWrite).not.toHaveBeenCalled()
+    await f.close()
+    expect(f.accountStop).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a')
+  },
+)
+it('fails clearly instead of falling back to default login when the Host lacks provider selection', async () => {
+  const f = await setup(false)
+  delete (f.api.cliworker as any).accountStartForProvider
+  await f.update('zcode', 'login', undefined, 'bigmodel')
+  expect(f.accountStart).not.toHaveBeenCalled()
+  expect(f.accountStartForSource).not.toHaveBeenCalled()
+  expect(f.starts).toHaveLength(0)
+  expect(JSON.stringify(f.renderer.toJSON())).toContain('当前插件 Host 不支持 ZCode 授权来源选择')
 })
+it('cancels provider startup and reclaims a late terminal without changing its provider', async () => {
+  const f = await setup(false)
+  await f.update('zcode', 'login', undefined, 'bigmodel')
+  const signal = f.accountStartForProvider.mock.calls[0][4] as AbortSignal
+  await f.unmount()
+  expect(signal.aborted).toBe(true)
+  await f.start('late-bigmodel')
+  expect(f.accountStop).toHaveBeenCalledExactlyOnceWith('parent', 'late-bigmodel')
+  expect(f.accountWatch).not.toHaveBeenCalled()
+  expect(f.accountStart).not.toHaveBeenCalled()
+})
+it('keeps an unsupported BigModel capability failure visible and never retries another provider', async () => {
+  const f = await setup(false)
+  await f.update('zcode', 'login', undefined, 'bigmodel')
+  await act(async () => {
+    f.starts[0].reject(
+      new Error(
+        '当前 ZCode CLI 不支持智谱 BigModel 授权，请更新为支持 login bigmodel 的官方完整 CLI 后重试；不会改用 Z.AI 登录。',
+      ),
+    )
+  })
+  expect(JSON.stringify(f.renderer.toJSON())).toContain('不会改用 Z.AI 登录')
+  expect(f.accountStartForProvider).toHaveBeenCalledOnce()
+  expect(f.accountStart).not.toHaveBeenCalled()
+  expect(f.accountWatch).not.toHaveBeenCalled()
+})
+it.each(['native', 'plugin'] as const)(
+  'starts only the explicit %s account source through the scoped API',
+  async (source) => {
+    const fixture = await setup(false)
+    await fixture.update('omp', 'logout', source)
+    expect(fixture.accountStart).not.toHaveBeenCalled()
+    expect(fixture.accountStartForSource).toHaveBeenCalledExactlyOnceWith(
+      'parent',
+      'omp',
+      'logout',
+      source,
+      expect.any(AbortSignal),
+    )
+    await fixture.start()
+    expect(fixture.accountWrite).not.toHaveBeenCalled()
+    await fixture.close()
+    expect(fixture.accountStop).toHaveBeenCalledWith('parent', 'terminal-a')
+  },
+)
 it('aborts a source-specific start and cleans up its late terminal when the source changes', async () => {
   const fixture = await setup(false)
   await fixture.update('pi', 'logout', 'native')
   const signal = fixture.accountStartForSource.mock.calls[0][4] as AbortSignal
   await fixture.update('pi', 'logout', 'plugin')
   expect(signal.aborted).toBe(true)
-  expect(fixture.accountStartForSource).toHaveBeenNthCalledWith(2, 'parent', 'pi', 'logout', 'plugin', expect.any(AbortSignal))
+  expect(fixture.accountStartForSource).toHaveBeenNthCalledWith(
+    2,
+    'parent',
+    'pi',
+    'logout',
+    'plugin',
+    expect.any(AbortSignal),
+  )
   await fixture.start('late-native', 0)
   expect(fixture.accountStop).toHaveBeenCalledWith('parent', 'late-native')
   expect(fixture.accountWatch).not.toHaveBeenCalled()
   await fixture.start('current-plugin', 1)
-  expect(fixture.accountWatch).toHaveBeenCalledExactlyOnceWith('parent', 'current-plugin', expect.any(AbortSignal))
+  expect(fixture.accountWatch).toHaveBeenCalledExactlyOnceWith(
+    'parent',
+    'current-plugin',
+    expect.any(AbortSignal),
+  )
 })
 
 it('aborts an unmounted start and cleans up its late terminal id without opening a stream', async () => {
@@ -675,21 +923,24 @@ it('also disables input when the remote stream ends without a final status frame
   expect(fixture.accountWrite).not.toHaveBeenCalled()
 })
 
-it.each(['closed', 'failed'] as const)('closes an explicitly cleaned %s terminal after Host retention expires without another stop RPC', async (status) => {
-  vi.useFakeTimers()
-  const fixture = await setup()
-  await fixture.start()
-  await act(async () => {
-    fixture.streams[0].push({ seq: 1, status, cleanupConfirmed: true })
-    await vi.advanceTimersByTimeAsync(61_000)
-  })
-  fixture.accountStop.mockRejectedValue(new Error('synthetic expired terminal'))
-  await fixture.close()
-  await fixture.close()
-  await fixture.unmount()
-  expect(fixture.accountStop).not.toHaveBeenCalled()
-  expect(fixture.onClose).toHaveBeenCalledTimes(2)
-})
+it.each(['closed', 'failed'] as const)(
+  'closes an explicitly cleaned %s terminal after Host retention expires without another stop RPC',
+  async (status) => {
+    vi.useFakeTimers()
+    const fixture = await setup()
+    await fixture.start()
+    await act(async () => {
+      fixture.streams[0].push({ seq: 1, status, cleanupConfirmed: true })
+      await vi.advanceTimersByTimeAsync(61_000)
+    })
+    fixture.accountStop.mockRejectedValue(new Error('synthetic expired terminal'))
+    await fixture.close()
+    await fixture.close()
+    await fixture.unmount()
+    expect(fixture.accountStop).not.toHaveBeenCalled()
+    expect(fixture.onClose).toHaveBeenCalledTimes(2)
+  },
+)
 
 it('keeps an unconfirmed failed terminal retryable until stop succeeds', async () => {
   const fixture = await setup()
@@ -834,8 +1085,13 @@ it('uses one close operation for modal and terminal controls and retries the sam
   expect(await closed).toBe(false)
   expect(f.onClose).not.toHaveBeenCalled()
   expect(f.accountStart).toHaveBeenCalledOnce()
-  await act(async () => { expect(await f.closeControl.current!()).toBe(true) })
-  expect(f.accountStop.mock.calls).toEqual([['parent', 'terminal-a'], ['parent', 'terminal-a']])
+  await act(async () => {
+    expect(await f.closeControl.current!()).toBe(true)
+  })
+  expect(f.accountStop.mock.calls).toEqual([
+    ['parent', 'terminal-a'],
+    ['parent', 'terminal-a'],
+  ])
   expect(f.onClose).toHaveBeenCalledOnce()
 })
 

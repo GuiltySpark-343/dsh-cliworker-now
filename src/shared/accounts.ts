@@ -2,6 +2,8 @@ import type { CliId } from './types.ts'
 
 export type AccountAction = 'login' | 'logout' | 'manage'
 export type AccountSource = 'native' | 'plugin'
+/** Explicit ZCode native login provider; unrelated to logout storage sources. */
+export type ZCodeLoginProvider = 'bigmodel' | 'zai'
 export interface AccountActionDescriptor {
   id: AccountAction
   label: string

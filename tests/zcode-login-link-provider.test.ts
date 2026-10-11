@@ -51,6 +51,24 @@ function links(provider: ILinkProvider, row = 1): ILink[] | undefined {
 }
 
 describe('approved ZCode URL xterm link provider', () => {
+  it.each([40, 80, 500])('keeps a provider-approved BigModel URL clickable across soft wrapping at width %s', (columns) => {
+    const bigmodel = 'https://bigmodel.cn/login?appId=SYNTHETIC&redirect=https%3A%2F%2Fexample.invalid%2Fcallback&state=SYNTHETIC'
+    const f = fixture(bigmodel, columns)
+    f.current(bigmodel)
+    for (let row = 1; row <= f.rows.length; row++) {
+      const found = links(f.provider, row)!
+      expect(found).toHaveLength(1)
+      expect(found[0]!.text).toBe(bigmodel)
+      expect(found[0]!.range).toEqual({
+        start: { x: 1, y: 1 },
+        end: { x: ((bigmodel.length - 1) % columns) + 1, y: Math.ceil(bigmodel.length / columns) },
+      })
+    }
+    links(f.provider)![0]!.activate({} as MouseEvent, 'untrusted callback text')
+    expect(f.open).toHaveBeenCalledExactlyOnceWith(bigmodel)
+    f.current(undefined)
+    expect(links(f.provider)).toBeUndefined()
+  })
   it.each([40, 80, 100, 500])(
     'makes the complete original URL clickable on every soft-wrapped row at width %s',
     (columns) => {

@@ -71,3 +71,25 @@ Antigravity 1.3.3 将 Windows OAuth 保存在交互式用户的 Credential Manag
 - 扩展 CLI 模型查询仅返回模型值；成功且捕获的进程范围确认退出后，删除该次独有的 `catalog/<cli>/query-*` 目录及其中原生解压缓存。失败、取消或进程清理未确认时保留现场，不删除原生账号、共享续期目录或其他查询目录，避免 Windows OMP 每次成功刷新累积约 121 MB。
 - OpenCode 的登录继续使用共享嵌入式终端，查询进程采用隐藏窗口的 Windows 原生启动；修复应覆盖插件自有 launcher，保持 argv、stdio、ConPTY 和受管进程范围。先记录控制台窗口 PID 与父链确认来源，不屏蔽正常授权浏览器。
 - 验收记录实际 Windows 返回模型/effort、首次检测状态、窗口出现情况及冷/热耗时；性能结论只描述实测插件前置变化，不承诺模型服务响应速度。不新增模型调用。
+
+
+## ZCode 授权来源与设置页闪窗追加修复（2026-10-11）
+
+- 用户最新要求替代上轮“保持官方默认”：两平台共用 ZCode 授权来源选择，Host 验证严格枚举及 CLI 当前原生能力。先核对本机安装源码和官方契约，再映射真实 argv；某构建缺少 BigModel 时不得以 Z.AI 登录冒充成功。授权、凭据保存及账号路由继续由 ZCode 原生实现负责。
+- 选择仅影响明确发起的登录，不后台切换账号、改写 Desktop 凭据或伪造服务端授权；取消/不支持输入不得启动登录。已有账号、项目模型偏好及会话不自动迁移。
+- 窗口复现覆盖设置页全部 CLI 状态查询，而非仅 OpenCode。观察新增、复用窗口的 show/foreground 事件及进程创建父链，以定位闪窗来源；只记录窗口类、PID、程序名和时间，不采集命令中的授权信息、窗口正文或用户凭据。
+- Windows 隐藏窗口贯穿插件自有启动器及嵌套查询启动，必要平台差异封装于 Host；保留嵌入式 ConPTY、stdio、取消和后代清理，不修改 Harness 核心、不隐藏正常浏览器授权。实际 Desktop 首次打开、关闭重开、刷新和登录回归后再交付。
+
+- 实机原生契约：Windows Desktop 内置 0.16.9 只声明 Z.AI 顶层登录；版本号相同的官方完整源码构建声明 `login [zai|bigmodel]`。能力以 help 为准而非版本号。已核验源码树的通用 JS 与对应 Windows native 依赖单独部署到 managed runtime，保留 Desktop 与现有凭据；两平台优先级统一为显式配置、已部署 managed、原生默认入口。
+- 官方设备流程实际返回 BigModel `https://bigmodel.cn/login`（appId/redirect/state）与 Z.AI `https://chat.z.ai/api/oauth/authorize`（client_id/redirect_uri/state/response_type）。共享终端只接受当前所选地区的固定端点与完整唯一参数，原始网址只在内存中传递给宿主，不重写或保存参数值。
+
+## Windows Electron 后台 GUI bootstrap
+
+- 单独给嵌套 `spawn` 增加 `windowsHide` 不足以约束 SDK 直接启动的原生控制台目标；继承数字 stdio 描述符还会使当前 Windows/libuv 路径只设置 `SW_HIDE`，未启用 `CREATE_NO_WINDOW`，实际设置页仍会闪出终端。`nativeProcessBackend` 在完成原生入口和 argv 规范化后，仅为 Windows Electron 中不是当前运行时的后台 `spawn` 增加 `windows-hidden-launch.mjs`；SDK 首先启动 GUI 子系统的当前 Electron 可执行文件并设置其 Node 模式，固定 helper 再经 `spawnNativeProcess` 以 `windowsHide: true`、`detached: false`、三个新建标准管道和原始参数数组启动真实 CLI。无 shell 任务拼接，也不修改 Harness 或 SDK。
+- 当前 Electron 运行时路径按 Windows 规范化及不区分大小写比较，已有 Node helper 不重复包装。插件自有 private/account/terminal/model bridge 等嵌套启动统一经过 `native-spawn.mjs`；Windows 普通后台 `private-launch` 也改用管道转发。macOS 保留原有标准流继承及 PTY 行为，Node 在 POSIX 忽略 `windowsHide`；`spawnTerminal` 不进入新的后台 bootstrap，Windows 账号 ConPTY 预先展开 `private-launch` 后保留原始 TTY 句柄，不套用普通后台转发，尺寸与清理路径不变。
+- `forwardNativeStdio` 以 Node 流转发原始字节及背压，不进行文本解码重编码。输入 EOF 结束原生 stdin；原生输入关闭或父进程退出时停止上游输入，预期 EPIPE 不误报。stdout/stderr 分别转发且不主动结束 wrapper 的标准输出；其余流错误终止原生子进程并将 wrapper 标为失败。即使原生父进程先退出，受管后代仍持有的输出管道继续转发至关闭。
+- SDK 仍拥有同一 Job 中的 bootstrap 与原生后代。外层保留 SDK 的 `stdin`、`stdout`、`stderr`、输出收集对象及 `waitForExit` 接口；`terminate` 和取消继续转交 SDK。原生父进程的 `done` 结果与进程范围的 `waitForExit` 分开，收到父进程退出回执不代表后代已退出，不以 helper 的退出状态替代范围清理确认。
+- 使用 Harness 0.2.0-rc.2 的独立 `control: 'pipe'` 契约和 fd 7 传递一次原生退出回执，最大 1 KiB。helper 在原生 `exit` 时发送回执，不等待全部继承输出管道关闭；Host 竞争等待回执与外层退出，外层先退出时等待最终控制数据最多 1 秒。退出码保留 Windows 原生整数范围，信号单独验证；启动错误仅传固定分类。回执不经过原生 CLI 的 stdout/stderr，不参与账号或会话协议。缺失、格式错误、过大回执或等待期间检测到的异常 bootstrap 退出触发 SDK 清理并报错；已返回的原生结果不冒充随后整个范围的退出结果。取消保留 SDK 返回的退出事实。调用方已占用控制通道时直接拒绝，避免抢占协议或退回可见窗口启动。
+- `ELECTRON_RUN_AS_NODE` 的临时值只服务于 GUI bootstrap，真实 CLI 恢复调用方原有值或显式删除语义；helper 移除自己的 `DSH_SUBPROCESS_CONTROL` 标记且不把 fd 7 传给原生 CLI。标准环境、工作目录与原始 argv 继续沿用原生调用，不记录凭据或授权 URL。
+- ZCode 的 `executableFor` 在两平台共用显式配置优先、已部署 managed 次之、平台原生默认最后的顺序。managed 入口不存在时继续原生查找，已存在但不可读或不是普通文件时由现有入口校验拒绝；不借选择登录地区偷偷改写 executable 配置。Windows 完整 runtime 的通用官方构建和精确版本本机依赖单独部署，原始 Desktop 安装、原生账号目录和已有项目偏好保持原位。
+- 验收分层记录模拟控制回执/真实子进程字节流、Windows 包加载及原生 helper 行为、实际 Desktop 窗口事件与父链；仅某一层通过不能代替全部设置页和账号终端的实际验收。

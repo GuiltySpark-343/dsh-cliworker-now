@@ -9,20 +9,27 @@ import { CLI_IDS, CLI_LABELS, type CliId } from '../src/shared/types.ts'
 // Explicit simulation: no CLI, login flow or native portal is started in these tests.
 const terminal = vi.hoisted(() => ({ started: vi.fn(), stopped: vi.fn(), close: vi.fn(async () => true) }))
 vi.mock('../src/client/account-terminal.tsx', () => ({
-  AccountTerminal: ({ cli, action, source, onClose, onFinished, closeControl }: any) => {
+  AccountTerminal: ({ cli, action, source, provider, onClose, onFinished, closeControl }: any) => {
     useEffect(() => {
       closeControl.current = async () => {
         if (!(await terminal.close())) return false
         onClose()
         return true
       }
-      return () => { closeControl.current = undefined }
+      return () => {
+        closeControl.current = undefined
+      }
     })
     useEffect(() => {
-      if (source) terminal.started(cli, action, source)
+      if (provider) terminal.started(cli, action, { provider })
+      else if (source) terminal.started(cli, action, source)
       else terminal.started(cli, action)
-      return () => { if (source) terminal.stopped(cli, action, source); else terminal.stopped(cli, action) }
-    }, [cli, action, source])
+      return () => {
+        if (provider) terminal.stopped(cli, action, { provider })
+        else if (source) terminal.stopped(cli, action, source)
+        else terminal.stopped(cli, action)
+      }
+    }, [cli, action, source, provider])
     return createElement(
       'div',
       { 'data-terminal': cli },
@@ -111,7 +118,11 @@ const accountActions: AccountStatus['actions'] = [
   { id: 'logout', label: '退出登录', description: '模拟退出能力说明' },
   { id: 'manage', label: '账号终端', description: '模拟管理能力说明' },
 ]
-async function setup(overrides: Record<string, any> = {}, openNativeSettings?: () => void, initialCli: CliId = 'antigravity') {
+async function setup(
+  overrides: Record<string, any> = {},
+  openNativeSettings?: () => void,
+  initialCli: CliId = 'antigravity',
+) {
   const catalogForCli = vi.fn(async (_session, cli: CliId) => catalog(cli))
   const accountStatus = vi.fn(async (_session, cli: CliId) => status(cli))
   const configure = vi.fn().mockResolvedValue(remote({}))
@@ -181,7 +192,9 @@ it('starts the selected CLI first and bounds background account discovery', asyn
   expect(t.button('MiMo 设置').findByProps({ role: 'img', 'aria-label': '正在检查连接' })).toBeDefined()
   await t.click('关闭设置')
   for (const call of accountStatus.mock.calls) expect(call[2].aborted).toBe(true)
-  await act(async () => { for (const [id, read] of reads) read.resolve(status(id)) })
+  await act(async () => {
+    for (const [id, read] of reads) read.resolve(status(id))
+  })
   expect(accountStatus).toHaveBeenCalledTimes(2)
 })
 
@@ -209,7 +222,8 @@ it('promotes a newly selected pending CLI after an in-flight read settles withou
 })
 
 it('rechecks a CLI re-enabled before its cancelled request settles and ignores the old result', async () => {
-  const old = deferred(), fresh = deferred()
+  const old = deferred(),
+    fresh = deferred()
   let mimoReads = 0
   const accountStatus = vi.fn((_parent, cli: CliId) => {
     if (cli !== 'mimo') return Promise.resolve(status(cli))
@@ -222,15 +236,27 @@ it('rechecks a CLI re-enabled before its cancelled request settles and ignores t
   expect(t.button('MiMo 设置').props['data-enabled']).toBe(true)
   expect(mimoReads).toBe(1)
   expect(t.button('MiMo 设置').findByProps({ role: 'img', 'aria-label': '正在检查连接' })).toBeDefined()
-  await act(async () => old.resolve(status('mimo', {
-    state: 'authenticated', accountLabel: 'old-mimo-fixture@example.invalid', actions: accountActions,
-  })))
+  await act(async () =>
+    old.resolve(
+      status('mimo', {
+        state: 'authenticated',
+        accountLabel: 'old-mimo-fixture@example.invalid',
+        actions: accountActions,
+      }),
+    ),
+  )
   expect(mimoReads).toBe(2)
   expect(t.text()).not.toContain('old-mimo-fixture@example.invalid')
   expect(t.button('MiMo 设置').findByProps({ role: 'img', 'aria-label': '正在检查连接' })).toBeDefined()
-  await act(async () => fresh.resolve(status('mimo', {
-    state: 'authenticated', accountLabel: 'fresh-mimo-fixture@example.invalid', actions: accountActions,
-  })))
+  await act(async () =>
+    fresh.resolve(
+      status('mimo', {
+        state: 'authenticated',
+        accountLabel: 'fresh-mimo-fixture@example.invalid',
+        actions: accountActions,
+      }),
+    ),
+  )
   expect(t.text()).toContain('fresh-mimo-fixture@example.invalid')
   expect(t.button('MiMo 设置').findAllByProps({ role: 'img', 'aria-label': '正在检查连接' })).toHaveLength(0)
   expect(mimoReads).toBe(2)
@@ -471,14 +497,65 @@ it('offers logout alongside an authenticated account and dispatches only logout 
   expect(terminal.stopped).toHaveBeenCalledExactlyOnceWith('antigravity', 'logout')
   expect(terminal.started).toHaveBeenCalledTimes(1)
 })
-const scopedLogoutActions: AccountStatus['actions'] = [{
-  id: 'logout', label: '退出登录', description: '模拟：只退出所选原生来源',
-  sources: [{ id: 'native', label: 'CLI 全局账号' }, { id: 'plugin', label: '插件账号' }],
-}]
+const scopedLogoutActions: AccountStatus['actions'] = [
+  {
+    id: 'logout',
+    label: '退出登录',
+    description: '模拟：只退出所选原生来源',
+    sources: [
+      { id: 'native', label: 'CLI 全局账号' },
+      { id: 'plugin', label: '插件账号' },
+    ],
+  },
+]
+it.each([
+  ['bigmodel', '中国智谱 BigModel'],
+  ['zai', '海外 Z.AI'],
+] as const)(
+  'starts ZCode login only after the explicit %s choice and resets it on reopen',
+  async (provider, label) => {
+    const t = await setup(
+      { accountStatus: accountFixture({ state: 'authenticated', actions: accountActions }, 'zcode') },
+      undefined,
+      'zcode',
+    )
+    expect(terminal.started).not.toHaveBeenCalled()
+    await t.click('登录 / 切换账号')
+    expect(t.r.root.findByProps({ 'aria-label': '选择 ZCode 授权来源' })).toBeDefined()
+    expect(terminal.started).not.toHaveBeenCalled()
+    await t.click(label)
+    expect(terminal.started).toHaveBeenCalledExactlyOnceWith('zcode', 'login', { provider })
+    expect(t.configure).not.toHaveBeenCalled()
+    await t.click('关闭账号操作')
+    expect(terminal.stopped).toHaveBeenCalledExactlyOnceWith('zcode', 'login', { provider })
+    await t.click('登录 / 切换账号')
+    expect(t.r.root.findByProps({ 'aria-label': '选择 ZCode 授权来源' })).toBeDefined()
+    expect(terminal.started).toHaveBeenCalledTimes(1)
+  },
+)
+it('cancels the ZCode provider chooser without a login process and never selects a provider for manage/logout', async () => {
+  const t = await setup(
+    { accountStatus: accountFixture({ state: 'authenticated', actions: accountActions }, 'zcode') },
+    undefined,
+    'zcode',
+  )
+  await t.click('登录 / 切换账号')
+  await t.click('关闭账号操作')
+  expect(terminal.started).not.toHaveBeenCalled()
+  expect(terminal.stopped).not.toHaveBeenCalled()
+  await t.click('账号终端')
+  expect(terminal.started).toHaveBeenCalledExactlyOnceWith('zcode', 'manage')
+  await t.click('关闭账号操作')
+  await t.click('退出登录')
+  expect(terminal.started).toHaveBeenLastCalledWith('zcode', 'logout')
+  expect(t.configure).not.toHaveBeenCalled()
+})
 it.each(['native', 'plugin'] as const)(
   'waits for an explicit %s logout source choice before mounting the native terminal',
   async (source) => {
-    const t = await setup({ accountStatus: accountFixture({ state: 'authenticated', actions: scopedLogoutActions }) })
+    const t = await setup({
+      accountStatus: accountFixture({ state: 'authenticated', actions: scopedLogoutActions }),
+    })
     await t.click('退出登录')
     expect(t.r.root.findByProps({ 'aria-label': '选择退出账号来源' })).toBeDefined()
     expect(terminal.started).not.toHaveBeenCalled()
@@ -488,7 +565,9 @@ it.each(['native', 'plugin'] as const)(
   },
 )
 it('cancels a logout source picker without starting or stopping an account terminal', async () => {
-  const t = await setup({ accountStatus: accountFixture({ state: 'authenticated', actions: scopedLogoutActions }) })
+  const t = await setup({
+    accountStatus: accountFixture({ state: 'authenticated', actions: scopedLogoutActions }),
+  })
   await t.click('退出登录')
   await t.click('关闭账号操作')
   expect(terminal.started).not.toHaveBeenCalled()
@@ -498,19 +577,27 @@ it('cancels a logout source picker without starting or stopping an account termi
   expect(t.r.root.findByProps({ 'aria-label': '选择退出账号来源' })).toBeDefined()
   expect(terminal.started).not.toHaveBeenCalled()
 })
-it.each(['native', 'plugin'] as const)('passes the only advertised %s logout source directly', async (source) => {
-  const t = await setup({ accountStatus: accountFixture({
-    state: 'authenticated', actions: [{ ...scopedLogoutActions[0]!, sources: [{ id: source, label: '模拟自身账号' }] }],
-  }) })
-  await t.click('退出登录')
-  expect(t.r.root.findAllByProps({ 'aria-label': '选择退出账号来源' })).toHaveLength(0)
-  expect(terminal.started).toHaveBeenCalledExactlyOnceWith('antigravity', 'logout', source)
-})
+it.each(['native', 'plugin'] as const)(
+  'passes the only advertised %s logout source directly',
+  async (source) => {
+    const t = await setup({
+      accountStatus: accountFixture({
+        state: 'authenticated',
+        actions: [{ ...scopedLogoutActions[0]!, sources: [{ id: source, label: '模拟自身账号' }] }],
+      }),
+    })
+    await t.click('退出登录')
+    expect(t.r.root.findAllByProps({ 'aria-label': '选择退出账号来源' })).toHaveLength(0)
+    expect(terminal.started).toHaveBeenCalledExactlyOnceWith('antigravity', 'logout', source)
+  },
+)
 it('does not fall back to an unscoped logout for an unknown source descriptor', async () => {
-  const t = await setup({ accountStatus: accountFixture({
-    state: 'authenticated',
-    actions: [{ ...scopedLogoutActions[0]!, sources: [{ id: 'other-cli', label: '模拟无效来源' }] as any }],
-  }) })
+  const t = await setup({
+    accountStatus: accountFixture({
+      state: 'authenticated',
+      actions: [{ ...scopedLogoutActions[0]!, sources: [{ id: 'other-cli', label: '模拟无效来源' }] as any }],
+    }),
+  })
   await t.click('退出登录')
   expect(t.text()).toContain('账号来源不可用')
   expect(terminal.started).not.toHaveBeenCalled()
@@ -1115,8 +1202,8 @@ function accountSummary(renderer: ReactTestRenderer) {
 function visibleText(node: ReturnType<typeof accountSummary>): string {
   return node.children.map((child) => (typeof child === 'string' ? child : visibleText(child))).join(' ')
 }
-function accountFixture(changes: Partial<AccountStatus>) {
-  return vi.fn(async (_parent, cli: CliId) => status(cli, cli === 'antigravity' ? changes : {}))
+function accountFixture(changes: Partial<AccountStatus>, selected: CliId = 'antigravity') {
+  return vi.fn(async (_parent, cli: CliId) => status(cli, cli === selected ? changes : {}))
 }
 
 it.each(['unconfigured', 'unauthenticated', 'unavailable', 'unknown', 'configured'] as const)(
@@ -1252,11 +1339,13 @@ it.each(['omp', 'pi', 'hermes', 'opencode'] as const)(
   'shows %s own provider API authentication consistently in the account row and navigation',
   async (cli) => {
     const t = await setup({
-      accountStatus: vi.fn(async (_parent, id: CliId) => status(id, {
-        state: 'authenticated',
-        verification: 'local',
-        logins: [{ providerLabel: 'zai.cn', authMethod: 'api', accountLabel: 'SYNTHETIC_SECRET' }],
-      })),
+      accountStatus: vi.fn(async (_parent, id: CliId) =>
+        status(id, {
+          state: 'authenticated',
+          verification: 'local',
+          logins: [{ providerLabel: 'zai.cn', authMethod: 'api', accountLabel: 'SYNTHETIC_SECRET' }],
+        }),
+      ),
     })
     await t.click(`${CLI_LABELS[cli]} 设置`)
     const summary = accountSummary(t.r)
@@ -1289,7 +1378,9 @@ it('shows only deduplicated OAuth providers while retaining all safe authenticat
   const line = summary.findByProps({ className: 'cwn-account-logins' })
   expect(visibleText(line)).toBe(label)
   expect(line.props['aria-label']).toBe(label)
-  expect(line.props.title).toBe('OpenAI账号登录 fixture@example.invalid · zai.cn API 登录 · OpenAI API 登录 · OpenAI账号登录 second@example.invalid · Nous账号登录')
+  expect(line.props.title).toBe(
+    'OpenAI账号登录 fixture@example.invalid · zai.cn API 登录 · OpenAI API 登录 · OpenAI账号登录 second@example.invalid · Nous账号登录',
+  )
   expect(t.button('Antigravity 设置').findByProps({ role: 'img' }).props['aria-label']).toBe(label)
   expect(t.text()).not.toContain('SYNTHETIC_API_SECRET')
   expect(summary.findAllByProps({ className: 'cwn-account-label' })).toHaveLength(0)
@@ -1312,28 +1403,34 @@ it('keeps each API-only provider visible while removing duplicate authentication
 })
 it('keeps the current Kimi account identity visibly separate from its legacy login summary', async () => {
   const t = await setup({
-    accountStatus: vi.fn(async (_parent, cli: CliId) => status(cli, {
-      state: 'authenticated',
-      authMethod: 'oauth',
-      accountLabel: 'fixture-kimi@example.invalid',
-      actions: accountActions,
-    })),
+    accountStatus: vi.fn(async (_parent, cli: CliId) =>
+      status(cli, {
+        state: 'authenticated',
+        authMethod: 'oauth',
+        accountLabel: 'fixture-kimi@example.invalid',
+        actions: accountActions,
+      }),
+    ),
   })
   await t.click('Kimi 设置')
   const summary = accountSummary(t.r)
   expect(visibleText(summary)).toContain('已登录')
-  expect(visibleText(summary.findByProps({ className: 'cwn-account-label' }))).toBe('fixture-kimi@example.invalid')
+  expect(visibleText(summary.findByProps({ className: 'cwn-account-label' }))).toBe(
+    'fixture-kimi@example.invalid',
+  )
   expect(summary.findAllByProps({ className: 'cwn-account-logins' })).toHaveLength(0)
 })
 it.each(['omp', 'pi', 'hermes'] as const)(
   'starts only the advertised %s logout action from the shared logout button after an explicit click',
   async (cli) => {
     const t = await setup({
-      accountStatus: vi.fn(async (_parent, id: CliId) => status(id, {
-        state: 'authenticated',
-        logins: [{ providerLabel: 'OpenAI', authMethod: 'oauth' }],
-        actions: accountActions,
-      })),
+      accountStatus: vi.fn(async (_parent, id: CliId) =>
+        status(id, {
+          state: 'authenticated',
+          logins: [{ providerLabel: 'OpenAI', authMethod: 'oauth' }],
+          actions: accountActions,
+        }),
+      ),
     })
     await t.click(`${CLI_LABELS[cli]} 设置`)
     const logout = t.button('退出登录')
@@ -1352,18 +1449,21 @@ it.each([
   { identity: 'Bearer SYNTHETIC_SECRET', visible: false },
   { identity: '<fixture@example.invalid>', visible: false },
   { identity: 'fixture\n@example.invalid', visible: false },
-] as const)('keeps a safe OAuth email only in provider login details: $identity', async ({ identity, visible }) => {
-  const t = await setup({
-    accountStatus: accountFixture({
-      state: 'authenticated',
-      logins: [{ providerLabel: 'Nous', authMethod: 'oauth', accountLabel: identity }],
-    }),
-  })
-  const line = accountSummary(t.r).findByProps({ className: 'cwn-account-logins' })
-  expect(visibleText(line)).toBe('Nous账号登录')
-  expect(line.props.title).toBe(`Nous账号登录${visible ? ` ${identity}` : ''}`)
-  if (!visible) expect(t.text()).not.toContain(identity)
-})
+] as const)(
+  'keeps a safe OAuth email only in provider login details: $identity',
+  async ({ identity, visible }) => {
+    const t = await setup({
+      accountStatus: accountFixture({
+        state: 'authenticated',
+        logins: [{ providerLabel: 'Nous', authMethod: 'oauth', accountLabel: identity }],
+      }),
+    })
+    const line = accountSummary(t.r).findByProps({ className: 'cwn-account-logins' })
+    expect(visibleText(line)).toBe('Nous账号登录')
+    expect(line.props.title).toBe(`Nous账号登录${visible ? ` ${identity}` : ''}`)
+    if (!visible) expect(t.text()).not.toContain(identity)
+  },
+)
 it('does not render malformed provider projections or credential-shaped provider names', async () => {
   const t = await setup({
     accountStatus: accountFixture({
@@ -1384,7 +1484,9 @@ it('does not fall back to a legacy identity when all provider login projections 
     accountStatus: accountFixture({
       state: 'authenticated',
       accountLabel: 'SYNTHETIC_LEGACY_SECRET',
-      logins: [{ providerLabel: 'sk-SYNTHETIC_KEY', authMethod: 'api', accountLabel: 'SYNTHETIC_API_SECRET' }],
+      logins: [
+        { providerLabel: 'sk-SYNTHETIC_KEY', authMethod: 'api', accountLabel: 'SYNTHETIC_API_SECRET' },
+      ],
     }),
   })
   expect(visibleText(accountSummary(t.r))).toContain('已登录')
@@ -1397,10 +1499,14 @@ it.each(['configured', 'unknown', 'unconfigured', 'unauthenticated', 'unavailabl
       accountStatus: accountFixture({
         state,
         summary: `模拟：${state}`,
-        logins: [{ providerLabel: 'STALE_PROVIDER', authMethod: 'oauth', accountLabel: 'stale@example.invalid' }],
+        logins: [
+          { providerLabel: 'STALE_PROVIDER', authMethod: 'oauth', accountLabel: 'stale@example.invalid' },
+        ],
       }),
     })
-    expect(t.button('Antigravity 设置').findByProps({ className: 'cwn-connection-dot' }).props['data-state']).not.toBe('connected')
+    expect(
+      t.button('Antigravity 设置').findByProps({ className: 'cwn-connection-dot' }).props['data-state'],
+    ).not.toBe('connected')
     expect(t.text()).not.toMatch(/STALE_PROVIDER|stale@example.invalid/)
   },
 )
@@ -1422,14 +1528,18 @@ it('preserves provider logins through a failed model refresh and removes them wh
   expect(t.button('保存默认值').props.disabled).toBe(true)
   await act(async () => models.reject(new Error('模拟：当前账号目录不可用')))
   expect(visibleText(accountSummary(t.r))).toContain(label)
-  expect(t.button('Antigravity 设置').findByProps({ className: 'cwn-connection-dot' }).props['data-state']).toBe('connected')
+  expect(
+    t.button('Antigravity 设置').findByProps({ className: 'cwn-connection-dot' }).props['data-state'],
+  ).toBe('connected')
   const account = deferred()
   accountStatus.mockReturnValueOnce(account.promise)
   await t.click('刷新状态')
   expect(visibleText(accountSummary(t.r))).toContain(label)
   await act(async () => account.reject(new Error('模拟：账号读取失败')))
   expect(t.text()).not.toMatch(/OpenAI账号登录|zai.cn API 登录/)
-  expect(t.button('Antigravity 设置').findByProps({ className: 'cwn-connection-dot' }).props['data-state']).toBe('failed')
+  expect(
+    t.button('Antigravity 设置').findByProps({ className: 'cwn-connection-dot' }).props['data-state'],
+  ).toBe('failed')
   expect(t.configure).not.toHaveBeenCalled()
 })
 it('shows only the login state when the authenticated CLI has no account identity', async () => {
@@ -1479,16 +1589,18 @@ it.each(CLI_IDS)(
   },
 )
 it('opens the native Kimi account manager with its explicit action label without logging out', async () => {
-  const accountStatus = vi.fn(async (_parent, cli: CliId) => status(cli, {
-    state: 'authenticated',
-    authMethod: 'oauth',
-    verification: 'local',
-    actions: [
-      { id: 'login', label: '管理登录', description: '模拟：由用户在原生终端管理登录' },
-      { id: 'logout', label: '退出登录', description: '模拟退出' },
-      { id: 'manage', label: '账号终端', description: '模拟账号终端' },
-    ],
-  }))
+  const accountStatus = vi.fn(async (_parent, cli: CliId) =>
+    status(cli, {
+      state: 'authenticated',
+      authMethod: 'oauth',
+      verification: 'local',
+      actions: [
+        { id: 'login', label: '管理登录', description: '模拟：由用户在原生终端管理登录' },
+        { id: 'logout', label: '退出登录', description: '模拟退出' },
+        { id: 'manage', label: '账号终端', description: '模拟账号终端' },
+      ],
+    }),
+  )
   const t = await setup({ accountStatus })
   await t.click('Kimi 设置')
   expect(t.button('管理登录').children).toContain('管理登录')

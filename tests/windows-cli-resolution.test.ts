@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { SubprocessExecutableNotFoundError } from '@deepseek-ai/dsh-subprocess'
 import { DEFAULT_CONFIG, ProcessCleanupUnconfirmedError, type ProcessBackend } from '../src/host/process.ts'
 import { executableFor, resolveCliExecutable } from '../src/host/adapters.ts'
 import { findWindowsCodexAppx } from '../src/host/windows-cli-installation.ts'
+import { managedZCodeEntry } from '../src/host/zcode-adapter.ts'
 
 const state = vi.hoisted(() => ({ home: '' }))
 vi.mock('node:os', async (actual) => ({
@@ -25,6 +26,7 @@ beforeEach(() => {
   state.home = mkdtempSync(join(tmpdir(), 'synthetic-windows-resolution-'))
   vi.stubEnv('APPDATA', join(state.home, 'Roaming'))
   vi.stubEnv('LOCALAPPDATA', join(state.home, 'Local'))
+  vi.stubEnv('ProgramFiles', join(state.home, 'Programs'))
   Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
   appx.mockReset()
 })
@@ -43,6 +45,46 @@ function backend(resolve: (entry: string) => Promise<string>): ProcessBackend {
 }
 
 describe('Windows default executable fallback without changing other platforms', () => {
+  it.each(['win32', 'darwin'] as const)('prefers a deployed managed ZCode runtime on %s while preserving explicit custom paths', async (target) => {
+    Object.defineProperty(process, 'platform', { ...platform, value: target })
+    const managed = managedZCodeEntry(),
+      bundled = join(state.home, 'Local/Programs/ZCode/resources/glm/zcode.cjs')
+    for (const entry of [managed, bundled]) {
+      mkdirSync(dirname(entry), { recursive: true })
+      writeFileSync(entry, '// Synthetic installation entry; never executed.\n')
+    }
+    const lookup = backend(async (entry) => entry)
+    expect(executableFor('zcode', DEFAULT_CONFIG)).toBe(managed)
+    expect(executableFor('zcode', { ...DEFAULT_CONFIG, zcodeExecutable: 'zcode' })).toBe(managed)
+    await expect(resolveCliExecutable('zcode', lookup, DEFAULT_CONFIG)).resolves.toBe(managed)
+    expect(lookup.resolveExecutable).not.toHaveBeenCalled()
+    const custom = join(state.home, 'custom/zcode.cjs')
+    expect(executableFor('zcode', { ...DEFAULT_CONFIG, zcodeExecutable: custom })).toBe(custom)
+    const missing = new SubprocessExecutableNotFoundError('synthetic missing explicit ZCode')
+    await expect(resolveCliExecutable('zcode', backend(async () => { throw missing }), {
+      ...DEFAULT_CONFIG, zcodeExecutable: custom,
+    })).rejects.toBe(missing)
+  })
+  it('falls back to the Windows Desktop bundle or PATH only when managed ZCode is absent', async () => {
+    const bundled = join(state.home, 'Local/Programs/ZCode/resources/glm/zcode.cjs')
+    mkdirSync(dirname(bundled), { recursive: true })
+    writeFileSync(bundled, '// Synthetic bundled CLI; never executed.\n')
+    expect(executableFor('zcode', DEFAULT_CONFIG)).toBe(bundled)
+    await expect(resolveCliExecutable('zcode', backend(async (entry) => entry), DEFAULT_CONFIG)).resolves.toBe(bundled)
+    rmSync(bundled)
+    expect(executableFor('zcode', DEFAULT_CONFIG)).toBe('zcode')
+    const missing = new SubprocessExecutableNotFoundError('synthetic no native ZCode installation')
+    await expect(resolveCliExecutable('zcode', backend(async () => { throw missing }), DEFAULT_CONFIG)).rejects.toBe(missing)
+  })
+  it('rejects a broken managed ZCode installation instead of silently switching runtimes', async () => {
+    const managed = managedZCodeEntry(),
+      bundled = join(state.home, 'Local/Programs/ZCode/resources/glm/zcode.cjs')
+    mkdirSync(managed, { recursive: true })
+    mkdirSync(dirname(bundled), { recursive: true })
+    writeFileSync(bundled, '// Synthetic bundled CLI; never executed.\n')
+    await expect(resolveCliExecutable('zcode', backend(async (entry) => entry), DEFAULT_CONFIG))
+      .rejects.toThrow('CLI 脚本路径不是普通文件')
+  })
   it('discovers the registered Codex CLI after the real SDK missing-executable error', async () => {
     appx.mockResolvedValue('C:\\registered\\codex.exe')
     const process = backend(async (entry) => {

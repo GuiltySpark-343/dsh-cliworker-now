@@ -20,7 +20,7 @@ import {
   type ModelChoice,
   type Preference,
 } from '../shared/types.ts'
-import type { AccountAction, AccountSource, AccountStatus } from '../shared/accounts.ts'
+import type { AccountAction, AccountSource, AccountStatus, ZCodeLoginProvider } from '../shared/accounts.ts'
 import { modelName } from '../shared/models.ts'
 import { visibleModelChoices } from '../shared/model-presentation.ts'
 import { AccountTerminal, type AccountCloseControl } from './account-terminal.tsx'
@@ -172,8 +172,7 @@ function OpenSettingsDialog({
               value(await api.cliworker.accountStatus(sessionId, id, signal)),
             )
             if (next.cli !== id) throw new Error('收到不匹配的 CLI 账号状态，请重试')
-            if (!signal.aborted)
-              setAccounts((old) => ({ ...old, [id]: { data: next, loading: false } }))
+            if (!signal.aborted) setAccounts((old) => ({ ...old, [id]: { data: next, loading: false } }))
           } catch (error) {
             if (!signal.aborted)
               setAccounts((old) => ({ ...old, [id]: { loading: false, error: operationMessage(error) } }))
@@ -540,6 +539,7 @@ function CliSettings({
   const [action, setAction] = useState<AccountAction>()
   const [chosenAction, setChosenAction] = useState<AccountStatus['actions'][number]>()
   const [accountSource, setAccountSource] = useState<AccountSource>()
+  const [loginProvider, setLoginProvider] = useState<ZCodeLoginProvider>()
   const saveController = useRef<AbortController>()
   useEffect(() => () => saveController.current?.abort(), [])
   useEffect(() => {
@@ -636,6 +636,7 @@ function CliSettings({
   const closeAccount = () => {
     setAction(undefined)
     setAccountSource(undefined)
+    setLoginProvider(undefined)
     onRefreshAccount(true)
   }
   const sources = chosenAction?.sources?.filter(
@@ -643,6 +644,7 @@ function CliSettings({
       ['native', 'plugin'].includes(source.id) && all.findIndex((item) => item.id === source.id) === index,
   )
   const choosingSource = action === 'logout' && chosenAction?.sources !== undefined && !accountSource
+  const choosingLoginProvider = cli === 'zcode' && action === 'login' && !loginProvider
   const accountAction = (id: AccountAction) => {
     const item = account?.data?.actions.find((candidate) => candidate.id === id)
     const label =
@@ -686,6 +688,7 @@ function CliSettings({
               return
             }
             setChosenAction(item)
+            setLoginProvider(undefined)
             setAccountSource(
               id === 'logout' &&
                 item.sources?.length === 1 &&
@@ -792,7 +795,19 @@ function CliSettings({
             className="cwn-account-dialog"
             contentClassName="cwn-account-dialog-content"
           >
-            {choosingSource ? (
+            {choosingLoginProvider ? (
+              <section aria-label="选择 ZCode 授权来源">
+                <p>选择账号所属的服务商</p>
+                <div className="cwn-account-actions">
+                  <Button variant="outline" size="md" onClick={() => setLoginProvider('bigmodel')}>
+                    中国智谱 BigModel
+                  </Button>
+                  <Button variant="outline" size="md" onClick={() => setLoginProvider('zai')}>
+                    海外 Z.AI
+                  </Button>
+                </div>
+              </section>
+            ) : choosingSource ? (
               <section aria-label="选择退出账号来源">
                 <p>{sources?.length ? '选择要退出的账号来源' : '账号来源不可用，请关闭后刷新状态'}</p>
                 <div className="cwn-account-actions">
@@ -816,6 +831,7 @@ function CliSettings({
                 cli={cli}
                 action={action}
                 source={accountSource}
+                provider={loginProvider}
                 onClose={closeAccount}
                 onFinished={finishedAccountAction}
               />

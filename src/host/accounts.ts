@@ -20,7 +20,13 @@ import {
   type RuntimeConfig,
 } from './process.ts'
 import { CLI_IDS, type CliId } from '../shared/types.ts'
-import type { AccountAction, AccountFrame, AccountSource, AccountStatus } from '../shared/accounts.ts'
+import type {
+  AccountAction,
+  AccountFrame,
+  AccountSource,
+  AccountStatus,
+  ZCodeLoginProvider,
+} from '../shared/accounts.ts'
 import {
   accountEmail,
   localAccountIdentity,
@@ -518,6 +524,7 @@ export class AccountManager {
     cwd: string,
     signal: AbortSignal,
     source?: AccountSource,
+    provider?: ZCodeLoginProvider,
   ): Promise<{ id: string; instruction: string }> {
     validateCli(cli)
     if (!ACTIONS.includes(action)) throw new Error('不支持的账号操作')
@@ -528,6 +535,14 @@ export class AccountManager {
         !['pi', 'omp', 'hermes'].includes(cli))
     )
       throw new Error('不支持的账号来源')
+    if (
+      provider !== undefined &&
+      (cli !== 'zcode' ||
+        action !== 'login' ||
+        source !== undefined ||
+        !['bigmodel', 'zai'].includes(provider))
+    )
+      throw new Error('不支持的 ZCode 授权来源')
     if (!parent || parent.length > 512) throw new Error('无效的父会话')
     this.controller.signal.throwIfAborted()
     signal.throwIfAborted()
@@ -546,7 +561,9 @@ export class AccountManager {
       scope = { controller: new AbortController(), pending: new Set() }
       this.parents.set(parent, scope)
     }
-    const operation = this.track(this.startSession(parent, cli, action, directory, signal, scope, source))
+    const operation = this.track(
+      this.startSession(parent, cli, action, directory, signal, scope, source, provider),
+    )
     scope.pending.add(operation)
     void operation.finally(() => scope.pending.delete(operation)).catch(() => undefined)
     return operation
@@ -560,6 +577,7 @@ export class AccountManager {
     signal: AbortSignal,
     scope: ParentScope,
     source?: AccountSource,
+    provider?: ZCodeLoginProvider,
   ) {
     const timeout = new AbortController()
     const timer = setTimeout(() => timeout.abort(), STARTUP_TIMEOUT)
@@ -632,6 +650,7 @@ export class AccountManager {
           this.config,
           this.backend,
           startup,
+          { loginProvider: provider },
         )
         launch = prepared
         instruction = prepared.instruction
