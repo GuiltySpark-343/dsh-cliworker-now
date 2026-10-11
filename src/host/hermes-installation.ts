@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { nativeLaunchArgv } from './native-launch.mjs'
+import { windowsHermesCheckout } from './hermes-windows-installation.ts'
 
 export class HermesExecutableError extends Error {}
 
@@ -22,15 +23,6 @@ export async function hermesNativeCommand(
   args: string[],
   signal?: AbortSignal,
 ): Promise<string[]> {
-  // The official Windows distlib exe selects the recorded store Python itself.
-  // Its fixed fallback cmd is decoded as data, never interpreted by cmd.exe.
-  // Keep bootstrap and update/lease behavior owned by the installed CLI.
-  if (process.platform === 'win32') {
-    signal?.throwIfAborted()
-    const command = nativeLaunchArgv([executable, ...args])
-    await access(command[0]!, constants.R_OK)
-    return command
-  }
   let current = executable
   const read = async (path: string, limit: number) => {
     const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
@@ -44,6 +36,63 @@ export async function hermesNativeCommand(
       return result
     } finally {
       await file.close()
+    }
+  }
+  const pinned = async (checkout: string) => {
+    const owner = dirname(checkout),
+      key = createHash('sha256').update(checkout).digest('hex').slice(0, 16)
+    const install = join(owner, 'installs', key),
+      facts = join(install, 'facts.json')
+    try {
+      const data = JSON.parse(await read(facts, 4 * 1024 * 1024))
+      const environment = data?.packages?.venv?.environment
+      if (
+        typeof environment !== 'string' ||
+        !environment.startsWith(join(install, 'environments') + sep) ||
+        (await realpath(environment)) !== environment
+      )
+        throw new Error('Invalid Hermes dependency selection')
+      await read(join(environment, 'pyvenv.cfg'), 64 * 1024)
+      const python = join(
+        environment,
+        ...(process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python']),
+      )
+      await access(python, process.platform === 'win32' ? constants.R_OK : constants.X_OK)
+      for (const file of [
+        'hermes_bootstrap.py',
+        'hermes_cli/main.py',
+        'pm/environments.py',
+        ...(process.platform === 'win32' ? ['pm/filesystem.py'] : []),
+      ])
+        await access(join(checkout, file), constants.R_OK)
+      return [
+        python,
+        '-I',
+        fileURLToPath(new URL('./hermes-native-entry.py', import.meta.url)),
+        checkout,
+        facts,
+        environment,
+        ...args,
+      ]
+    } catch {
+      signal?.throwIfAborted()
+      throw new HermesExecutableError('Hermes 当前安装依赖不可用，请在原生终端修复安装')
+    }
+  }
+  if (process.platform === 'win32') {
+    signal?.throwIfAborted()
+    try {
+      const command = nativeLaunchArgv([executable, ...args])
+      await access(command[0]!, constants.R_OK)
+      const checkout = await windowsHermesCheckout(executable, command, signal)
+      // A native source-install launcher records its checkout. Pin that install's
+      // committed venv while retaining the isolated HERMES_HOME. Other native
+      // installations keep their own launch contract; never guess a generation.
+      return checkout ? await pinned(checkout) : command
+    } catch (error) {
+      signal?.throwIfAborted()
+      if (error instanceof HermesExecutableError) throw error
+      throw new HermesExecutableError('启动入口不可用，请修复安装')
     }
   }
   for (let depth = 0; depth < 4; depth++) {
@@ -69,36 +118,7 @@ export async function hermesNativeCommand(
       return [executable, ...args]
     const checkout = dirname(dirname(dirname(path)))
     if (!source.includes(checkout)) throw new HermesExecutableError('Hermes 安装入口与源码不匹配')
-    const owner = dirname(checkout),
-      key = createHash('sha256').update(checkout).digest('hex').slice(0, 16)
-    const install = join(owner, 'installs', key),
-      facts = join(install, 'facts.json')
-    try {
-      const data = JSON.parse(await read(facts, 4 * 1024 * 1024))
-      const environment = data?.packages?.venv?.environment
-      if (
-        typeof environment !== 'string' ||
-        !environment.startsWith(join(install, 'environments') + sep) ||
-        (await realpath(environment)) !== environment
-      )
-        throw new Error('Invalid Hermes dependency selection')
-      await read(join(environment, 'pyvenv.cfg'), 64 * 1024)
-      await access(join(environment, 'bin/python'), constants.X_OK)
-      for (const file of ['hermes_bootstrap.py', 'hermes_cli/main.py', 'pm/environments.py'])
-        await access(join(checkout, file), constants.R_OK)
-      return [
-        join(environment, 'bin/python'),
-        '-I',
-        fileURLToPath(new URL('./hermes-native-entry.py', import.meta.url)),
-        checkout,
-        facts,
-        environment,
-        ...args,
-      ]
-    } catch {
-      signal?.throwIfAborted()
-      throw new HermesExecutableError('Hermes 当前安装依赖不可用，请在原生终端修复安装')
-    }
+    return pinned(checkout)
   }
   throw new HermesExecutableError('启动脚本异常，请修复安装')
 }

@@ -4,7 +4,6 @@ The official launcher, checkout-derived install key and committed facts are chec
 Host. Recheck facts under the same install lock, then use Hermes' own generation lease.
 No account/config content is copied, imported from another home, or printed here.
 """
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -17,8 +16,10 @@ if any(path.resolve() != path for path in (checkout, facts, environment)):
     raise SystemExit("Hermes installation changed; reopen login settings")
 
 def selected():
-    fd = os.open(facts, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd) as stream:
+    if facts.is_symlink():
+        raise RuntimeError("Invalid Hermes installation record")
+    fd = os.open(facts, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(fd, encoding="utf-8-sig") as stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 4 * 1024 * 1024:
             raise RuntimeError("Invalid Hermes installation record")
@@ -26,11 +27,17 @@ def selected():
 
 release = None
 try:
+    sys.path.insert(0, str(checkout))
     with open(facts.parent / ".install.lock", "a+b") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if os.name == "nt":
+            from pm.filesystem import lock_fd
+            if not lock_fd(lock.fileno(), wait=False):
+                raise RuntimeError("Hermes installation is being updated; retry after it finishes")
+        else:
+            import fcntl
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         if not selected():
             raise RuntimeError("Hermes installation changed; reopen login settings")
-        sys.path.insert(0, str(checkout))
         from hermes_cli.runtime_state import lease_generation
         release = lease_generation(environment)
     os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"

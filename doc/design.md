@@ -543,3 +543,8 @@ Hermes 与角色功能共享同一 WorkerRuntime；名称、角色快照与原�
 - ZCode 0.16.9 Windows 原生 cmd/start 会在 & 处截断授权网址。仅该平台且 CLI help 声明能力时使用 --no-browser，保留原生 init/poll/凭据流程；共享终端识别固定原生提示后完整白名单 HTTPS URL，自动打开一次，也允许点击原生网址重新打开或选择复制。软折行按 xterm cell 定位，点击时重验当前会话/缓冲区。未知链接和 OSC 链接不自动导航；授权参数仅当前内存使用。Mac 原生 opener 保持。
 - Codex 默认 PATH 不可用时，验证当前用户官方 Store 包 family/publisher/signature/status、固定资源和 PE 入口；也识别身份核验过的官方 npm 安装。显式错误路径不静默兜底。Appx 元数据查询取消须等待真实进程清理，清理失败透传，不留下脱离查询。
 - Hermes 识别 Windows 官方 LocalAppData/bin 入口，原生默认 home 使用 LocalAppData/hermes；显式配置与 HERMES_HOME 优先，Mac 保留 ~/.hermes。安装缺失与未登录分别显示。用户已明确批准补全原生安装，保留原目录，不安装 WSL 或可选浏览器/计算机控制依赖。
+
+
+### Hermes Windows 原生依赖复用补正（2026-10-11）
+
+Windows 官方源码安装的 distlib 入口在隔离 `HERMES_HOME` 下无法定位安装 facts，账号终端因而提前退出。现将 Mac 已采用的“已提交依赖环境 + 账号目录隔离”路径共用于 Windows：只静态读取官方 launcher 固定 checkout，核对安装标识、facts 与 venv，再通过共享 Python 入口持有官方 generation lease；Windows 使用官方标准库锁实现。不得 bootstrap、猜测依赖代次或导入其他账号目录；旧自包含原生安装保留自身启动契约。实际 Windows 登录菜单和后续原生网页登录提示已显示，未完成账号授权；与模型调用验收分开记录。

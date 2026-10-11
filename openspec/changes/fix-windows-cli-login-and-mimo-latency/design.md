@@ -54,3 +54,9 @@ Antigravity 1.3.3 将 Windows OAuth 保存在交互式用户的 Credential Manag
 
 - 按用户最新要求不设置独立粘贴/打开网页按钮，也不显示底部快捷键小字。选择复制沿用 xterm 原生 copy；右键有选区复制、无选区粘贴。无选区 Ctrl+C 保留原生中断语义。
 - Windows Hermes 原生默认账号根为 LocalAppData/hermes，配置和 HERMES_HOME 优先；Mac 保留 ~/.hermes。用户明确授权补全官方 Windows 原生安装，安装与插件代码验证分别记录。
+
+## Hermes Windows 隔离目录依赖绑定补正
+
+- 官方 distlib 启动器记录源 checkout。Windows 与 Mac 共用按 checkout 的原生 install key 定位 committed facts 的规则，Windows 仅补静态 distlib/cmd 读取和 Scripts/python.exe 路径差异；不按修改时间寻找虚拟环境。
+- 两平台共用 hermes-native-entry.py，在原生安装锁内再次核验当前环境并取得原生 generation lease，finally 释放。Windows 使用官方 pm.filesystem.lock_fd，Mac 保留 fcntl；不调用 bootstrap/installer，不导入安装 home 的账号配置，保留既有隔离 dotenv 边界。
+- auth --help 退出成功只证明依赖入口恢复；实际 Desktop PTY 中出现可交互提供商菜单并可关闭，才记为账号终端启动验收。管道下 model 退出不冒充 PTY 成功。

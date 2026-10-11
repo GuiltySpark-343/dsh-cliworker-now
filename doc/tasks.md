@@ -914,3 +914,14 @@
 - [x] 最终共享终端代码全量 1627 passed/8 skipped（81 文件通过、1 文件跳过）；Windows 实装 Electron(asNode) 专项 10 文件，189 passed/2 POSIX-only skipped/0 failed，进程退出 0。原默认沙箱完整测试挂起，按本轮 PID/创建身份清理后授权环境重跑通过；不将首次挂起解释成业务测试失败。类型、严格规格 11/11、隔离 preview 与 Windows run 2c16676d-21c6-4bb6-b5b7-e780a8430cb3 原包加载通过。
 - [x] 两端无活动 Worker 时更新：Windows 使用原生安装器，唯一文件名避开同路径 tarball 缓存，317 个 lib 文件与包逐项匹配；包 SHA-256 92dea5e01532a40072189ab7eb2dd217d34e40698ec19d8204373f1be8ffef46。Mac 正式构建并重启，实际新版 Pi 终端验收通过；账号终端已关闭。最终 Windows 无调试重启与 Hermes 后续包另行记录。
 - 私有证据：terminal-ux-live-safe.json、terminal-ux-windows-final.png、terminal-ux-final-tests-approved-results.json、windows-electron-user-terminal-2c16676d-utf8-summary.json；位于 .test-data/windows-remote/desktop-audit/。Hermes 安装回执位于同级 hermes-install-review/。既有 Claude 官方账号/额度跳过、Kimi 额度未知等边界保持；未推送、未归档。
+
+
+### Hermes Windows 依赖修复与本轮最终交付（2026-10-11）
+
+- [x] 修复上一阶段待办的 Hermes 隔离账号目录依赖定位：共享 Mac 的已提交官方 venv/lease 机制，Windows 仅补充固定 distlib/cmd 入口解析和原生文件锁。6 项新测试覆盖合法入口、拒绝伪造/不一致记录及环境边界；没有启动 bootstrap 或复制其他账号凭据。
+- [x] Windows 实际 Desktop 最终包显示 Hermes 提供商菜单、`Choice [default 1]` 和 Leave unchanged，无 `no dependency environment` 或 traceback。后续原生流程显示 Nous Portal 网页授权提示；未完成授权，已取消账号终端并关闭本次临时网页。Hermes 当前仍未配置账号，本轮没有模型调用。安全记录只保留状态/提示布尔值，不保留授权码截图。
+- [x] 最终本地完整回归 1633 通过、8 跳过、0 失败；类型检查和隔离 preview 通过。最终 Windows run `ae2dbcd8-0777-4780-a25b-461089dfe5c4`：类型/Host 加载通过，基础测试 107 通过、1 项 POSIX 跳过；实际 Desktop Electron 11 文件专项 195 通过、2 项 POSIX umask 跳过、0 失败，进程退出码 0。模拟协议测试与实际界面证据分开，不将其计为全部 CLI 真实模型成功。
+- [x] 在活动 Worker/账号终端均为 0 时安装最终包：SHA-256 `14f8d8f258220d5846dcd9a9598905a8ab32979b45acc6ca7c76c5113c4d7d01`，Windows 320 个 lib 文件与 preview 包逐项一致。Mac 正式构建 Host 与该 preview 相同并已正常加载。共享 UI、ZCode 四参数自动/手动网页链接、Codex 原生账号终端的上一阶段实证继续有效，详见上节。
+- [x] 首次最终远程测试 `fd6e9167-9c46-4523-aafe-d8a60d3f041b` 因 C 盘空间耗尽失败，原始失败报告保留。仅清理本任务 owner 标识且进程已退出的构建依赖缓存后重试通过；最终 run 又清理约 0.82 GB 可重建依赖，887 个源码/产物/证据文件前后哈希一致，保留 2c16676d 备份依赖。未清理用户数据或 Hermes 安装，收尾磁盘空闲约 7.02 GB。
+- [x] Windows 已无调试参数正常启动；Windows/Mac 19487 监听均为 0，账号 ready scope、临时 UI 计划任务、活动 Worker 均为 0，三条历史 Worker 记录保留。证据：私有 `.test-data/windows-remote/desktop-audit/hermes-final-{live-menu,install-result,cleanup}.json`、`windows-electron-final-hermes-ae2dbcd8-*`、`final-run-dependency-cleanup.json`，不入 Git。
+- 边界仍保留：ZCode 仅证实网页登录正常，未完成授权；Hermes 原生安装和登录终端可用，尚未配置账号；Claude 按用户要求跳过官方账号/真实调用，Kimi 同源额度仍不可核验。OpenSpec 3.1/3.3 继续未勾选，不通过归档掩盖缺口。阶段提交，不推送。
