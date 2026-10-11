@@ -74,10 +74,14 @@
 
 ## 11. 发布前 Windows CI 账号终端兼容复验
 
-- [ ] 11.1 保留合成 ConPTY 的停止/自然退出、后代清理与无关进程存活断言，采集固定身份拒绝原因，定位 Windows CI 与已验收 Desktop 环境的差异。
-- [ ] 11.2 修复已确认的兼容问题，保持父进程、创建身份、系统控制台身份及完整 Job 范围退出保障；定向回归、Windows CI 与实际 Electron/SDK 账号终端复验通过后重新冻结发行包。
+- [x] 11.1 保留合成 ConPTY 的停止/自然退出、后代清理与无关进程存活断言，采集固定身份拒绝原因，定位 Windows CI 与已验收 Desktop 环境的差异。
+- [x] 11.2 修复已确认的兼容问题，保持父进程、创建身份、系统控制台身份及完整 Job 范围退出保障；定向回归、Windows CI 与实际 Electron/SDK 账号终端复验通过后重新冻结发行包。
 
-11.1 阶段证据（2026-10-11）：发布 CI 两项真实 Windows ConPTY 用例在 owner 的 attach-console 身份校验阶段拒绝，清理继续拒绝伪造成功；其余 105 passed / 1 skipped。父进程匹配已通过，退出后采样无法取得已清理控制台；已在拒绝位置新增固定白名单原因，等待新 CI 确认。不将缺少 Electron、嵌套 Job 或系统路径差异的猜测当作已证实根因，不跳过生命周期断言。
+11.1 验证（2026-10-11）：固定白名单诊断在 CI run 38123359205 取得两例 attach-console / wrong-image，父进程与时间边界匹配、映像不是系统 conhost。Microsoft Terminal PR #14196 将伪控制台窗口归属改为根客户端，discussion #16447 确认该行为并给出真实窗口 owner 查询；原先将伪窗口归属 PID 等同 conhost 的假设在 Windows 26100 不成立。仅在已验证 bootstrap PID 被返回时动态查询真实 owner，其余候选及全部后续身份/Job 门禁不变；缺失或无效查询仍拒绝，不按进程名猜测。
+
+11.2 阶段验证（2026-10-11）：修复提交 9b1b83f 的 Windows CI run 38123998760 全流程成功，107 passed / 1 skipped；六项原生进程测试全部通过，包含 ConPTY stop/natural-exit、后代退出及无关进程存活，未新增跳过。Codex/Pi/OMP 官方安装版本/help 与 SDK 元数据 smoke 成功，无账号或模型调用。本地完整回归 1847 passed / 8 skipped，严格规格校验通过。Windows 22631 实际 Electron 44/SDK preview 双例确认三路 TTY、参数原样、stdin 回显、自然退出码 7、后代清理、无关进程保留、owner 目录移除及新增 conhost 为 0；覆盖动作的 v5 观察 181034ms，额外可见控制台事件为 0，收尾 scope/owner/合成进程/观察器均为 0。此段为隔离验收证据；正式构建与安装另见下方最终交付，不将 preview 通过等同发布完成。
+
+11.2 最终交付（2026-10-11）：正式包 SHA-256 `fef207b47caab4f853fd2b1c8a04584dce0f99848281728647d4a48591d86559` 已冻结；Mac 正常退出后 build，Windows 正常退出后原生安装，339 个 lib 文件一致，两平台实际界面均为 v0.7.7 / 1 组件运行。调试与测试范围已清理；本轮零新账号登录、续期、模型调用。
 
 ## Workflow follow-up
 

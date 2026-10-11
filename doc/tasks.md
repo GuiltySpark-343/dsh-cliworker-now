@@ -985,3 +985,14 @@
 - [x] Windows 正常无调试参数运行；活动 Worker、ready 账号 scope、账号 owner、原生 Hermes/auth、观察器任务/launcher、UI/验收临时任务均为 0。Mac 设置已关闭，活动 Worker/账号桥进程为 0；本轮 Mac 未打开调试通道，Windows 使用原生 UI Automation，未开 CDP。未清空历史 Worker、账号或不相关配置。
 - [x] 实现已阶段提交 `d342fc2`；本轮验收记录单独提交，保留用户原有文档/素材改动，不推送。严格规格 11/11；Hermes 10.1–10.4 完成，活动 change 为 32/34。历史 3.1/3.3 的 Claude 官方账号/额度跳过与 Kimi 验证边界不变，不归档整个 change。
 - 私有证据均在 Git 忽略的 `.test-data/windows-remote/desktop-audit/`：`hermes-renewal-full-tests-v2.json`、`hermes-renewal-typecheck.log`、`hermes-renewal-preview-build-v2.log`、`hermes-renewal-mac-parser-actual.json`、`hermes-renewal-mac-formal-equivalence.json`、`hermes-renewal-mac-ui.json`、`hermes-renewal-mac-preflight.json`、`hermes-renewal-windows-parser-native-preview-20261011.json`、`hermes-windows-final-delivery-20261011.json`、`hermes-renewal-windows-final-install-20261011.json`、`hermes-final-complete-ui-actions-20261011.json`、`hermes-final-complete-ui-v5-20261011.json`、`hermes-windows-final-normal-startup-20261011.json`、`hermes-windows-final-cleanup-20261011.json`。账号秘密不写入报告或 Git。
+
+## 2026-10-11：v0.7.7 发布前最终验收
+
+- [x] 版本清单与中英文固定 npm 安装示例统一为 `0.7.7`；个人 Windows 详细复用手册保存在 `/doc/local/`，`.gitignore` 验证生效，Git 索引和公共包均不含个人手册、连接配置或运行日志。
+- [x] 发布 CI 定位新版 Windows 伪控制台 HWND 归属差异，修复实际 conhost 身份解析。保留全部父进程、创建身份、系统映像和 Job 范围退出门禁，没有跳过失败用例。
+- [x] 最终源码 `pnpm typecheck`、`pnpm test`、`pnpm build:preview`、`pnpm spec:check` 通过（命令均使用 `--config.verifyDepsBeforeRun=false`）。完整回归 1847 passed / 8 skipped，严格规格 11/11；Mac 跳过的平台专属用例由 Windows 单独执行。
+- [x] [Windows CI 38123998760](https://github.com/SuperWheel/cliworker-now/actions/runs/38123998760) 在系统 build 26100 全流程通过：107 passed / 1 skipped，含真实 Host Job 与 ConPTY 停止/自然退出、后代清理和无关进程保留；官方 Codex 0.160.0、Pi 1.0.4、OMP 16.4.4 安装入口/帮助与原生元数据 smoke 通过，零模型调用。
+- [x] 实际 Windows 22631 / Electron 44 / Harness SDK 双生命周期合成用例通过，TTY、Unicode/元字符 argv、输入输出、自然退出码7、分离子进程和 conhost 清理均核验。181034ms 交互式观察无额外可见控制台。仅精确分类宿主固定的 ConPTY 提示，未知告警与普通 Job fallback 仍失败。
+- [x] 两平台无活动任务后正常退出 Harness，正式构建/原生安装并正常重启；实际界面均确认 v0.7.7、1 个组件运行。Windows 最终安装的 339 个 lib 文件逐项匹配，全部测试、观察器、账号范围与临时任务清理，无调试启动。
+- [x] 最终公共包 344 文件，逐项匹配发布暂存，npm dry-run 通过；SHA-256：`fef207b47caab4f853fd2b1c8a04584dce0f99848281728647d4a48591d86559`。Client 可执行文本与前次两平台 UI 验收一致，preview 差异仅构建路径注释/源映射；新增 owner helper 与本次真实验收快照完全相同。
+- 以上安装/进程检查不代表所有第三方账号、额度和真实模型生成全部通过。本轮没有新增账号登录、续期或模型调用，既有 Claude/Kimi 等真实账号/额度边界继续保留；活动 OpenSpec 不以发布为由归档。
