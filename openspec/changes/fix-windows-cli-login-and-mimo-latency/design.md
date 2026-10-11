@@ -60,3 +60,14 @@ Antigravity 1.3.3 将 Windows OAuth 保存在交互式用户的 Credential Manag
 - 官方 distlib 启动器记录源 checkout。Windows 与 Mac 共用按 checkout 的原生 install key 定位 committed facts 的规则，Windows 仅补静态 distlib/cmd 读取和 Scripts/python.exe 路径差异；不按修改时间寻找虚拟环境。
 - 两平台共用 hermes-native-entry.py，在原生安装锁内再次核验当前环境并取得原生 generation lease，finally 释放。Windows 使用官方 pm.filesystem.lock_fd，Mac 保留 fcntl；不调用 bootstrap/installer，不导入安装 home 的账号配置，保留既有隔离 dotenv 边界。
 - auth --help 退出成功只证明依赖入口恢复；实际 Desktop PTY 中出现可交互提供商菜单并可关闭，才记为账号终端启动验收。管道下 model 退出不冒充 PTY 成功。
+
+
+## Windows 模型目录与设置启动（2026-10-11）
+
+- Pi/OMP 目录准备遵循已有 Windows 原生身份检查，避免对目录使用 POSIX-only open/chmod 组合；两 CLI 继续分别从自身 SDK/RPC 获得模型与思考强度，不补硬编码目录。Codex 读取原生能力及当前账号来源，缺失、超时、未授权分别保留证据。
+- 首次打开设置优先所选 CLI，账号状态请求（包含当前项）最多两个并发，其余排队；切换只调整待排顺序，不抢占正在执行的请求。模型目录查询独立进行，这不是所有子进程的数量上限。关闭或禁用取消不再需要的读取，Host 独立负责底层清理；客户端 RPC 取消不作为进程已退出的证明。失败/未安装不作长期缓存，临时查询失败不得伪装成已确认缺少安装。
+- 仅在已核验依赖边界内复用无秘密能力元数据，缓存键覆盖实际入口身份、项目、当前账号来源摘要、配置与环境变化；账号、凭据有效性、远端权限/额度仍逐次核验，不缓存远端鉴权结论或取消结果。MiMo、Kimi managed OAuth 能力与 Claude 已支持参数标记的内存缓存各自为 30 秒、最多 16 项。
+- 账号状态请求按相同 CLI/规范项目路径合并在途工作，与能力缓存的失效键分开；Host 不缓存已完成的鉴权结果。设置页保留本次打开期间的显示结果直到刷新，不将该显示快照作为任务授权。最后订阅者取消后，Host 等待实际子进程回收或保留清理失败状态；同 CLI/项目的新读等待旧操作清理，不依赖客户端 RPC 的取消返回确认退出。
+- 扩展 CLI 模型查询仅返回模型值；成功且捕获的进程范围确认退出后，删除该次独有的 `catalog/<cli>/query-*` 目录及其中原生解压缓存。失败、取消或进程清理未确认时保留现场，不删除原生账号、共享续期目录或其他查询目录，避免 Windows OMP 每次成功刷新累积约 121 MB。
+- OpenCode 的登录继续使用共享嵌入式终端，查询进程采用隐藏窗口的 Windows 原生启动；修复应覆盖插件自有 launcher，保持 argv、stdio、ConPTY 和受管进程范围。先记录控制台窗口 PID 与父链确认来源，不屏蔽正常授权浏览器。
+- 验收记录实际 Windows 返回模型/effort、首次检测状态、窗口出现情况及冷/热耗时；性能结论只描述实测插件前置变化，不承诺模型服务响应速度。不新增模型调用。

@@ -3,7 +3,8 @@ import { spawn } from 'node:child_process'
 import { nativeLaunchArgv } from './native-launch.mjs'
 process.umask(0o077)
 const [executable, ...argv] = nativeLaunchArgv(process.argv.slice(2))
-const child = spawn(executable, argv, { env: process.env, stdio: 'inherit' })
+// Background metadata/tasks inherit their streams, never a new Windows console.
+const child = spawn(executable, argv, { env: process.env, stdio: 'inherit', windowsHide: true })
 let stopped = false
 for (const signal of ['SIGTERM', 'SIGINT'])
   process.on(signal, () => {

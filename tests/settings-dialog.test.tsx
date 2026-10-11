@@ -111,7 +111,7 @@ const accountActions: AccountStatus['actions'] = [
   { id: 'logout', label: '退出登录', description: '模拟退出能力说明' },
   { id: 'manage', label: '账号终端', description: '模拟管理能力说明' },
 ]
-async function setup(overrides: Record<string, any> = {}, openNativeSettings?: () => void) {
+async function setup(overrides: Record<string, any> = {}, openNativeSettings?: () => void, initialCli: CliId = 'antigravity') {
   const catalogForCli = vi.fn(async (_session, cli: CliId) => catalog(cli))
   const accountStatus = vi.fn(async (_session, cli: CliId) => status(cli))
   const configure = vi.fn().mockResolvedValue(remote({}))
@@ -131,7 +131,7 @@ async function setup(overrides: Record<string, any> = {}, openNativeSettings?: (
       onClose={() => r.update(render(false))}
       api={api}
       sessionId="simulation-parent"
-      initialCli="antigravity"
+      initialCli={initialCli}
       openNativeSettings={openNativeSettings}
     />
   )
@@ -168,6 +168,73 @@ async function setup(overrides: Record<string, any> = {}, openNativeSettings?: (
     setCliEnabled,
   }
 }
+it('starts the selected CLI first and bounds background account discovery', async () => {
+  const reads = new Map<CliId, ReturnType<typeof deferred>>()
+  const accountStatus = vi.fn((_parent, cli: CliId) => {
+    const read = deferred()
+    reads.set(cli, read)
+    return read.promise
+  })
+  const t = await setup({ accountStatus }, undefined, 'mimo')
+  expect(accountStatus.mock.calls.map((call) => call[1])).toEqual(['mimo', 'antigravity'])
+  expect(t.catalogForCli).not.toHaveBeenCalled()
+  expect(t.button('MiMo 设置').findByProps({ role: 'img', 'aria-label': '正在检查连接' })).toBeDefined()
+  await t.click('关闭设置')
+  for (const call of accountStatus.mock.calls) expect(call[2].aborted).toBe(true)
+  await act(async () => { for (const [id, read] of reads) read.resolve(status(id)) })
+  expect(accountStatus).toHaveBeenCalledTimes(2)
+})
+
+it('promotes a newly selected pending CLI after an in-flight read settles without cancelling it', async () => {
+  const reads = new Map<CliId, ReturnType<typeof deferred>>()
+  const accountStatus = vi.fn((_parent, cli: CliId) => {
+    const read = deferred()
+    reads.set(cli, read)
+    return read.promise
+  })
+  const t = await setup({ accountStatus })
+  expect(accountStatus.mock.calls.map((call) => call[1])).toEqual(['antigravity', 'codex'])
+  await t.click('MiMo 设置')
+  expect(accountStatus.mock.calls[0]![2].aborted).toBe(false)
+  expect(accountStatus.mock.calls[1]![2].aborted).toBe(false)
+  expect(accountStatus).toHaveBeenCalledTimes(2)
+  await act(async () => reads.get('antigravity')!.resolve(status('antigravity')))
+  expect(accountStatus.mock.calls.map((call) => call[1])).toEqual(['antigravity', 'codex', 'mimo'])
+  await t.click('启用 MiMo')
+  expect(accountStatus.mock.calls[2]![2].aborted).toBe(true)
+  await act(async () => reads.get('mimo')!.resolve(status('mimo', { state: 'authenticated' })))
+  expect(t.catalogForCli).not.toHaveBeenCalled()
+  expect(t.button('MiMo 设置').props['data-enabled']).toBe(false)
+  await t.click('关闭设置')
+})
+
+it('rechecks a CLI re-enabled before its cancelled request settles and ignores the old result', async () => {
+  const old = deferred(), fresh = deferred()
+  let mimoReads = 0
+  const accountStatus = vi.fn((_parent, cli: CliId) => {
+    if (cli !== 'mimo') return Promise.resolve(status(cli))
+    return ++mimoReads === 1 ? old.promise : fresh.promise
+  })
+  const t = await setup({ accountStatus }, undefined, 'mimo')
+  await t.click('启用 MiMo')
+  expect(accountStatus.mock.calls.find((call) => call[1] === 'mimo')![2].aborted).toBe(true)
+  await t.click('启用 MiMo')
+  expect(t.button('MiMo 设置').props['data-enabled']).toBe(true)
+  expect(mimoReads).toBe(1)
+  expect(t.button('MiMo 设置').findByProps({ role: 'img', 'aria-label': '正在检查连接' })).toBeDefined()
+  await act(async () => old.resolve(status('mimo', {
+    state: 'authenticated', accountLabel: 'old-mimo-fixture@example.invalid', actions: accountActions,
+  })))
+  expect(mimoReads).toBe(2)
+  expect(t.text()).not.toContain('old-mimo-fixture@example.invalid')
+  expect(t.button('MiMo 设置').findByProps({ role: 'img', 'aria-label': '正在检查连接' })).toBeDefined()
+  await act(async () => fresh.resolve(status('mimo', {
+    state: 'authenticated', accountLabel: 'fresh-mimo-fixture@example.invalid', actions: accountActions,
+  })))
+  expect(t.text()).toContain('fresh-mimo-fixture@example.invalid')
+  expect(t.button('MiMo 设置').findAllByProps({ role: 'img', 'aria-label': '正在检查连接' })).toHaveLength(0)
+  expect(mimoReads).toBe(2)
+})
 it('keeps CLI navigation and dismissal available while account and model discovery are delayed', async () => {
   const models = deferred(),
     account = deferred()
@@ -282,10 +349,12 @@ it('replaces a pending account check after an account action finishes and rechec
   const pendingSignal = accountStatus.mock.calls.at(-1)![2]
   await t.click('完成模拟账号操作')
   expect(pendingSignal.aborted).toBe(true)
-  expect(accountStatus.mock.calls.filter((call) => call[1] === 'antigravity')).toHaveLength(3)
+  // Replacing a read waits for its cancelled Host process range to settle.
+  expect(accountStatus.mock.calls.filter((call) => call[1] === 'antigravity')).toHaveLength(2)
   await act(async () =>
     stale.resolve(status('antigravity', { state: 'unauthenticated', summary: 'stale-before-login' })),
   )
+  expect(accountStatus.mock.calls.filter((call) => call[1] === 'antigravity')).toHaveLength(3)
   expect(t.text()).not.toContain('stale-before-login')
   const modelsBeforeClose = t.catalogForCli.mock.calls.length
   await t.click('关闭账号操作')

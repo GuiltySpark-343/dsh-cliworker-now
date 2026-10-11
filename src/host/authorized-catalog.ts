@@ -1,5 +1,6 @@
 import { catalogFor, validatePreference, type Catalog } from './adapters.ts'
 import { readCliAccountBinding } from './cli-account-binding.ts'
+import { withWindowsAgyAccountSnapshot } from './agy-windows-account.ts'
 import { resolveModel } from '../shared/models.ts'
 import { cliOf, type CliId, type Preference } from '../shared/types.ts'
 import type { ProcessBackend, RuntimeConfig } from './process.ts'
@@ -15,10 +16,19 @@ export async function authorizedCatalog(
   signal: AbortSignal,
   expected?: string,
 ): Promise<{ catalog: Catalog; binding: string }> {
-  const binding = await readCliAccountBinding(cli, backend, config, project, signal)
-  if (expected && binding !== expected) throw new Error(ACCOUNT_CHANGED)
-  const catalog = await catalogFor(cli, backend, config, project, signal)
+  const discover = async () => {
+    const binding = await readCliAccountBinding(cli, backend, config, project, signal)
+    if (expected && binding !== expected) throw new Error(ACCOUNT_CHANGED)
+    const catalog = await catalogFor(cli, backend, config, project, signal)
+    return { binding, catalog }
+  }
+  const { binding, catalog } =
+    cli === 'antigravity' && process.platform === 'win32'
+      ? await withWindowsAgyAccountSnapshot(backend, config, signal, discover)
+      : await discover()
   signal.throwIfAborted()
+  // Deliberately outside the snapshot scope: logout, expiry and account changes
+  // during native model discovery must still invalidate the returned directory.
   if (binding !== (await readCliAccountBinding(cli, backend, config, project, signal)))
     throw new Error(ACCOUNT_CHANGED)
   if (catalog.cli !== cli) throw new Error('CLI 模型目录身份不匹配')

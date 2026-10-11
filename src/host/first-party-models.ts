@@ -12,8 +12,15 @@ import { safePiOmpAncestors } from './pi-omp-native.ts'
 import { EFFORTS, type ModelChoice } from '../shared/types.ts'
 import { probeAccountModels, type AccountModelInput } from './account-models.mjs'
 import { parseNativeJsonc } from './opencode-native.ts'
-import { mimoMetadataCache, mimoMetadataKey, type MimoOwnSnapshot } from './mimo-metadata-cache.ts'
+import {
+  mimoMetadataCache,
+  mimoMetadataKey,
+  nativeMetadataKey,
+  type MimoOwnSnapshot,
+} from './mimo-metadata-cache.ts'
+import { metadataFileFingerprint, NativeCapabilityCache } from './native-capability-cache.ts'
 import { readKimiOAuthModelSources, probeKimiOAuthModels } from './kimi-oauth-models.ts'
+import { readKimiOwnToken } from './kimi-accounts.ts'
 import {
   assertMimoConfiguration,
   mimoConfigurationFiles,
@@ -23,6 +30,8 @@ import {
 export { MimoConfigurationError } from './mimo-configuration.ts'
 
 type Capture = (argv: string[], env?: Record<string, string>) => Promise<string>
+const claudeHelpCapabilities = new NativeCapabilityCache<true>()
+const kimiOAuthCapabilities = new NativeCapabilityCache<Record<string, unknown>>()
 const record = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v)
 const literal = (v: unknown): v is string =>
   typeof v === 'string' && !!v.trim() && !/[\s\x00-\x1f{}$]/.test(v) && !v.startsWith('!')
@@ -314,13 +323,60 @@ export async function readFirstPartyModelSources(
       )
     )
       return []
+    const sourceId = join(process.env.KIMI_CODE_HOME ?? join(homedir(), '.kimi-code'), 'config.toml')
+    const keyFor = async () => {
+      const fingerprints = await Promise.all([
+        metadataFileFingerprint(sourceId, signal),
+        metadataFileFingerprint(join(dirname(sourceId), 'credentials/kimi-code.json'), signal),
+      ])
+      return fingerprints.some((value) => value === undefined)
+        ? undefined
+        : nativeMetadataKey(executable, project, { cli, sourceId, fingerprints }, signal)
+    }
+    const key = await keyFor(),
+      cached = kimiOAuthCapabilities.get(key)
+    if (cached) return readKimiOAuthModelSources(cached, sourceId, signal)
     const raw = parseMetadata(await capture([executable, 'provider', 'list', '--json']))
     signal.throwIfAborted()
-    const sourceId = join(process.env.KIMI_CODE_HOME ?? join(homedir(), '.kimi-code'), 'config.toml')
-    return [
+    const sources = [
       ...parseKimiModelSources(raw, sourceId),
       ...(await readKimiOAuthModelSources(raw, sourceId, signal)),
     ]
+    // Only the proven managed OAuth schema can be rehydrated from a current own
+    // token. API providers remain uncached: their native resolver may derive keys.
+    if (sources.length === 1 && sources[0]!.apiType === 'kimi-managed-oauth') {
+      const source = sources[0]!
+      const metadata = {
+        providers: {
+          'managed:kimi-code': {
+            type: 'kimi',
+            baseUrl: source.baseUrl,
+            oauth: { storage: 'file', key: 'oauth/kimi-code' },
+          },
+        },
+        models: Object.fromEntries(
+          source.nativeModels.map(({ remoteId, choice }) => [
+            choice.id,
+            { provider: 'managed:kimi-code', model: remoteId, displayName: choice.label },
+          ]),
+        ),
+      }
+      // Neither tokens nor arbitrary provider fields enter the capability cache.
+      const serialized = JSON.stringify(metadata)
+      const token = await readKimiOwnToken(join(dirname(sourceId), 'credentials'), 'kimi-code', signal)
+      const configFingerprint = await keyFor()
+      if (
+        source.credential.type === 'oauth' &&
+        token?.access_token === source.credential.access &&
+        ![token?.access_token, token?.refresh_token].some(
+          (value) => typeof value === 'string' && value && serialized.includes(value),
+        ) &&
+        key === configFingerprint
+      )
+        kimiOAuthCapabilities.set(key, metadata)
+    }
+    signal.throwIfAborted()
+    return sources
   }
   if (cli === 'mimo') {
     const env = firstPartyEnvironment(cli)
@@ -403,10 +459,23 @@ export async function readFirstPartyModelSources(
     if (error instanceof ClaudeOwnRouteError) return []
     throw error
   }
-  const help = await capture([executable, '--help'])
+  const keyFor = async () => {
+    const fingerprints = await Promise.all(
+      route.sourceIds.map((path) => metadataFileFingerprint(path, signal)),
+    )
+    return fingerprints.some((value) => value === undefined)
+      ? undefined
+      : nativeMetadataKey(executable, project, { cli, source: route.source, fingerprints }, signal)
+  }
+  const key = await keyFor()
+  if (!claudeHelpCapabilities.get(key)) {
+    const help = await capture([executable, '--help'])
+    signal.throwIfAborted()
+    if (!help.includes('--model') || !help.includes('--output-format') || !help.includes('--settings'))
+      throw new Error('Claude 版本不支持原生来源参数，请升级')
+    if (key === (await keyFor())) claudeHelpCapabilities.set(key, true)
+  }
   signal.throwIfAborted()
-  if (!help.includes('--model') || !help.includes('--output-format') || !help.includes('--settings'))
-    throw new Error('Claude 版本不支持原生来源参数，请升级')
   return [route.source]
 }
 

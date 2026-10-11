@@ -1,6 +1,8 @@
 export interface AccountModelScope {
   state: 'supported' | 'denied' | 'unknown'
   source: 'account-models' | 'configured-custom' | 'verified-route' | 'unknown'
+  /** Safe metadata classification; absent when the server did not establish a specific cause. */
+  denialReason?: 'authentication' | 'quota'
   models: { id: string; name?: string; cost: 'free' | 'paid' | 'unknown' }[]
 }
 export interface AccountModelInput {

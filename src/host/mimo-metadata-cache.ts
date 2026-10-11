@@ -13,10 +13,10 @@ type Metadata = Omit<FirstPartyModelSource, 'credential'> & { credentialHash: st
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 
 /** No raw environment, configuration or account material is retained in the cache key. */
-export async function mimoMetadataKey(
+export async function nativeMetadataKey(
   executable: string,
   project: string,
-  snapshot: MimoOwnSnapshot,
+  snapshot: unknown,
   signal: AbortSignal,
 ): Promise<string | undefined> {
   signal.throwIfAborted()
@@ -48,6 +48,8 @@ export async function mimoMetadataKey(
     return
   }
 }
+
+export const mimoMetadataKey = nativeMetadataKey
 
 function currentCredential(
   source: Pick<Metadata, 'provider' | 'sourceIds' | 'credentialHash'>,

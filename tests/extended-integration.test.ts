@@ -377,11 +377,13 @@ describe('extended worker boundaries (simulated protocol)', () => {
     },
   )
   it.skipIf(process.platform !== 'darwin')(
-    'isolates concurrent native catalogs and seals each only after capture completes',
+    'isolates concurrent native catalogs and removes each only after capture completes',
     async () => {
       const root = mkdtempSync(join(tmpdir(), 'cwn-catalog-isolation-'))
       try {
         seedSyntheticOpenCode(root)
+        const account = join(root, 'accounts/opencode/data/opencode/auth.json')
+        const originalAccount = readFileSync(account)
         const roots: string[] = []
         let release!: () => void
         const concurrent = new Promise<void>((resolve) => {
@@ -415,9 +417,9 @@ describe('extended worker boundaries (simulated protocol)', () => {
         expect(result[0]).toEqual(result[1])
         for (const query of roots) {
           expect(query).toMatch(/\/catalog\/opencode\/query-[^/]+$/)
-          expect(statSync(query).mode & 0o777).toBe(0o700)
-          expect(statSync(join(query, 'native-copied.json')).mode & 0o777).toBe(0o600)
+          expect(existsSync(query)).toBe(false)
         }
+        expect(readFileSync(account)).toEqual(originalAccount)
       } finally {
         rmSync(root, { recursive: true, force: true })
       }
@@ -465,15 +467,20 @@ describe('extended worker boundaries (simulated protocol)', () => {
   })
   it.each(['plan', 'accept-edits'] as const)(
     'preserves native OpenCode %s permissions without an OS policy wrapper',
-    async mode => {
+    async (mode) => {
       const root = mkdtempSync(join(tmpdir(), 'cwn-native-mode-'))
       try {
         seedSyntheticOpenCode(root)
         const project = privateDirectory(join(root, 'project'))
         const launch = await extendedLaunch(
-          'opencode', '/synthetic/opencode', project,
-          { model: 'fixture/model', effort: 'default' }, mode, 'synthetic task',
-          join(root, 'state'), { ...DEFAULT_CONFIG, stateDirectory: root },
+          'opencode',
+          '/synthetic/opencode',
+          project,
+          { model: 'fixture/model', effort: 'default' },
+          mode,
+          'synthetic task',
+          join(root, 'state'),
+          { ...DEFAULT_CONFIG, stateDirectory: root },
         )
         try {
           expect(launch.argv[0]).toBe(process.execPath)

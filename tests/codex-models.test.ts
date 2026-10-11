@@ -151,6 +151,38 @@ describe('Codex native capability intersection', () => {
     ).toEqual([])
     expect(f.backend.spawn).toHaveBeenCalledOnce()
   })
+  it.each([
+    ['quota', 'Codex 当前账号额度已用尽，请等待额度恢复后刷新'],
+    ['authentication', 'Codex 当前账号认证不可用或访问被拒绝，请检查登录后刷新'],
+  ] as const)(
+    'reports confirmed %s denial without publishing native model capabilities',
+    async (denialReason, message) => {
+      const f = fixture([[entry('public')]])
+      vi.mocked(readCodexOwnAccountSource).mockResolvedValue({
+        provider: 'openai-codex',
+        credential: { type: 'oauth', access: 'synthetic-never-displayed' },
+        sourceIds: ['/synthetic'],
+        nativeRouteConfirmed: true,
+        baseUrl: 'https://chatgpt.com/backend-api',
+      } as any)
+      vi.mocked(probeAccountModels).mockResolvedValue({
+        state: 'denied',
+        source: 'unknown',
+        models: [],
+        denialReason,
+      })
+      await expect(
+        discoverCodexModels(
+          f.backend,
+          DEFAULT_CONFIG,
+          '/synthetic/codex',
+          '/synthetic',
+          new AbortController().signal,
+        ),
+      ).rejects.toThrow(message)
+      expect(f.child.waitForExit).toHaveBeenCalledOnce()
+    },
+  )
   it('rereads credentials after native refresh and supports confirmed default file API routing', async () => {
     const f = fixture([[entry('allowed')]])
     vi.mocked(readCodexOwnAccountSource)

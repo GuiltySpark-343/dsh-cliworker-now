@@ -28,6 +28,7 @@ import { BrandIcon, Glyph } from './icons.tsx'
 import { operationMessage } from './operation-error.ts'
 import { value, type API } from './workers.ts'
 import { RolePresetsPane } from './role-presets.tsx'
+import { AccountQueryQueue } from './account-query-queue.ts'
 
 interface SettingsDialogProps {
   open: boolean
@@ -143,7 +144,7 @@ function OpenSettingsDialog({
   const [accounts, setAccounts] = useState<Partial<Record<CliId, AccountEntry>>>({})
   const enabledRef = useRef(enabled)
   enabledRef.current = enabled
-  const probes = useRef(new Map<CliId, AbortController>())
+  const probes = useRef(new AccountQueryQueue<CliId>())
   const toggleController = useRef<AbortController>()
   const accountClose = useRef<() => Promise<boolean>>()
   const leaving = useRef(false)
@@ -161,27 +162,25 @@ function OpenSettingsDialog({
   const refreshAccount = useCallback(
     (id: CliId, replace = false) => {
       if (!enabledRef.current?.[id]) return
-      const previous = probes.current.get(id)
-      if (previous && !replace) return
-      previous?.abort()
-      const controller = new AbortController()
-      probes.current.set(id, controller)
+      if (probes.current.has(id) && !replace) return
       setAccounts((old) => ({ ...old, [id]: { data: old[id]?.data, loading: true } }))
-      void (async () => {
-        try {
-          const next: AccountStatus = JSON.parse(
-            value(await api.cliworker.accountStatus(sessionId, id, controller.signal)),
-          )
-          if (next.cli !== id) throw new Error('收到不匹配的 CLI 账号状态，请重试')
-          if (!controller.signal.aborted)
-            setAccounts((old) => ({ ...old, [id]: { data: next, loading: false } }))
-        } catch (error) {
-          if (!controller.signal.aborted)
-            setAccounts((old) => ({ ...old, [id]: { loading: false, error: operationMessage(error) } }))
-        } finally {
-          if (probes.current.get(id) === controller) probes.current.delete(id)
-        }
-      })()
+      probes.current.enqueue(
+        id,
+        async (signal) => {
+          try {
+            const next: AccountStatus = JSON.parse(
+              value(await api.cliworker.accountStatus(sessionId, id, signal)),
+            )
+            if (next.cli !== id) throw new Error('收到不匹配的 CLI 账号状态，请重试')
+            if (!signal.aborted)
+              setAccounts((old) => ({ ...old, [id]: { data: next, loading: false } }))
+          } catch (error) {
+            if (!signal.aborted)
+              setAccounts((old) => ({ ...old, [id]: { loading: false, error: operationMessage(error) } }))
+          }
+        },
+        replace,
+      )
     },
     [api, sessionId],
   )
@@ -204,18 +203,17 @@ function OpenSettingsDialog({
     return () => {
       controller.abort()
       toggleController.current?.abort()
-      for (const probe of probes.current.values()) probe.abort()
       probes.current.clear()
     }
   }, [api, sessionId])
   useEffect(() => {
     if (!enabled) return
-    for (const id of CLI_IDS) {
+    probes.current.prioritize(cli)
+    for (const id of [cli, ...CLI_IDS.filter((id) => id !== cli)]) {
       if (enabled[id]) {
         if (!accounts[id]) refreshAccount(id)
       } else {
-        probes.current.get(id)?.abort()
-        probes.current.delete(id)
+        probes.current.cancel(id)
         if (accounts[id])
           setAccounts((old) => {
             const next = { ...old }
@@ -225,9 +223,9 @@ function OpenSettingsDialog({
       }
     }
     // A completed or failed probe is cached until explicitly refreshed. This
-    // effect runs only when enablement changes, never on each response/render.
+    // Selection only reprioritizes pending work; it does not repeat settled reads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, refreshAccount])
+  }, [enabled, cli, refreshAccount])
 
   async function toggleCli(id: CliId, nextValue: boolean) {
     if (!enabled || toggleController.current) return

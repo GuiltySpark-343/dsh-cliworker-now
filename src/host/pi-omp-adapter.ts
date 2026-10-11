@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, writeFile, lstat, open, rename, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, writeFile, lstat, open, rename, rm, chmod } from 'node:fs/promises'
 import { constants, existsSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
@@ -41,6 +41,22 @@ async function privateDirectory(path: string) {
   await mkdir(path, { recursive: true, mode: 0o700 })
   const info = await lstat(path)
   if (info.isSymbolicLink() || !info.isDirectory()) throw new Error('Unsafe Pi/OMP state directory symlink')
+  if (process.platform === 'win32') {
+    // Node's POSIX directory descriptor/chmod path is not supported on Windows.
+    // Match account preparation: pin the path and inode around the path-based operation.
+    const canonical = await realpath(path)
+    await chmod(path, 0o700)
+    const current = await lstat(path)
+    if (
+      current.isSymbolicLink() ||
+      !current.isDirectory() ||
+      info.dev !== current.dev ||
+      info.ino !== current.ino ||
+      (await realpath(path)) !== canonical
+    )
+      throw new Error('Pi/OMP state directory changed while opening')
+    return canonical
+  }
   const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
   try {
     const opened = await handle.stat()

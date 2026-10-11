@@ -6,6 +6,7 @@ import {
   nativeAgyAccountIdentity,
   projectWindowsAgyAccount,
   readWindowsAgyAccount,
+  withWindowsAgyAccountSnapshot,
 } from '../src/host/agy-windows-account.ts'
 import { discoverAgyAccountModels } from '../src/host/agy-models.ts'
 import { mkdtemp, mkdir, rm } from 'node:fs/promises'
@@ -83,6 +84,66 @@ it('discards a projection returned after cancellation', async () => {
     return '{"state":"authenticated"}'
   })
   await expect(readWindowsAgyAccount(backend, DEFAULT_CONFIG, c.signal)).rejects.toThrow()
+})
+it('shares only a safe projection in one operation and isolates consumer mutations', async () => {
+  const current = signal()
+  capture.mockResolvedValue(
+    JSON.stringify({ state: 'authenticated', principalHash: 'a'.repeat(64), token: 'SECRET' }),
+  )
+  await withWindowsAgyAccountSnapshot(backend, DEFAULT_CONFIG, current, async () => {
+    const first = await readWindowsAgyAccount(backend, DEFAULT_CONFIG, current)
+    first.identity.state = 'unconfigured'
+    first.principalHash = 'b'.repeat(64)
+    const second = await readWindowsAgyAccount(backend, DEFAULT_CONFIG, current)
+    expect(second.identity.state).toBe('authenticated')
+    expect(second.principalHash).toBe('a'.repeat(64))
+    expect(JSON.stringify(second)).not.toContain('SECRET')
+    expect(capture).toHaveBeenCalledOnce()
+  })
+  await readWindowsAgyAccount(backend, DEFAULT_CONFIG, current)
+  expect(capture).toHaveBeenCalledTimes(2)
+})
+it('never shares a projection across backend, configuration or cancellation scope', async () => {
+  const current = signal()
+  capture.mockResolvedValue('{"state":"unconfigured"}')
+  await withWindowsAgyAccountSnapshot(backend, DEFAULT_CONFIG, current, async () => {
+    await readWindowsAgyAccount(backend, DEFAULT_CONFIG, current)
+    await readWindowsAgyAccount({} as ProcessBackend, DEFAULT_CONFIG, current)
+    await readWindowsAgyAccount(backend, { ...DEFAULT_CONFIG }, current)
+    await readWindowsAgyAccount(backend, DEFAULT_CONFIG, signal())
+    await readWindowsAgyAccount(backend, DEFAULT_CONFIG, current)
+  })
+  expect(capture).toHaveBeenCalledTimes(4)
+})
+it('does not cache failures or return a cached projection after cancellation', async () => {
+  const controller = new AbortController()
+  const failure = new Error('Synthetic native failure')
+  capture.mockRejectedValueOnce(failure).mockResolvedValue('{"state":"unconfigured"}')
+  await withWindowsAgyAccountSnapshot(backend, DEFAULT_CONFIG, controller.signal, async () => {
+    await expect(readWindowsAgyAccount(backend, DEFAULT_CONFIG, controller.signal)).rejects.toBe(failure)
+    await readWindowsAgyAccount(backend, DEFAULT_CONFIG, controller.signal)
+    controller.abort(new Error('Synthetic cancellation'))
+    await expect(readWindowsAgyAccount(backend, DEFAULT_CONFIG, controller.signal)).rejects.toThrow(
+      'Synthetic cancellation',
+    )
+  })
+  expect(capture).toHaveBeenCalledTimes(2)
+})
+it('invalidates the scope for an async descendant that outlives its operation', async () => {
+  const current = signal()
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let late!: Promise<unknown>
+  capture.mockResolvedValue('{"state":"unconfigured"}')
+  await withWindowsAgyAccountSnapshot(backend, DEFAULT_CONFIG, current, async () => {
+    await readWindowsAgyAccount(backend, DEFAULT_CONFIG, current)
+    late = gate.then(() => readWindowsAgyAccount(backend, DEFAULT_CONFIG, current))
+  })
+  release()
+  await late
+  expect(capture).toHaveBeenCalledTimes(2)
 })
 it('uses Windows native metadata without requiring a plaintext auth file', async () => {
   const home = await mkdtemp(join(tmpdir(), 'cwn-agy-win-'))

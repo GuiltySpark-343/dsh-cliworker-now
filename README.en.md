@@ -113,6 +113,14 @@ An integrated adapter does not mean every model, subscription or platform has be
 
 MiMo refers to [XiaomiMiMo/MiMo-Code](https://github.com/XiaomiMiMo/MiMo-Code). Hermes Agent replaced the old external Harness CLI adapter; DeepSeek Harness remains the plugin's host.
 
+MiMo reuses a bounded, short-lived in-memory cache of native capabilities to reduce repeated CLI startup on Windows. The first load still queries the native CLI. Changes to the account, configuration, project or executable invalidate the cache, and each dispatch still checks the current account's access.
+
+The settings dialog allows at most two concurrent account-status requests, including the selected CLI. The selected item goes first when settings opens; switching only reprioritizes queued requests. Model catalogs are queried separately, so this is not a limit on all subprocesses. Closing or disabling cancels the relevant reads; Host remains responsible for process cleanup.
+
+Verified Kimi managed OAuth model capabilities and Claude command-parameter capabilities can also be reused briefly. Each catalog query still checks current credentials, expiry and remote access; remote quota is not cached. Windows launchers hide extra console windows for background queries and embedded account terminals.
+
+Successful extended-CLI catalog queries remove their private temporary directory and extracted native cache after process exit is confirmed. Failed or unconfirmed cleanup preserves the query files and never deletes native account files.
+
 Probe records: [ZCode](doc/zcode-probe.md) · [Grok](doc/grok-probe.md) · [Pi / OMP](doc/pi-omp-probe.md) · [Hermes](doc/hermes-probe.md) · [OpenCode](doc/opencode-probe.md)
 
 ## 5. Installation and updates
@@ -202,6 +210,8 @@ macOS and Windows share the same account terminal with text selection and copyin
 Windows discovers the CLI inside the current user’s verified official Codex app package, the official npm entry, and Hermes’s official installation directory. An incomplete installation without an executable is reported explicitly.
 
 Windows supports the verified official Pi launcher and the native executable declared by the OpenCode npm package. The plugin parses their fixed launch commands and validates installation identity. Unrecognized or broken entries require an installation check. Other Pi versions require SDK/RPC and native menu verification before support is added.
+
+Settings prioritize the selected CLI and limit background account checks to two at a time. Verified Kimi OAuth model capabilities and Claude command capabilities can be reused briefly, while credentials, expiry and remote allowance are checked again. Windows metadata and embedded account launchers hide additional console windows. Codex reports confirmed exhausted quota separately from unavailable authentication; native model capabilities alone do not establish permission to run a task.
 
 OMP, Pi, Hermes and OpenCode display their own provider and authentication method. Account logins use a concise label such as `OpenAI账号登录`; full safe identity details and other API sources remain in the hover text. API-only authentication uses a label such as `zai.cn API 登录`. Valid authentication is not reduced to a generic “configured” state; model access is checked separately.
 

@@ -280,6 +280,11 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
           timeout: 10000,
         })
         outputs.push(JSON.parse(result.stdout))
+        const candidatesPath = join(request.stateDirectory, 'agent', 'catalog-candidates.json')
+        expect((await stat(candidatesPath)).mode & 0o777).toBe(0o600)
+        expect(
+          (await readFile(candidatesPath, 'utf8')).includes('SYNTHETIC_HOST_REFERENCE_MUST_STAY_IN_ENV'),
+        ).toBe(false)
         return result.stdout
       },
       input.stateDirectory,
@@ -297,11 +302,7 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
     expect(models.map((model) => model.id)).toEqual([input.preference.model])
     expect(JSON.stringify(outputs)).not.toContain(fixtureKey)
     expect(JSON.stringify(outputs)).not.toContain('SYNTHETIC_HOST_REFERENCE_MUST_STAY_IN_ENV')
-    const candidatesPath = join(states[0]!, 'agent', 'catalog-candidates.json')
-    expect((await stat(candidatesPath)).mode & 0o777).toBe(0o600)
-    expect(
-      (await readFile(candidatesPath, 'utf8')).includes('SYNTHETIC_HOST_REFERENCE_MUST_STAY_IN_ENV'),
-    ).toBe(false)
+    await expect(stat(states[0]!)).rejects.toMatchObject({ code: 'ENOENT' })
   })
   it('never persists native SDK expansion of the synthetic Host credential into intermediate candidates', async () => {
     const { snapshotNativeCandidates } = await import('../src/host/pi-native-catalog.mjs')

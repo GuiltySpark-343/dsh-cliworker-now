@@ -925,3 +925,20 @@
 - [x] 首次最终远程测试 `fd6e9167-9c46-4523-aafe-d8a60d3f041b` 因 C 盘空间耗尽失败，原始失败报告保留。仅清理本任务 owner 标识且进程已退出的构建依赖缓存后重试通过；最终 run 又清理约 0.82 GB 可重建依赖，887 个源码/产物/证据文件前后哈希一致，保留 2c16676d 备份依赖。未清理用户数据或 Hermes 安装，收尾磁盘空闲约 7.02 GB。
 - [x] Windows 已无调试参数正常启动；Windows/Mac 19487 监听均为 0，账号 ready scope、临时 UI 计划任务、活动 Worker 均为 0，三条历史 Worker 记录保留。证据：私有 `.test-data/windows-remote/desktop-audit/hermes-final-{live-menu,install-result,cleanup}.json`、`windows-electron-final-hermes-ae2dbcd8-*`、`final-run-dependency-cleanup.json`，不入 Git。
 - 边界仍保留：ZCode 仅证实网页登录正常，未完成授权；Hermes 原生安装和登录终端可用，尚未配置账号；Claude 按用户要求跳过官方账号/真实调用，Kimi 同源额度仍不可核验。OpenSpec 3.1/3.3 继续未勾选，不通过归档掩盖缺口。阶段提交，不推送。
+
+
+### Windows 模型目录、首次检测和加载优化（2026-10-11）
+
+- [x] 修复 Pi/OMP Windows 目录 fchmod EPERM。实际 Windows Desktop 读取 OMP 11 个模型、Pi 2 个模型；界面下拉分别按模型显示原生强度（Pi GLM-5.3 为 Low/High/Max）。OMP 重新打开设置实测从“正在读取登录信息”约 1.376 秒进入已识别状态，没有误报未安装；原始首次误报本轮基线未复现，不能据此声称确定了所有首次检测失败原因。
+- [x] Codex Windows 原生 app-server 返回 6 个受支持模型及强度，远端额度响应 allowed=false/limit_reached=true。实际界面改为“Codex 当前账号额度已用尽，请等待额度恢复后刷新”；没有伪造可用模型，也没有消耗模型额度。
+- [x] OpenCode 两条原生启动路径显式隐藏额外控制台。实际 45.084 秒窗口观察覆盖模型读取、刷新、登录启动，新增可见控制台为 0；嵌入式原生 Add credential 菜单显示正常，方向键选项移动成功，关闭后账号终端退出。基线 45 秒也未复现用户描述的窗口，参数回归和修复后观察不能证明所有短暂闪窗已被捕获。
+- [x] 设置页账号检测以当前项优先、最多两个请求并发，取消/重新启用/过时结果回归通过；Kimi/Claude 能力复用与账号/入口/配置变化、失败、取消安全边界回归通过。Antigravity 同一目录查询减少一次 Windows 身份读取；当前实测 6.394/6.147 秒、均为 7 个模型，旧观察 10.847/11.707 秒仅作参考，网络及系统负载不同，不据此计算固定加速比例。
+- [x] MiMo 保留既有有界能力复用，当前同一账号连续读取实测 10.311 秒→0.262 秒，均为 2 个原生模型。旧包已可 6.572 秒→0.277 秒热读，因此这不是本轮新增的冷启动加速；本轮没有改变原生串行初始化，也不承诺全部 CLI 首次秒开。
+- [x] 追加成功目录回收：旧 OMP 每次成功查询留下约 121 MB 临时目录。最终包实机连续 OMP→Pi→OMP→OpenCode 返回 11/2/11/5 个模型，耗时 7.591/1.567/5.748/2.784 秒；查询前后对应目录完整名称集合和计数一致（15/8/11），新成功查询均已移除，旧失败现场保留。
+- [x] 自动验证分阶段保留：主要修复本地 1696 passed/8 skipped；Windows 实际 Electron 20 文件 366 passed/1 POSIX-only skipped/0 failed，Host 加载和两端类型通过。随后目录回收补丁定向 5 文件 90/90；最终本地完整 89 文件、1702 passed/8 skipped/0 failed，类型、preview、正式构建和严格规格 11/11 通过。Windows 366 项属于追加回收前的包，最终追加补丁使用前述真实目录与回收验收，未虚称重跑全部 Windows 单测。
+- [x] 本地默认沙箱完整测试因 detached-child fixture 进程控制限制挂起；按本次 PID/创建身份结束两个测试进程组后，允许进程控制的环境完整重跑通过。Windows 一次合成 OMP worker SQLite 路径达 271 字符，缩短隔离 TEMP 后同测试 6/6 及 20 文件回归通过，未更改生产数据库路径来伪造通过。
+- [x] 最终 preview 包 SHA-256 `d88f9a0d88c11ec905c062ffc205a47e324e864215930e952e122b0d7c02bd8b`，无活动 Worker/账号终端时使用 Windows 原生安装器更新，326 个 lib 文件逐项匹配。Mac 正式构建 Host SHA-256 `1d7db6ac0836fe95247ced4bb762f7dd09302a876d8cfcd87b19eeb3698cf685` 与 preview/Windows 一致；Client 仅构建路径注释及 source map 有差异，执行代码相同。Mac 共享设置实际渲染 Pi GLM-5.3 的 Low/High/Max 下拉正常。
+- 环境干扰已核查：一次 OMP 重读失败时 C 盘空闲为 0。此前远程验收的 agy models PowerShell 孤儿进程占约 55 GB 私有内存；核实确属本任务脚本后结束，确认退出，分页文件自动缩小，空间恢复约 26 GB。同一个未更改的插件包随后 OMP→Pi→OMP 全部成功。仅清理本任务可重建依赖/native 缓存，保留报告和哈希；未清理用户数据、账号、安装或修改分页设置。不能把这一环境故障当作账号问题或本次代码回归。
+- 证据保存在 Git 忽略的 `.test-data/windows-remote/desktop-audit/`：`models-windows-accepted-report.json`、`models-cleanup-local-full-approved.json`、`models-after-*.json`、`omp-after-first-detection-ui.json`、`opencode-console-after.json`、`opencode-after-terminal-ui.json`、`models-final-live-repeat.json`、`models-query-cleanup-verified.json`、`models-cleanup-install-result.json` 和下拉画面。仅记录安全模型能力、计数、耗时及状态，不保存授权码或令牌。
+- 边界：本轮真实模型调用为 0；Kimi 当前凭据已过期，未验证正向账号热读；Claude 官方账号/额度按用户要求跳过，历史 OpenSpec 3.1/3.3 保留未勾选，不归档。ZCode 继续官方默认流程。此阶段本地提交、不推送。
+- [x] 收尾：Windows 已无调试参数正常启动，Windows/Mac 19487 监听为 0；账号 ready scope、临时 UI 任务及任务归属 PowerShell 为 0；3 条历史 Worker 为 interrupted/completed/completed，活动为 0。Mac 最终正式包已正常加载，当前无登录终端。清理结果见 `models-final-cleanup.json`。

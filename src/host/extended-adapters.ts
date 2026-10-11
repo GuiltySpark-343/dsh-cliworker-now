@@ -19,11 +19,7 @@ import { homedir, tmpdir } from 'node:os'
 import type { CliId, Preference, TaskMode, ModelChoice } from '../shared/types.ts'
 import type { RuntimeConfig } from './process.ts'
 import { prepareZCode, discoverZCode, zcodeAuthDirectory } from './zcode-adapter.ts'
-import {
-  preparePiOmp,
-  discoverPiOmp,
-  type PiOmpMetadataCapture,
-} from './pi-omp-adapter.ts'
+import { preparePiOmp, discoverPiOmp, type PiOmpMetadataCapture } from './pi-omp-adapter.ts'
 import { prepareOpenCode, discoverOpenCode, openCodeAuthDirectory } from './opencode-adapter.ts'
 import { prepareHermes, discoverHermes } from './hermes-adapter.ts'
 import { effectiveHermesHome } from './hermes-account-context.ts'
@@ -252,8 +248,10 @@ export async function extendedCatalog(
               : undefined
   if (!models) throw new Error('未知 CLI')
   signal?.throwIfAborted()
-  // A successful capture has confirmed that its process range exited. On a
-  // rejected capture preserve the query directory without touching live files.
+  // A successful capture has confirmed that its process range exited. Only
+  // model values leave this operation; its private snapshots and native caches
+  // are no longer needed. Rejected captures keep their potentially live files.
   sealPrivateTree(state)
+  rmSync(state, { recursive: true, force: true })
   return models
 }

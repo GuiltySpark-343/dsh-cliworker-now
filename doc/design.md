@@ -548,3 +548,13 @@ Hermes 与角色功能共享同一 WorkerRuntime；名称、角色快照与原�
 ### Hermes Windows 原生依赖复用补正（2026-10-11）
 
 Windows 官方源码安装的 distlib 入口在隔离 `HERMES_HOME` 下无法定位安装 facts，账号终端因而提前退出。现将 Mac 已采用的“已提交依赖环境 + 账号目录隔离”路径共用于 Windows：只静态读取官方 launcher 固定 checkout，核对安装标识、facts 与 venv，再通过共享 Python 入口持有官方 generation lease；Windows 使用官方标准库锁实现。不得 bootstrap、猜测依赖代次或导入其他账号目录；旧自包含原生安装保留自身启动契约。实际 Windows 登录菜单和后续原生网页登录提示已显示，未完成账号授权；与模型调用验收分开记录。
+
+
+## 2026-10-11：Windows 模型目录、检测调度与能力复用
+
+- macOS/Windows 共用设置页和 Host 契约。设置页账号状态请求（含当前项）最多两个并发，当前 CLI 优先；切换只重排尚未启动的请求，避免把 Client 取消返回当作 Host 进程已退出。关闭/禁用会取消，快速重新启用仍能排入新的检测，过时结果不能覆盖当前状态；模型目录请求独立管理。
+- Pi/OMP 的 Windows 私有目录准备使用路径权限操作，并在前后验证目录、真实路径与文件身份；macOS 保留目录句柄路径，避免 Windows 对目录 fchmod 返回 EPERM。目录成功且所属进程范围确认退出后，删除本次独有 query 目录及原生解压缓存；失败/取消/清理未确认保留现场，不改原始账号、共享续期和其他查询。
+- Codex 仍采用当前原生 model/list 能力与同源账号目录、额度交集；明确区分鉴权失败与额度耗尽，不把无额度改成可用。原生模型与思考强度能读到，不代表当前账号允许执行。
+- private-launch 与 Windows 账号 launcher 的真实子进程显式 windowsHide，保留原有 stdio/ConPTY 输入输出和进程范围清理。OpenCode 登录终端继续显示在插件内。
+- MiMo 既有能力缓存保留；Kimi 仅对已验证 managed OAuth 来源缓存非秘密原生模型能力，Claude 仅缓存 help 支持能力。各缓存 30 秒、最多 16 项，键包含原生入口/运行时/项目/相关配置与账号材料摘要/环境；每次重读当前凭据、过期状态及远端授权，失败不缓存。显示快照和本地能力均不能替代额度或身份核验。
+- Windows Antigravity 单次模型目录内部复用安全身份投影，将原生身份读取从三次减为两次；最终授权绑定仍独立重读。作用域退出即失效，不跨请求、不同 backend/config/signal 或 Mac 共用。MiMo 冷启动命令保持串行，未确认 SQLite/原生初始化可安全并发前不并行。

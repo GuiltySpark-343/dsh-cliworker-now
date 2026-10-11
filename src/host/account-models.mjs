@@ -1,7 +1,12 @@
 // Read-only account metadata. Never refresh OAuth, submit prompts, or return
 // credentials, account IDs, headers, endpoint URLs, or raw exception messages.
 const unknown = () => ({ state: 'unknown', source: 'unknown', models: [] })
-const denied = () => ({ state: 'denied', source: 'unknown', models: [] })
+const denied = (denialReason) => ({
+  state: 'denied',
+  source: 'unknown',
+  models: [],
+  ...(denialReason ? { denialReason } : {}),
+})
 const validId = (id) => typeof id === 'string' && !!id && id.length <= 1024 && !/[\s\x00-\x1f]/.test(id)
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value)
 const unavailable = (model) =>
@@ -124,7 +129,7 @@ export async function probeAccountModels(input, options = {}) {
   if (typeof token !== 'string' || !token.trim() || token.trimStart().startsWith('!')) return unknown()
   // Near-expiry credentials cannot reliably finish the query. Do not renew them.
   if (oauth && (typeof credential.expires !== 'number' || credential.expires <= Date.now() + 30000))
-    return denied()
+    return denied('authentication')
   const codex = oauth && ['openai', 'openai-codex'].includes(input.provider)
   // xAI/other subscription catalogs do not expose a verified per-account scope
   // contract here. Do not turn an OAuth login into their whole public catalog.
@@ -179,7 +184,7 @@ export async function probeAccountModels(input, options = {}) {
             : '/models',
         ]) {
       modelResponse = await request(path)
-      if (modelResponse.status === 401 || modelResponse.status === 403) return denied()
+      if (modelResponse.status === 401 || modelResponse.status === 403) return denied('authentication')
       if (modelResponse.status >= 200 && modelResponse.status < 300) break
       if (![404, 405].includes(modelResponse.status)) return unknown()
     }
@@ -191,7 +196,7 @@ export async function probeAccountModels(input, options = {}) {
         return ['invalid_api_key', 'authentication_failed', 'unauthorized', 'forbidden', 401, 403].includes(
           code,
         )
-          ? denied()
+          ? denied('authentication')
           : unknown()
       }
       const models = normalize(envelope, oauth, token)
@@ -199,13 +204,11 @@ export async function probeAccountModels(input, options = {}) {
       if (codex) {
         const usage = await request('/wham/usage')
         const rate = usage.payload?.rate_limit
-        if (
-          usage.status === 401 ||
-          usage.status === 403 ||
-          rate?.allowed === false ||
-          rate?.limit_reached === true
-        )
-          return denied()
+        if (usage.status === 401 || usage.status === 403) return denied('authentication')
+        // Only the authenticated usage response establishes exhausted quota.
+        // Keep an unclassified denial distinct from expiry/401/403 and network failure.
+        if (usage.status === 200 && rate?.limit_reached === true) return denied('quota')
+        if (rate?.allowed === false || rate?.limit_reached === true) return denied()
         // A catalog/menu is not evidence that the account has an executable quota.
         if (usage.status !== 200 || rate?.allowed !== true || rate?.limit_reached !== false) return unknown()
         const plan =

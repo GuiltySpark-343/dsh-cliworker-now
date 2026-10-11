@@ -163,6 +163,10 @@ export async function discoverCodexModels(
     { signal },
   )
   signal.throwIfAborted()
+  if (scope.state === 'denied' && scope.denialReason === 'quota')
+    throw new Error('Codex 当前账号额度已用尽，请等待额度恢复后刷新')
+  if (scope.state === 'denied' && scope.denialReason === 'authentication')
+    throw new Error('Codex 当前账号认证不可用或访问被拒绝，请检查登录后刷新')
   if (scope.state !== 'supported') return []
   return native.filter((model) => scope.models.some((allowed) => allowed.id === model.id))
 }

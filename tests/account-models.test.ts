@@ -138,8 +138,28 @@ describe('read-only account-supported metadata (all credentials and responses si
           ? reply({ rate_limit: { allowed: false, limit_reached: true } })
           : reply({ models: [{ slug: 'model', supported_in_api: true }] })) as typeof fetch,
     })
-    expect(scope).toMatchObject({ state: 'denied', models: [] })
+    expect(scope).toMatchObject({ state: 'denied', denialReason: 'quota', models: [] })
   })
+  it.each([
+    [401, { allowed: false, limit_reached: true }, 'authentication'],
+    [403, { allowed: false, limit_reached: true }, 'authentication'],
+    [200, { allowed: false }, undefined],
+    [500, { allowed: false, limit_reached: true }, undefined],
+  ] as const)(
+    'does not mislabel usage HTTP %s as exhausted quota without authoritative evidence',
+    async (status, rate, reason) => {
+      const scope = await probeAccountModels(oauth(), {
+        fetch: (async (url) =>
+          String(url).includes('/usage')
+            ? reply({ rate_limit: rate, message: key }, status)
+            : reply({ models: [{ slug: 'model', supported_in_api: true }] })) as typeof fetch,
+      })
+      expect(scope.state).toBe(status === 500 ? 'unknown' : 'denied')
+      expect(scope.models).toEqual([])
+      expect(scope.denialReason).toBe(reason)
+      expect(JSON.stringify(scope)).not.toContain(key)
+    },
+  )
   it('does not refresh expired OAuth or run command credential resolvers', async () => {
     const fetcher = vi.fn()
     expect(

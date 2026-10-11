@@ -35,7 +35,9 @@ if (!existsSync(join(directory, 'cancel')) && !existsSync(join(directory, 'stop'
     // This fixed preload is scoped to that child, never NODE_OPTIONS or Host.
     if (executable === process.execPath && process.versions.electron)
       argv.unshift('--import', new URL('./windows-account-stdio.mjs', import.meta.url).href)
-    const child = spawn(executable, argv, { env: process.env, stdio: [accountInput, 1, 2] })
+    // Keep the existing ConPTY handles; a GUI-subsystem parent must not cause
+    // the native CLI to present an additional Windows console window.
+    const child = spawn(executable, argv, { env: process.env, stdio: [accountInput, 1, 2], windowsHide: true })
     child.once('error', () => { process.stderr.write('CLI launch failed\r\n') })
     child.once('close', recordExit)
   } catch {
