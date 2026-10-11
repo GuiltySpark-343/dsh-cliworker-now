@@ -996,3 +996,12 @@
 - [x] 两平台无活动任务后正常退出 Harness，正式构建/原生安装并正常重启；实际界面均确认 v0.7.7、1 个组件运行。Windows 最终安装的 339 个 lib 文件逐项匹配，全部测试、观察器、账号范围与临时任务清理，无调试启动。
 - [x] 最终公共包 344 文件，逐项匹配发布暂存，npm dry-run 通过；SHA-256：`fef207b47caab4f853fd2b1c8a04584dce0f99848281728647d4a48591d86559`。Client 可执行文本与前次两平台 UI 验收一致，preview 差异仅构建路径注释/源映射；新增 owner helper 与本次真实验收快照完全相同。
 - 以上安装/进程检查不代表所有第三方账号、额度和真实模型生成全部通过。本轮没有新增账号登录、续期或模型调用，既有 Claude/Kimi 等真实账号/额度边界继续保留；活动 OpenSpec 不以发布为由归档。
+
+## 2026-10-11：市场收录申请同步 v0.7.7
+
+- [x] 现场确认原收录 PR [#6795](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6795) 仍为 OPEN、未合并；原提交的 PR check 和 Submission gate 曾通过。因此直接更新原分支，保留申请与审核历史。
+- [x] 更新 `data/plugins/SuperWheel__cliworker-now.yml`：预构建包从固定 v0.6.5 链接改为 v0.7.7；中英文简介同步 macOS / Windows。更新提交 `ac1a1145573a3592f3b965a781a60f7dac34aa4e` 仅修改该文件的 3 行；PR 对上游仍仅新增自己的一个条目。标题和说明同步为当前版本，没有手改生成的 README 或其他插件。
+- [x] 只读核验 GitHub/npm 公开 v0.7.7 安装包：字节一致，SHA-256 均为 `fef207b47caab4f853fd2b1c8a04584dce0f99848281728647d4a48591d86559`；校验文件、npm integrity、仓库关联、manifest、Cordis patch、编译入口及 344 文件清单通过。npm 映射由目录自动采集，不添加无效的 `npm` 字段。
+- [x] 在当前精选列表的独立副本运行 `validateEntries`（4490 条）、`node scripts/generate-readme.mjs`、`git diff --check` 和 `SKIP_PUBLISH_CHECKS=1 node scripts/build-site.mjs`，中英文生成及官网本地构建通过；构建使用 CommandLineTools Git。未部署精选列表官网。
+- [ ] 当前新提交的自动检查及维护者审核/合并：本次快照为 PR check IN_PROGRESS，仍未正式收录；原提交的绿灯不作为新提交已通过的证据。
+- 本轮为目录元数据及发布记录更新，没有改动插件运行时、重新打包/安装插件或调用模型。公开发布报告中的回归及两平台验收未重跑。可复核证据保存于忽略目录 `.test-data/market-submission-6795/v0.7.7/`；源插件仓库只记录本地提交，不推送。
