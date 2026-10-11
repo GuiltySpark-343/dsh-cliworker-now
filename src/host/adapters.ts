@@ -11,10 +11,17 @@ import { GrokProtocol } from './grok-adapter.ts'
 import { OpenCodeProtocol } from './opencode-adapter.ts'
 import { BridgeProtocol } from './bridge-protocol.ts'
 import { verifyPiOmpExecutable } from './pi-omp-identity.ts'
+import {
+  findWindowsCodexAppx,
+  hasWindowsHermesInstallDirectory,
+  presentWindowsCliCandidate,
+  WindowsCliInstallationError,
+} from './windows-cli-installation.ts'
 import { resolveModel } from '../shared/models.ts'
 import { existsSync, statSync, lstatSync, accessSync, constants } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { SubprocessExecutableNotFoundError } from '@deepseek-ai/dsh-subprocess'
 import {
   CLI_LABELS,
   EFFORTS,
@@ -86,6 +93,10 @@ export const executableFor = (cli: CliId, config: RuntimeConfig): string => {
         const entry = join(root, cli + extension)
         if (entryPresent(entry)) return entry
       }
+    if (cli === 'codex' || cli === 'hermes') {
+      const entry = presentWindowsCliCandidate(cli)
+      if (entry) return entry
+    }
     return configured || cli
   }
   if (cli === 'zcode')
@@ -374,6 +385,15 @@ export async function resolveCliExecutable(
       try {
         return await backend.resolveExecutable(executable)
       } catch (error: any) {
+        const absent =
+          error instanceof SubprocessExecutableNotFoundError || ['ENOENT', 'ENOTDIR'].includes(error.code)
+        if (
+          process.platform === 'win32' && executable === cli && absent &&
+          cli === 'hermes' && hasWindowsHermesInstallDirectory()
+        )
+          throw new WindowsCliInstallationError(
+            '检测到 Hermes 安装目录，但未找到可用 CLI 入口，请完成安装或配置已有入口',
+          )
         // Only an absent default PATH entry can use the legacy private install.
         // A broken or incompatible native/configured entry must remain an error.
         if (cli === 'pi' && executable === 'pi' && ['ENOENT', 'ENOTDIR'].includes(error.code)) {
@@ -388,14 +408,32 @@ export async function resolveCliExecutable(
     }
     // Path lookup owns no process; it may be abandoned, but no late resolution
     // may start an identity probe after its caller has cancelled.
-    resolved = await new Promise<string>((resolve, reject) => {
-      const abort = () => reject(signal.reason)
-      signal.addEventListener('abort', abort, { once: true })
-      void lookup()
-        .then(resolve, reject)
-        .finally(() => signal.removeEventListener('abort', abort))
-      if (signal.aborted) abort()
-    })
+    const pathLookup = (read: () => Promise<string>) =>
+      new Promise<string>((resolve, reject) => {
+        const abort = () => reject(signal.reason)
+        signal.addEventListener('abort', abort, { once: true })
+        void read()
+          .then(resolve, reject)
+          .finally(() => signal.removeEventListener('abort', abort))
+        if (signal.aborted) abort()
+      })
+    try {
+      resolved = await pathLookup(lookup)
+    } catch (error: any) {
+      signal.throwIfAborted()
+      const absent =
+        error instanceof SubprocessExecutableNotFoundError || ['ENOENT', 'ENOTDIR'].includes(error.code)
+      if (process.platform !== 'win32' || cli !== 'codex' || executable !== cli || !absent) throw error
+      // Appx metadata owns a child process. Unlike pure PATH lookup, cancellation
+      // must await its cleanup and preserve ProcessCleanupUnconfirmedError.
+      const entry = await findWindowsCodexAppx(
+        (argv, cwd) => captureCatalogMetadata(backend, config, argv, cwd, signal),
+        signal,
+      )
+      signal.throwIfAborted()
+      if (!entry) throw error
+      resolved = await pathLookup(() => backend.resolveExecutable(entry))
+    }
   }
   signal.throwIfAborted()
   if (cli === 'pi' || cli === 'omp')

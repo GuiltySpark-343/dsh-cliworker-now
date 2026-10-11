@@ -375,7 +375,7 @@ export async function zcodeGrokAccountLaunch(
   config: RuntimeConfig,
   backend: ProcessBackend,
   signal: AbortSignal,
-  options: { home?: string } = {},
+  options: { home?: string; platform?: NodeJS.Platform } = {},
 ): Promise<ZCodeGrokAccountLaunch> {
   signal.throwIfAborted()
   const home = options.home ?? homedir()
@@ -397,6 +397,13 @@ export async function zcodeGrokAccountLaunch(
   const plainHelp = stripVTControlCharacters(help)
   const bigmodel = supportsBigModelLogin(help)
   const zai = /^\s*login\s+Sign in with Z\.AI OAuth\b/m.test(plainHelp)
+  // The installed Windows opener passes the URL through cmd.exe start, which
+  // truncates its native OAuth query at '&'. Keep init/poll in ZCode and let
+  // the user open its complete URL through the shared terminal's explicit button.
+  const noBrowser =
+    action === 'login' &&
+    (options.platform ?? platform()) === 'win32' &&
+    /^\s*--no-browser\s+/m.test(plainHelp)
   if (action === 'login' && !bigmodel && !zai)
     throw new ZCodeAccountCapabilityError('当前 ZCode 未声明原生登录能力，请检查 CLI 安装')
   if (action === 'manage' && !/^\s*tui\s+/m.test(plainHelp))
@@ -420,18 +427,19 @@ export async function zcodeGrokAccountLaunch(
       ...(action === 'manage'
         ? ['tui']
         : action === 'login'
-          ? ['login', ...(bigmodel ? ['bigmodel'] : [])]
+          ? ['login', ...(bigmodel ? ['bigmodel'] : []), ...(noBrowser ? ['--no-browser'] : [])]
           : ['logout']),
     ]),
     env,
     cwd,
     instruction:
-      action === 'login'
+      (noBrowser ? '终端显示授权链接后会打开浏览器，也可点击终端网址重新打开。' : '') +
+      (action === 'login'
         ? bigmodel
           ? '按 ZCode 原生提示完成 BigModel 授权；此账号供本插件的 ZCode 任务使用。'
           : '当前 ZCode 版本的原生登录仅支持 Z.AI OAuth，不支持 BigModel 登录。按提示完成 Z.AI 授权；此账号供本插件的 ZCode 任务使用。'
         : action === 'logout' && !bigmodel
           ? '此操作会退出该独立配置中的 Z.AI 账号。'
-          : zcodeGrokInstruction(cli, action),
+          : zcodeGrokInstruction(cli, action)),
   }
 }

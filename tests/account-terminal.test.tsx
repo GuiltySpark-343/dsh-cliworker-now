@@ -9,15 +9,27 @@ import type { CliId } from '../src/shared/types.ts'
 // Simulated PTY/Gateway and renderer only; these tests never invoke an installed CLI.
 const terminals = vi.hoisted(() => [] as any[])
 const faults = vi.hoisted(() => ({ constructor: false, open: false }))
+const clipboardWrites = vi.hoisted(() => vi.fn())
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     options: Record<string, any>
     cols = 80
     rows = 24
     input?: (text: string) => void
+    keyHandler?: (event: KeyboardEvent) => boolean
     write = vi.fn()
+    paste = vi.fn((text: string) => this.input?.(text))
     dispose = vi.fn()
     focus = vi.fn()
+    hasSelection = vi.fn(() => false)
+    getSelection = vi.fn(() => '')
+    clearSelection = vi.fn()
+    linkProvider?: any
+    linkDisposal = vi.fn()
+    registerLinkProvider = vi.fn((provider: any) => {
+      this.linkProvider = provider
+      return { dispose: this.linkDisposal }
+    })
     open = vi.fn(() => {
       if (faults.open) {
         faults.open = false
@@ -25,6 +37,9 @@ vi.mock('@xterm/xterm', () => ({
       }
     })
     loadAddon = vi.fn()
+    attachCustomKeyEventHandler = vi.fn((callback: (event: KeyboardEvent) => boolean) => {
+      this.keyHandler = callback
+    })
     constructor(options: Record<string, any>) {
       if (faults.constructor) {
         faults.constructor = false
@@ -48,10 +63,16 @@ vi.mock('@xterm/addon-fit', () => ({
     fit = vi.fn()
   },
 }))
+// Link range/wrap matching is tested in zcode-login-link-provider.test.ts. This
+// fixture exposes callbacks solely to verify terminal lifetime and navigation.
+vi.mock('../src/client/zcode-login-link-provider.ts', () => ({
+  createZcodeLoginLinkProvider: (_terminal: unknown, currentUrl: () => string | undefined, open: (url: string) => void) => ({ currentUrl, activate: open }),
+}))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: ({ children, variant: _variant, size: _size, ...props }: any) =>
     createElement('button', props, children),
   StateDot: ({ state }: any) => createElement('span', { 'data-state': state }),
+  writeClipboard: clipboardWrites,
 }))
 
 function deferred<T = unknown>() {
@@ -107,7 +128,10 @@ beforeEach(() => {
   terminals.length = 0
   faults.constructor = false
   faults.open = false
+  clipboardWrites.mockReset().mockResolvedValue(true)
   vi.stubGlobal('document', { body: {} })
+  vi.stubGlobal('navigator', { clipboard: { readText: vi.fn().mockResolvedValue('模拟剪贴板') } })
+  vi.stubGlobal('window', { open: vi.fn() })
   vi.stubGlobal('getComputedStyle', () => ({ getPropertyValue: () => '' }))
   vi.stubGlobal(
     'MutationObserver',
@@ -162,6 +186,7 @@ async function setup(initiallyOpen = true) {
   const onClose = vi.fn(),
     onFinished = vi.fn()
   const closeControl: AccountCloseControl = { current: undefined }
+  const container = new EventTarget()
   const render = (cli: CliId = 'codex', action: AccountAction = 'login', source?: AccountSource) => (
     <AccountTerminal
       api={api}
@@ -177,7 +202,7 @@ async function setup(initiallyOpen = true) {
   let renderer!: ReactTestRenderer
   await act(async () => {
     renderer = create(initiallyOpen ? render() : null, {
-      createNodeMock: (node) => (node.props.className === 'cwn-account-terminal-view' ? {} : null),
+      createNodeMock: (node) => (node.props.className === 'cwn-account-terminal-view' ? container : null),
     })
     mounted.push(renderer)
   })
@@ -200,6 +225,13 @@ async function setup(initiallyOpen = true) {
     })
   }
   const close = () => click('关闭终端')
+  const contextClipboard = async () => {
+    await act(async () => {
+      renderer.root.findByProps({ className: 'cwn-account-terminal-view' }).props.onContextMenuCapture({
+        preventDefault: vi.fn(), stopPropagation: vi.fn(),
+      })
+    })
+  }
   const unmount = async () => {
     await act(async () => {
       renderer.unmount()
@@ -220,9 +252,11 @@ async function setup(initiallyOpen = true) {
     update,
     start,
     close,
+    contextClipboard,
     click,
     unmount,
     closeControl,
+    container,
   }
 }
 
@@ -246,6 +280,318 @@ it('starts an account action only when explicitly mounted and never enters a pro
   const text = JSON.stringify(fixture.renderer.toJSON())
   expect(text).toContain('模拟账号交互')
   expect(text).not.toMatch(/插件不保存|关闭此窗口会结束|cwn-account-privacy/)
+  expect(fixture.renderer.root.findAllByType('button').map((button) => button.children.join(''))).toEqual(['关闭终端'])
+  expect(text).not.toContain('闪烁方块表示输入位置')
+  expect(text).not.toContain('outline: 2px')
+  expect(navigator.clipboard.readText).not.toHaveBeenCalled()
+})
+
+function clipboardEvent(text: string): Event {
+  const event = new Event('paste', { cancelable: true })
+  Object.defineProperty(event, 'clipboardData', { value: { getData: (type: string) => type === 'text/plain' ? text : '' } })
+  return event
+}
+
+it.each([
+  { key: 'v', code: 'KeyV', ctrlKey: true },
+  { key: 'V', code: 'KeyV', ctrlKey: true, shiftKey: true },
+  { key: 'v', code: 'KeyV', metaKey: true },
+  { key: 'Insert', shiftKey: true },
+])('leaves paste shortcut $key to the native clipboard event and writes it exactly once', async (keys) => {
+  const f = await setup()
+  await f.start()
+  const shortcut = {
+    key: '', code: '', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false,
+    type: 'keydown', stopPropagation: vi.fn(), preventDefault: vi.fn(), ...keys,
+  }
+  expect(terminals[0].keyHandler(shortcut)).toBe(false)
+  expect(shortcut.preventDefault).not.toHaveBeenCalled()
+  expect(f.accountWrite).not.toHaveBeenCalled()
+  const text = '模拟授权值 中文😀\r\n第二行\n第三行'
+  const event = clipboardEvent(text)
+  await act(async () => { f.container.dispatchEvent(event) })
+  expect(event.defaultPrevented).toBe(true)
+  expect(terminals[0].paste).toHaveBeenCalledExactlyOnceWith(text)
+  expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', text)
+  expect(navigator.clipboard.readText).not.toHaveBeenCalled()
+})
+
+it('preserves ordinary terminal keys and IME combinations', async () => {
+  const f = await setup()
+  await f.start()
+  for (const keys of [
+    { key: 'c', ctrlKey: true },
+    { key: 'c', metaKey: true },
+    { key: 'v', altKey: true, metaKey: true },
+    { key: 'v', ctrlKey: true, metaKey: true },
+    { key: 'v', altKey: true, ctrlKey: true },
+    { key: 'v', ctrlKey: true, isComposing: true },
+    { key: 'v', metaKey: true, isComposing: true },
+    { key: 'Insert' },
+  ]) expect(terminals[0].keyHandler({ ctrlKey: false, metaKey: false, ...keys })).toBe(true)
+})
+
+it('keeps the Mac Command-V key lifecycle native and does not paste again on keyup', async () => {
+  const f = await setup()
+  await f.start()
+  const key = (type: string) => ({
+    type, key: 'v', code: 'KeyV', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false,
+    preventDefault: vi.fn(), stopPropagation: vi.fn(),
+  })
+  const down = key('keydown')
+  expect(terminals[0].keyHandler(down)).toBe(false)
+  expect(down.preventDefault).not.toHaveBeenCalled()
+  await act(async () => { f.container.dispatchEvent(clipboardEvent('Mac 原生粘贴😀')) })
+  for (const type of ['keypress', 'keyup']) {
+    const event = key(type)
+    expect(terminals[0].keyHandler(event)).toBe(false)
+    expect(event.preventDefault).not.toHaveBeenCalled()
+  }
+  expect(navigator.clipboard.readText).not.toHaveBeenCalled()
+  expect(terminals[0].paste).toHaveBeenCalledExactlyOnceWith('Mac 原生粘贴😀')
+  expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', 'Mac 原生粘贴😀')
+})
+
+it('accepts native Edit-menu paste without a keyboard event or async clipboard permission', async () => {
+  const f = await setup()
+  await f.start()
+  vi.stubGlobal('navigator', {})
+  await act(async () => { f.container.dispatchEvent(clipboardEvent('菜单粘贴\n第二行')) })
+  expect(terminals[0].paste).toHaveBeenCalledExactlyOnceWith('菜单粘贴\n第二行')
+  expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', '菜单粘贴\n第二行')
+})
+
+it('reads the clipboard only on a deliberate right-click paste and adds no submit key', async () => {
+  const f = await setup()
+  const text = '测试粘贴 中文😀\n第二行'
+  vi.mocked(navigator.clipboard.readText).mockResolvedValue(text)
+  await f.start()
+  expect(navigator.clipboard.readText).not.toHaveBeenCalled()
+  await f.contextClipboard()
+  expect(navigator.clipboard.readText).toHaveBeenCalledOnce()
+  expect(terminals[0].paste).toHaveBeenCalledExactlyOnceWith(text)
+  expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', text)
+})
+
+it.each([{ ctrlKey: true }, { metaKey: true }])('lets selected Ctrl/Command-C use xterm native copy without also writing the clipboard', async (modifier) => {
+  const f = await setup()
+  await f.start()
+  terminals[0].hasSelection.mockReturnValue(true)
+  const event = {
+    key: 'c', code: 'KeyC', type: 'keydown', ctrlKey: false, metaKey: false, altKey: false,
+    preventDefault: vi.fn(), stopPropagation: vi.fn(), ...modifier,
+  }
+  expect(terminals[0].keyHandler(event)).toBe(false)
+  expect(event.preventDefault).not.toHaveBeenCalled()
+  expect(clipboardWrites).not.toHaveBeenCalled()
+  expect(navigator.clipboard.readText).not.toHaveBeenCalled()
+  expect(f.accountWrite).not.toHaveBeenCalled()
+})
+
+it('keeps unselected Ctrl-C as the CLI interrupt instead of copying', async () => {
+  const f = await setup()
+  await f.start()
+  expect(terminals[0].keyHandler({ key: 'c', ctrlKey: true, metaKey: false })).toBe(true)
+  await act(async () => { terminals[0].input('\x03') })
+  expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', '\x03')
+  expect(clipboardWrites).not.toHaveBeenCalled()
+})
+
+it('copies the selected terminal text on right click instead of pasting, without rendering it', async () => {
+  const f = await setup()
+  await f.start()
+  const text = '模拟选区 中文😀\n第二行'
+  terminals[0].hasSelection.mockReturnValue(true)
+  terminals[0].getSelection.mockReturnValue(text)
+  await f.contextClipboard()
+  expect(clipboardWrites).toHaveBeenCalledExactlyOnceWith(text)
+  expect(navigator.clipboard.readText).not.toHaveBeenCalled()
+  expect(terminals[0].clearSelection).toHaveBeenCalledOnce()
+  expect(f.accountWrite).not.toHaveBeenCalled()
+  expect(JSON.stringify(f.renderer.toJSON())).not.toContain(text)
+})
+
+it('does not refocus or clear another terminal when a selected copy completes after closing', async () => {
+  const f = await setup()
+  await f.start()
+  const copied = deferred<boolean>()
+  clipboardWrites.mockReturnValueOnce(copied.promise)
+  terminals[0].hasSelection.mockReturnValue(true)
+  terminals[0].getSelection.mockReturnValue('模拟待完成复制')
+  await f.contextClipboard()
+  await f.close()
+  await act(async () => { copied.resolve(true) })
+  expect(terminals[0].clearSelection).not.toHaveBeenCalled()
+  expect(terminals[0].focus).toHaveBeenCalledOnce()
+  expect(navigator.clipboard.readText).not.toHaveBeenCalled()
+})
+
+it('reports a safe copy failure and preserves the selection for retry', async () => {
+  const f = await setup()
+  await f.start()
+  terminals[0].hasSelection.mockReturnValue(true)
+  terminals[0].getSelection.mockReturnValue('模拟不可外泄文本')
+  clipboardWrites.mockRejectedValueOnce(new Error('模拟不可外泄文本'))
+  await f.contextClipboard()
+  expect(terminals[0].clearSelection).not.toHaveBeenCalled()
+  expect(JSON.stringify(f.renderer.toJSON())).toContain('复制失败，请重新选择文本后重试')
+  expect(JSON.stringify(f.renderer.toJSON())).not.toContain('模拟不可外泄文本')
+})
+
+it('does not race duplicate clipboard reads or strip the bracketed paste emitted by xterm', async () => {
+  const f = await setup()
+  await f.start()
+  const read = deferred<string>()
+  vi.mocked(navigator.clipboard.readText).mockReturnValue(read.promise)
+  const bracketed = '\u001b[200~模拟中文😀\r第二行\u001b[201~'
+  terminals[0].paste.mockImplementation(() => terminals[0].input(bracketed))
+  await f.contextClipboard()
+  await f.contextClipboard()
+  expect(navigator.clipboard.readText).toHaveBeenCalledOnce()
+  await act(async () => { read.resolve('模拟中文😀\n第二行') })
+  expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', bracketed)
+})
+
+it.each(['close', 'change', 'unmount'])('discards a clipboard read that finishes after %s without leaking into another terminal', async (action) => {
+  const f = await setup()
+  await f.start()
+  const read = deferred<string>()
+  vi.mocked(navigator.clipboard.readText).mockReturnValue(read.promise)
+  await f.contextClipboard()
+  if (action === 'close') await f.close()
+  else if (action === 'unmount') await f.unmount()
+  else {
+    await f.update('kimi')
+    await f.start('next-terminal', 1)
+  }
+  await act(async () => { read.resolve('模拟迟到授权值') })
+  expect(f.accountWrite).not.toHaveBeenCalled()
+  expect(terminals[0].paste).not.toHaveBeenCalled()
+  if (action === 'change') expect(terminals[1].paste).not.toHaveBeenCalled()
+})
+
+it('reports unavailable or empty clipboard without exposing data or suppressing later native paste', async () => {
+  const f = await setup()
+  await f.start()
+  vi.mocked(navigator.clipboard.readText).mockRejectedValueOnce(new Error('secret simulated clipboard failure'))
+  await f.contextClipboard()
+  expect(JSON.stringify(f.renderer.toJSON())).toContain('无法读取剪贴板')
+  expect(JSON.stringify(f.renderer.toJSON())).not.toContain('secret')
+  vi.mocked(navigator.clipboard.readText).mockResolvedValueOnce('')
+  await f.contextClipboard()
+  expect(JSON.stringify(f.renderer.toJSON())).toContain('剪贴板中没有可粘贴的文本')
+  expect(f.accountWrite).not.toHaveBeenCalled()
+  await act(async () => { f.container.dispatchEvent(clipboardEvent('可用的原生粘贴')) })
+  expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', '可用的原生粘贴')
+})
+
+it('bounds pasted UTF-8 bytes before Gateway writes and removes the native paste listener on unmount', async () => {
+  const f = await setup()
+  await f.start()
+  await act(async () => { f.container.dispatchEvent(clipboardEvent('中'.repeat(6_000))) })
+  expect(f.accountWrite).not.toHaveBeenCalled()
+  expect(JSON.stringify(f.renderer.toJSON())).toContain('输入过长或仍在发送')
+  const accepted = '😀'.repeat(4_000)
+  await act(async () => { f.container.dispatchEvent(clipboardEvent(accepted)) })
+  expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', accepted)
+  await f.unmount()
+  const event = clipboardEvent('卸载后的内容')
+  f.container.dispatchEvent(event)
+  expect(event.defaultPrevented).toBe(false)
+  expect(f.accountWrite).toHaveBeenCalledOnce()
+})
+
+// Simulated native prompt and OAuth URL only; never real authorization material.
+const simulatedLoginUrl = 'https://chat.z.ai/api/oauth/authorize?client_id=fixture&state=simulated-state&redirect_uri=https%3A%2F%2Fexample.invalid%2Fcallback&response_type=code'
+const simulatedLoginPrompt = `Open this URL to sign in:\r\n${simulatedLoginUrl}\r\n`
+
+it('opens a parsed ZCode login page once and registers its native terminal link without extra controls', async () => {
+  const f = await setup(false)
+  await f.update('zcode', 'login')
+  await f.start()
+  await act(async () => {
+    f.streams[0].push({ seq: 1, data: simulatedLoginPrompt.slice(0, 31) })
+    f.streams[0].push({ seq: 2, data: simulatedLoginPrompt.slice(31) })
+  })
+  expect(window.open).toHaveBeenCalledExactlyOnceWith(simulatedLoginUrl, '_blank', 'noopener,noreferrer')
+  const rendered = JSON.stringify(f.renderer.toJSON())
+  expect(rendered).not.toContain('打开登录网页')
+  expect(rendered).not.toContain(simulatedLoginUrl)
+  expect(rendered).not.toContain('simulated-state')
+  expect(terminals[0].registerLinkProvider).toHaveBeenCalledOnce()
+  expect(terminals[0].linkProvider.currentUrl()).toBe(simulatedLoginUrl)
+  await act(async () => {
+    f.streams[0].push({ seq: 2, data: simulatedLoginPrompt })
+    f.streams[0].push({ seq: 3, data: simulatedLoginPrompt })
+  })
+  expect(window.open).toHaveBeenCalledOnce()
+  await act(async () => { terminals[0].linkProvider.activate(simulatedLoginUrl) })
+  expect(window.open).toHaveBeenCalledTimes(2)
+  expect(f.accountWrite).not.toHaveBeenCalled()
+})
+
+it.each([
+  ['codex', 'login'], ['claude', 'login'], ['zcode', 'manage'], ['zcode', 'logout'],
+] as const)('does not promote login-looking output to navigation for %s %s', async (cli, action) => {
+  const f = await setup(false)
+  await f.update(cli, action)
+  await f.start()
+  await act(async () => { f.streams[0].push({ seq: 1, data: simulatedLoginPrompt }) })
+  expect(JSON.stringify(f.renderer.toJSON())).not.toContain('打开登录网页')
+  expect(terminals[0].registerLinkProvider).not.toHaveBeenCalled()
+  expect(window.open).not.toHaveBeenCalled()
+})
+
+it('does not navigate arbitrary terminal links or OSC hyperlinks', async () => {
+  const f = await setup(false)
+  await f.update('zcode', 'login')
+  await f.start()
+  await act(async () => {
+    f.streams[0].push({ seq: 1, data: `https://example.invalid/login\r\n\u001b]8;;${simulatedLoginUrl}\u0007click\u001b]8;;\u0007\r\n` })
+    f.streams[0].push({ seq: 2, data: 'Open this URL to sign in:\r\nhttps://example.invalid/api/oauth/authorize\r\n' })
+  })
+  terminals[0].options.linkHandler.activate({}, simulatedLoginUrl)
+  expect(JSON.stringify(f.renderer.toJSON())).not.toContain('打开登录网页')
+  expect(window.open).not.toHaveBeenCalled()
+})
+
+it.each(['close', 'closed', 'failed', 'change', 'retry', 'unmount'])('invalidates the native login link on %s, including a stale link callback', async (action) => {
+  const f = await setup(false)
+  await f.update('zcode', 'login')
+  await f.start()
+  await act(async () => { f.streams[0].push({ seq: 1, data: simulatedLoginPrompt }) })
+  const link = terminals[0].linkProvider
+  expect(window.open).toHaveBeenCalledOnce()
+  if (action === 'close') await f.close()
+  else if (action === 'change') {
+    await f.update('kimi', 'login')
+    await f.start('next-terminal', 1)
+  } else if (action === 'unmount') await f.unmount()
+  else {
+    await act(async () => { f.streams[0].push({ seq: 2, status: action === 'failed' ? 'failed' : 'closed', cleanupConfirmed: true }) })
+    if (action === 'retry') {
+      await f.click('重新打开终端')
+      await f.start('retry-terminal', 1)
+    }
+  }
+  await act(async () => { link.activate(simulatedLoginUrl) })
+  expect(link.currentUrl()).toBeUndefined()
+  expect(window.open).toHaveBeenCalledOnce()
+  if (action !== 'unmount') expect(JSON.stringify(f.renderer.toJSON())).not.toContain('打开登录网页')
+  if (['change', 'retry', 'unmount'].includes(action)) expect(terminals[0].linkDisposal).toHaveBeenCalledOnce()
+})
+
+it('does not restore a login link from output arriving during a pending close', async () => {
+  const f = await setup(false)
+  await f.update('zcode', 'login')
+  await f.start()
+  const cleanup = deferred()
+  f.accountStop.mockReturnValueOnce(cleanup.promise)
+  await f.close()
+  await act(async () => { f.streams[0].push({ seq: 1, data: simulatedLoginPrompt }) })
+  expect(JSON.stringify(f.renderer.toJSON())).not.toContain('打开登录网页')
+  expect(window.open).not.toHaveBeenCalled()
+  await act(async () => { cleanup.resolve(ok()) })
 })
 it.each(['native', 'plugin'] as const)('starts only the explicit %s account source through the scoped API', async (source) => {
   const fixture = await setup(false)
@@ -495,6 +841,8 @@ it('uses one close operation for modal and terminal controls and retries the sam
 
 it.each([
   ['当前 ZCode 未声明原生登录能力，请检查 CLI 安装', '当前 ZCode 未声明原生登录能力'],
+  ['Codex Windows 应用包入口无法确认，请检查安装', 'Codex Windows 应用包入口无法确认'],
+  ['检测到 Hermes 安装目录，但未找到可用 CLI 入口，请完成安装或配置已有入口', '未找到可用 CLI 入口'],
   ['secret token ABC https://private.example/account', '账号终端暂不可用'],
 ])('only displays whitelisted startup diagnostics: %s', async (message, expected) => {
   const f = await setup()

@@ -72,6 +72,8 @@ CLI Worker Now 是 **DeepSeek Harness 的独立多 CLI 智能体插件**。它�
 
 每个 CLI 可以单独开启或关闭，分别管理账号、项目默认模型与思考强度。支持的 CLI 可直接打开原生账号终端；登录状态与账号来源按各 CLI 的实际能力显示。
 
+macOS 与 Windows 共用同一账号终端，支持选择文字复制及 Cmd+V／Ctrl+V 粘贴；右键在有选区时复制、无选区时粘贴，输入位置使用闪烁块状光标。登录时直接打开原生授权网页；Windows ZCode 的完整登录网址也可在终端点击或选择复制到浏览器。
+
 ![Harness 中的 CLI 连接设置：选取无个人账号标识的 OMP 页面](doc/assets/readme/cli-settings.jpg)
 
 ### 3.4 亮暗主题与交互
@@ -198,7 +200,7 @@ dsh plugin --profile desktop remove dsh-cliworker-now
 
 OMP（Oh My Pi）与 Pi Coding Agent 是两个独立 CLI；安装、账号、模型和会话各自管理，即使使用相同模型也不能互换。插件核验实际执行程序身份；Pi 优先使用已核验的原生安装，不暗中切换到另一旧版。
 
-Windows 支持已核验的 Pi 官方固定启动器，以及 OpenCode npm 包声明的原生程序入口。插件静态解析并校验安装身份；无法确认或已损坏的入口会提示检查安装。Pi 其他版本需先核验 SDK/RPC 和原生菜单后接入。
+Windows 也能发现当前用户注册的官方 Codex 应用包内 CLI 和官方 npm 固定入口，以及 Hermes 的官方安装目录；只有安装痕迹而没有可执行文件时会提示完成安装。Windows 支持已核验的 Pi 官方固定启动器，以及 OpenCode npm 包声明的原生程序入口。插件静态解析并校验安装身份；无法确认或已损坏的入口会提示检查安装。Pi 其他版本需先核验 SDK/RPC 和原生菜单后接入。
 
 OMP、Pi、Hermes 和 OpenCode 的账号行按自身认证显示服务商及方式。有账号登录时简写为“OpenAI账号登录”等，完整安全身份及其他 API 认证保留在悬浮详情；仅 API 时显示“zai.cn API 登录”等。有效认证不会统一降成“已配置”。只有配置声明、缺失或失效凭据保留对应灰/红状态，模型权限仍单独核对。
 

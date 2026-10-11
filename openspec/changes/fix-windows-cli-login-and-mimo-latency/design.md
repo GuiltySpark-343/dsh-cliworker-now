@@ -42,6 +42,15 @@ Antigravity 1.3.3 将 Windows OAuth 保存在交互式用户的 Credential Manag
 
 - 移除共享账号终端的粗黑 focus outline，保留块状光标、自动聚焦和轻量主题化状态；不修改各 CLI 自己画出的终端内容。
 - 对照 Harness 原生剪贴板能力与 xterm 键盘/paste 事件，统一用户主动触发的粘贴路径，经 xterm 原生 paste/括号粘贴语义和现有有界输入队列送到 Gateway；防止重复发送、退出后发送以及字符变形。不得后台读取剪贴板或将内容写入日志/持久化。
-- 实際 Windows 用受控无秘密字符串测试 Ctrl+V 与明确粘贴入口，区分键盘逐字输入与系统剪贴板。原剪贴板内容只在本机临时内存保留以恢复，不导出。
+- 实際 Windows 用受控无秘密字符串测试 Ctrl+V、选择复制与右键粘贴，区分键盘逐字输入与系统剪贴板。原剪贴板内容只在本机临时内存保留以恢复，不导出。
 - Codex/Hermes 分开检查 Desktop 实际 PATH、官方默认安装及已核验启动器/包身份；已有有效安装未入旧 PATH 应可发现。未知或缺失入口给准确短原因，不自动安装 CLI、WSL 或将不同平台账号混为一体。
 - ZCode 按实际本机版本和错误阶段修复已证实的启动/环境/协议问题；保持原生账号来源和服务商。原生菜单出现只是入口验证，真实授权或登录请求错误需独立复现；缺少授权保留边界。
+
+## 共享终端与 ZCode 登录链接（2026-10-11）
+
+- 按用户要求，两平台共用 React、xterm.js、FitAddon、主题和 Gateway 输入/清理路径；不维护 Windows 专属界面或剪贴板实现。仅原生进程托管、可执行入口发现及已证实的原生浏览器缺陷保留平台适配。
+- 实际 Windows ZCode 0.16.9 的终端原始授权链接包含 client_id、redirect_uri、state、response_type，但原生 cmd /c start 打开的 Tabbit 网页只收到 client_id。使用 help 声明的 --no-browser 避开该 Windows opener，保留原生 init/poll/凭据写入流程。Mac 保留原生 opener。
+- 共享终端仅在 ZCode login 的固定 Open this URL to sign in: 提示后，识别完整、有限长度的 https://chat.z.ai/api/oauth/authorize 原生 URL；在当前登录流程自动一次打开，并允许用户点击终端中原生网址重新打开；共用 Harness 跨平台 external handler，不改写参数，不启用任意终端链接；URL 仅当前终端内存使用，结束/关闭/重试清空。未知域名或协议保留原生文本，不创建可点击入口。
+
+- 按用户最新要求不设置独立粘贴/打开网页按钮，也不显示底部快捷键小字。选择复制沿用 xterm 原生 copy；右键有选区复制、无选区粘贴。无选区 Ctrl+C 保留原生中断语义。
+- Windows Hermes 原生默认账号根为 LocalAppData/hermes，配置和 HERMES_HOME 优先；Mac 保留 ~/.hermes。用户明确授权补全官方 Windows 原生安装，安装与插件代码验证分别记录。

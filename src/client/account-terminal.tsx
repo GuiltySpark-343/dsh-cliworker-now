@@ -1,14 +1,30 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { Button, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, StateDot, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AccountAction, AccountFrame, AccountSource } from '../shared/accounts.ts'
 import { CLI_LABELS, type CliId } from '../shared/types.ts'
 import { value, type API } from './workers.ts'
 import { accountTerminalCSS } from './account-terminal-css.ts'
+import { createZcodeLoginLinkParser } from './zcode-login-link.ts'
+import { createZcodeLoginLinkProvider } from './zcode-login-link-provider.ts'
 
 const STARTUP_TIMEOUT_MS = 20_000
 const CLEANUP_TIMEOUT_MS = 12_000
+const MAX_INPUT_BYTES = 16_384
+
+function isPasteShortcut(event: KeyboardEvent): boolean {
+  if (event.altKey || event.isComposing) return false
+  return (
+    ((event.key.toLowerCase() === 'v' || event.code === 'KeyV') && event.ctrlKey !== event.metaKey) ||
+    (event.key === 'Insert' && event.shiftKey && !event.ctrlKey && !event.metaKey)
+  )
+}
+
+function isCopyShortcut(event: KeyboardEvent): boolean {
+  return !event.altKey && !event.isComposing &&
+    (event.key.toLowerCase() === 'c' || event.code === 'KeyC') && event.ctrlKey !== event.metaKey
+}
 
 export type AccountCloseControl = MutableRefObject<(() => Promise<boolean>) | undefined>
 
@@ -31,6 +47,13 @@ function startupMessage(error: unknown): string {
     'ZCode 配套资源不可用，请检查 CLI 安装或配置 zcodeBuiltinConfig',
     'OMP 执行入口身份不匹配，请检查该 CLI 的安装和路径',
     'Pi 执行入口身份不匹配，请检查该 CLI 的安装和路径',
+    'Codex Windows 应用包入口无法确认，请检查安装',
+    'Codex npm 安装入口无法确认，请检查安装',
+    'Hermes Windows 安装入口无法确认，请检查安装',
+    '检测到 Hermes 安装目录，但未找到可用 CLI 入口，请完成安装或配置已有入口',
+    'Windows CLI 安装入口无法读取，请检查安装',
+    'Windows CLI 安装目录配置无效',
+    'Windows 系统目录配置无效',
   ]
   return (
     safe.find((item) => message === item || message === `Error: ${item}`) ??
@@ -77,6 +100,7 @@ export function AccountTerminal({
   callbacks.current = { onClose, onFinished }
   const stop = useRef<() => Promise<void>>(async () => {})
   const focus = useRef<() => void>(() => {})
+  const contextClipboard = useRef<() => Promise<void>>(async () => {})
   const generation = useRef(0)
   const closing = useRef<Promise<boolean>>()
   const [attempt, setAttempt] = useState(0)
@@ -104,6 +128,19 @@ export function AccountTerminal({
     let observer: ResizeObserver | undefined
     let themeObserver: MutationObserver | undefined
     let input: { dispose(): void } | undefined
+    let loginLinks: { dispose(): void } | undefined
+    let removePasteListener: (() => void) | undefined
+    let readingClipboard = false
+    // Only the current native login prompt may authorize browser navigation.
+    // Keep parsed URLs in this terminal's memory, outside persistent UI state.
+    const loginLinkParser = cli === 'zcode' && action === 'login' ? createZcodeLoginLinkParser() : undefined
+    let loginUrl: string | undefined
+    const openedLoginUrls = new Set<string>()
+    const clearLoginLink = () => {
+      loginUrl = undefined
+      loginLinkParser?.reset()
+      openedLoginUrls.clear()
+    }
     let inputQueue = Promise.resolve()
     let stopping: Promise<void> | undefined
     const disposeStream = () => {
@@ -116,6 +153,7 @@ export function AccountTerminal({
     }
     const finish = (failed = false) => {
       disableInput()
+      clearLoginLink()
       if (alive) setPhase(failed ? 'failed' : 'closed')
       if (!ended) {
         ended = true
@@ -126,6 +164,7 @@ export function AccountTerminal({
       clearTimeout(startupTimer)
       startup.abort()
       disableInput()
+      clearLoginLink()
       if (!id || cleanupConfirmed) return Promise.resolve()
       return (stopping ??= (async () => {
         value(await api.cliworker.accountStop(sessionId, id))
@@ -157,6 +196,8 @@ export function AccountTerminal({
         () => themeObserver?.disconnect(),
         () => cancelAnimationFrame(resizeFrame),
         () => input?.dispose(),
+        () => loginLinks?.dispose(),
+        () => removePasteListener?.(),
         () => terminal?.dispose(),
       ]) {
         try {
@@ -187,6 +228,95 @@ export function AccountTerminal({
       const fit = new FitAddon()
       view.loadAddon(fit)
       view.open(element.current)
+      const canWrite = () => alive && !!id && !ended && !startup.signal.aborted && !viewDisposed
+      const canCopy = () => alive && !viewDisposed && !startup.signal.aborted
+      const openLoginUrl = (url: string) => {
+        if (!canWrite() || url !== loginUrl) return
+        try {
+          // Harness routes HTTP(S) new-window requests to its native external
+          // browser handler on both Mac and Windows; no shell command is used.
+          window.open(url, '_blank', 'noopener,noreferrer')
+        } catch {
+          setNotice('无法打开登录网页，请在终端中查看原生登录提示')
+        }
+      }
+      if (loginLinkParser) loginLinks = view.registerLinkProvider(
+        createZcodeLoginLinkProvider(view, () => canWrite() ? loginUrl : undefined, openLoginUrl),
+      )
+      const pasteText = (text: string) => {
+        if (!canWrite()) return
+        if (!text) {
+          setNotice('剪贴板中没有可粘贴的文本')
+          return
+        }
+        setNotice('')
+        view.focus()
+        // xterm owns newline normalization and the CLI's bracketed-paste mode.
+        // Its onData handler remains the only path to the scoped Gateway.
+        view.paste(text)
+      }
+      contextClipboard.current = async () => {
+        if (!canCopy() || readingClipboard) return
+        // Native keyboard copy remains xterm's selection/copy event. Right click
+        // uses the same selected text; with no selection it pastes instead.
+        if (view.hasSelection()) {
+          const text = view.getSelection()
+          if (!text) return
+          readingClipboard = true
+          try {
+            const copied = await writeClipboard(text)
+            if (!canCopy()) return
+            if (!copied) setNotice('复制失败，请重新选择文本后重试')
+            else {
+              setNotice('')
+              view.clearSelection()
+              view.focus()
+            }
+          } catch {
+            if (canCopy()) setNotice('复制失败，请重新选择文本后重试')
+          } finally {
+            readingClipboard = false
+          }
+          return
+        }
+        if (!canWrite()) return
+        readingClipboard = true
+        try {
+          if (!navigator.clipboard?.readText) throw new Error('clipboard unavailable')
+          const text = await navigator.clipboard.readText()
+          pasteText(text)
+        } catch {
+          if (canWrite()) setNotice('无法读取剪贴板，请聚焦终端后按 Ctrl+V（Mac 为 ⌘V）粘贴')
+        } finally {
+          readingClipboard = false
+        }
+      }
+      // Windows xterm otherwise turns Ctrl+V into ^V and cancels the native
+      // paste event. Leave the browser default intact; don't read twice.
+      view.attachCustomKeyEventHandler((event) => {
+        if (isCopyShortcut(event) && view.hasSelection()) {
+          event.stopPropagation()
+          return false
+        }
+        if (!isPasteShortcut(event)) return true
+        event.stopPropagation()
+        return false
+      })
+      const container = element.current
+      const onPaste = (event: ClipboardEvent) => {
+        event.preventDefault()
+        event.stopPropagation()
+        if (!canWrite()) return
+        if (!event.clipboardData) {
+          setNotice('无法读取粘贴内容，请右键重试')
+          return
+        }
+        pasteText(event.clipboardData.getData('text/plain'))
+      }
+      // Capture before xterm's textarea listener so a native menu/shortcut
+      // paste is forwarded once and never retained in the hidden textarea.
+      container.addEventListener('paste', onPaste, { capture: true })
+      removePasteListener = () => container.removeEventListener('paste', onPaste, { capture: true })
       const theme = () => {
         if (!alive || viewDisposed) return
         try {
@@ -225,8 +355,13 @@ export function AccountTerminal({
       observer.observe(element.current)
       resize()
       input = view.onData((data) => {
-        if (!alive || !id || ended || startup.signal.aborted || queuedBytes + data.length > 16_384) return
-        queuedBytes += data.length
+        if (!canWrite()) return
+        const bytes = new TextEncoder().encode(data).byteLength
+        if (queuedBytes + bytes > MAX_INPUT_BYTES) {
+          setNotice('输入过长或仍在发送，请缩短内容后重试')
+          return
+        }
+        queuedBytes += bytes
         inputQueue = inputQueue
           .then(async () => {
             if (alive && !ended && !startup.signal.aborted)
@@ -236,7 +371,7 @@ export function AccountTerminal({
             if (alive) setNotice('输入未能送达，请关闭终端后重试')
           })
           .finally(() => {
-            queuedBytes -= data.length
+            queuedBytes -= bytes
           })
       })
       startupTimer = setTimeout(() => {
@@ -272,7 +407,17 @@ export function AccountTerminal({
             const frame = JSON.parse(item.value) as AccountFrame
             if (alive && !ended && frame.seq > lastSeq) {
               lastSeq = frame.seq
-              if (frame.data) view.write(frame.data)
+              if (frame.data) {
+                view.write(frame.data)
+                const link = canWrite() ? loginLinkParser?.write(frame.data) : undefined
+                if (link) {
+                  loginUrl = link
+                  if (!openedLoginUrls.has(link)) {
+                    openedLoginUrls.add(link)
+                    openLoginUrl(link)
+                  }
+                }
+              }
               if (frame.message) setNotice(frame.message)
             }
             item.accept()
@@ -304,9 +449,11 @@ export function AccountTerminal({
       fail('账号终端显示未能初始化，请重试')
       disposeView()
       focus.current = () => {}
+      contextClipboard.current = async () => {}
     }
     return () => {
       alive = false
+      clearLoginLink()
       if (generation.current === ownGeneration) generation.current++
       clearTimeout(startupTimer)
       startup.abort()
@@ -351,7 +498,7 @@ export function AccountTerminal({
   return (
     <section className="cwn-account-terminal" data-cli={cli}>
       <style>{accountTerminalCSS}</style>
-      <style>{`.cwn-account-terminal-view:focus-within { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: 3px; border-radius: 4px; }`}</style>
+      <style>{`.cwn-account-terminal-view:focus-within { outline: none; }`}</style>
       <div className="cwn-account-terminal-head">
         <strong>{CLI_LABELS[cli]} 账号终端</strong>
         <Button variant="ghost" size="md" onClick={() => void close()} disabled={phase === 'stopping'}>
@@ -370,10 +517,12 @@ export function AccountTerminal({
         ref={element}
         aria-label={`${CLI_LABELS[cli]} 原生账号终端`}
         onClick={() => focus.current()}
+        onContextMenuCapture={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          void contextClipboard.current()
+        }}
       />
-      {phase === 'running' && (
-        <p className="cwn-account-instruction">点击终端开始输入，闪烁方块表示输入位置。</p>
-      )}
       {(phase === 'failed' || phase === 'closed') && (
         <Button variant="ghost" size="md" onClick={() => void close(true)}>
           {phase === 'closed' ? '重新打开终端' : '重试'}

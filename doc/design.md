@@ -534,3 +534,12 @@ Hermes 与角色功能共享同一 WorkerRuntime；名称、角色快照与原�
 - MiMo 仅缓存已解析的非秘密本地能力，默认 30 秒、最多 16 项。键覆盖项目、环境、自身配置/账号摘要及真实启动计划中的入口、运行时与脚本身份；凭据逐次从当前自身配置读取，远端授权及执行前后绑定仍重新核对。失败不缓存，取消释放本次资源。性能报告区分首次冷读、重复元数据与完整模型请求时间。
 - 明确派遣解析排除 CLI Worker 与工具参数说明；同一 CLI 的括号别名和重复指令归一，未知或不同目标继续拒绝猜测。只处理本步已接受的人类输入，不扫描历史或工具内容。
 - Windows 账号终端由固定 PowerShell 控制台承载，等待 Electron helper，避免 GUI 程序提前返回；账号专属 helper 恢复该控制台的输入句柄，仅给自身 Electron 交互 CLI 预加载，不修改 Host 或任务进程标准输入。显式 `cleanupConfirmed` 只在进程范围、输出及私有资源均清理后发出，允许终态保留期之后正常关闭。
+
+
+## 2026-10-11：共享终端交互与 Windows 原生入口修复
+
+- macOS/Windows 共用 React、xterm、FitAddon、主题、剪贴板和 Gateway 输入/生命周期，不建立第二套 Windows 终端 UI。去掉粗黑焦点外框、粘贴按钮、单独的打开网页按钮及底部快捷键提示，保留块状光标和原生说明。
+- 快捷键粘贴保留浏览器默认 paste 事件；共享捕获处理只调用一次 xterm paste，经原有 onData 有界队列写入当前终端。保留 Unicode、换行和括号粘贴；退出后异步读取不能写入旧会话。选择文字后 Ctrl/Cmd+C 沿用 xterm 原生 copy；右键有选区复制、无选区粘贴。无选区 Ctrl+C 保留 CLI 中断。
+- ZCode 0.16.9 Windows 原生 cmd/start 会在 & 处截断授权网址。仅该平台且 CLI help 声明能力时使用 --no-browser，保留原生 init/poll/凭据流程；共享终端识别固定原生提示后完整白名单 HTTPS URL，自动打开一次，也允许点击原生网址重新打开或选择复制。软折行按 xterm cell 定位，点击时重验当前会话/缓冲区。未知链接和 OSC 链接不自动导航；授权参数仅当前内存使用。Mac 原生 opener 保持。
+- Codex 默认 PATH 不可用时，验证当前用户官方 Store 包 family/publisher/signature/status、固定资源和 PE 入口；也识别身份核验过的官方 npm 安装。显式错误路径不静默兜底。Appx 元数据查询取消须等待真实进程清理，清理失败透传，不留下脱离查询。
+- Hermes 识别 Windows 官方 LocalAppData/bin 入口，原生默认 home 使用 LocalAppData/hermes；显式配置与 HERMES_HOME 优先，Mac 保留 ~/.hermes。安装缺失与未登录分别显示。用户已明确批准补全原生安装，保留原目录，不安装 WSL 或可选浏览器/计算机控制依赖。

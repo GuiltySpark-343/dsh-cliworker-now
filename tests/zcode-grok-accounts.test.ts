@@ -234,6 +234,70 @@ describe('ZCode/Grok user-operated account helpers', () => {
     ).rejects.toThrow('未声明原生退出登录能力')
   })
 
+  it.each(['win32', 'darwin', 'linux'] as const)(
+    'uses the declared no-browser option only for Windows ZCode login (%s)',
+    async (platform) => {
+      const f = fixture(
+        'zcode 0.16.9\n  login      Sign in with Z.AI OAuth for model access\n  logout  Remove credentials\n  tui  Open terminal\n  --no-browser  Print the OAuth URL without opening a browser\n',
+      )
+      for (const action of ['login', 'logout', 'manage'] as const) {
+        const launch = await zcodeGrokAccountLaunch(
+          'zcode',
+          action,
+          '/synthetic/bundled.cjs',
+          f.config,
+          f.backend,
+          f.signal,
+          { ...f, platform },
+        )
+        const manualBrowser = platform === 'win32' && action === 'login'
+        expect(launch.argv).toEqual(
+          wrapped([
+            process.execPath,
+            '/synthetic/bundled.cjs',
+            action === 'manage' ? 'tui' : action,
+            ...(manualBrowser ? ['--no-browser'] : []),
+          ]),
+        )
+        expect(launch.instruction.includes('终端显示授权链接后会打开浏览器')).toBe(manualBrowser)
+      }
+    },
+  )
+
+  it('does not invent no-browser capability from a partial flag or prose', async () => {
+    const f = fixture(
+      '  login      Sign in with Z.AI OAuth for model access\n  --no-browser-other  Synthetic option\n  description: --no-browser is unavailable\n',
+    )
+    const launch = await zcodeGrokAccountLaunch(
+      'zcode',
+      'login',
+      '/synthetic/bundled.cjs',
+      f.config,
+      f.backend,
+      f.signal,
+      { ...f, platform: 'win32' },
+    )
+    expect(launch.argv.at(-1)).toBe('login')
+    expect(launch.instruction).not.toContain('打开登录网页')
+  })
+
+  it('preserves the native provider selection when Windows help also declares no-browser', async () => {
+    const f = fixture(
+      '  login [zai|bigmodel]  Sign in through browser authorization\n  \x1b[32m--no-browser\x1b[0m  Print the OAuth URL without opening a browser\n',
+    )
+    const launch = await zcodeGrokAccountLaunch(
+      'zcode',
+      'login',
+      '/synthetic/zcode.cjs',
+      f.config,
+      f.backend,
+      f.signal,
+      { ...f, platform: 'win32' },
+    )
+    expect(launch.argv.slice(-3)).toEqual(['login', 'bigmodel', '--no-browser'])
+    expect(launch.instruction).toContain('BigModel')
+  })
+
   it('bounds capability responses, cleans up, and never reports raw CLI output', async () => {
     const f = fixture('SECRET'.repeat(12_000))
     const failure = await zcodeGrokAccountLaunch(
@@ -350,8 +414,10 @@ describe('ZCode/Grok user-operated account helpers', () => {
     expect(f.backend.spawn).not.toHaveBeenCalled()
   })
 
-  it.each(['grok', 'zcode'] as const)(
-    '%s terminal files stay private under a permissive parent umask',
+  // NTFS does not implement POSIX umask/mode bits, and the synthetic shebang
+  // launcher is POSIX-only. These assertions do not claim Windows ACL coverage.
+  it.skipIf(process.platform === 'win32').each(['grok', 'zcode'] as const)(
+    '%s terminal files stay private under a permissive parent umask (POSIX only)',
     async (cli) => {
       const f = fixture()
       const executable = join(f.home, cli === 'zcode' ? 'synthetic-cli.cjs' : 'synthetic-grok')

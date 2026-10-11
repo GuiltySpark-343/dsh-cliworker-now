@@ -901,3 +901,16 @@
 - 实际待授权终端窗口已关闭，外层设置退出；原账号 scope 已释放，不按旧 PID 操作后续复用该编号的进程。三个 Windows Worker 全为终态，活动数 0。通过应用自身退出菜单关闭旧调试实例，随后无调试参数正常启动 Desktop。
 - 收尾实测：旧 GUI/Host 已退出；Windows 19487 监听为 0；ready 账号 scope 为 0；临时 UI 计划任务为 0。新的 Desktop 已运行且无 remote-debugging 参数；Mac 本次 SSH 转发已关闭，19487 监听为 0。未退出用户已有账号或修改代理设置。
 - 安全证据：`.test-data/windows-remote/desktop-audit/claude-skip-final-cleanup.json`。Kimi 的同源额度未知仍单独保留；Claude 官方正向账号/模型验收按用户要求跳过，OpenSpec 保持未验收边界，不归档。
+
+
+### 共享终端精简与 Windows 追加回归（2026-10-11）
+
+- [x] 按用户追加要求删除所有账号终端粗黑外框、粘贴按钮、单独的网页登录按钮及底部粘贴快捷键小字，Mac/Windows 共用同一 React/xterm 实现。Windows 实际 focus outline 为 none，终端仅保留关闭按钮；Mac Pi 1.0.4 新版终端同样无多余控件、中文系统粘贴可见，未回车提交模型。Mac OMP 18.4 提供商搜索未显示粘贴文字，Pi 的相同共享通路成功；未将该菜单差异当成共享粘贴失败或宣称原生 CLI 所有菜单均兼容。
+- [x] Windows OMP 18.8.7 实际 Ctrl+V 中文只进入一次。双击形成真实 xterm 选区后，以原生 Ctrl+C 复制，系统剪贴板与受控中文字符串精确一致，终端保持运行；无选区 Ctrl+C 仍进入 CLI 原生中断流程。原剪贴板只在 Windows 临时内存保留且恢复，未导出。右键粘贴在同源共享输入改动的前一安装包已实测，最终版复制/右键分支及迟到读取另有定向回归；不以模拟键盘逐字输入替代系统粘贴验收。初次自动拖拽未形成选区，原因未确认，以实际双击选区复制结果为准。
+- [x] ZCode 0.16.9 根因实证：原生终端网址有 client_id/redirect_uri/state/response_type，旧 Windows 浏览器仅收到 client_id。修复后登录自动打开 chat.z.ai/auth 正常登录页，四个参数名齐全，无错误提示；终端原网址悬停为 pointer，点击重新打开也保持四参数。保留原生授权轮询，关闭后清理；本轮未完成账号授权，不把网页正常当成登录成功。证据不记录 URL 参数值。
+- [x] Codex 官方 Windows Store 固定入口真实版本 0.162.0-alpha.17.2；插件 installed=true、authenticated 且 verification=cli，Desktop 显示已登录，原生账号终端出现 OpenAI Codex 和输入提示，关闭无异常；本轮没有提交模型任务。
+- [x] 用户批准的 Hermes 官方原生安装完成，固定提交 c57331677d7fc46298a7159cf3a650853f0966c5，版本 0.21.6+607.gc573316，version 命令退出 0；官方安装 receipt 标记 success，未安装可选浏览器/计算机控制依赖。安装器 GUI wrapper 没有可靠进程退出码，不能据此声称安装器 exit 0。实际 Desktop installed=true、unconfigured。
+- [ ] Hermes 原生登录终端实测发现隔离 home 下依赖选择缺失，提示 no dependency environment is committed；正在把 Windows 入口接入已有依赖 pin 流程。安装完成/版本命令正常不等于登录终端完成，待后续证据补齐。
+- [x] 最终共享终端代码全量 1627 passed/8 skipped（81 文件通过、1 文件跳过）；Windows 实装 Electron(asNode) 专项 10 文件，189 passed/2 POSIX-only skipped/0 failed，进程退出 0。原默认沙箱完整测试挂起，按本轮 PID/创建身份清理后授权环境重跑通过；不将首次挂起解释成业务测试失败。类型、严格规格 11/11、隔离 preview 与 Windows run 2c16676d-21c6-4bb6-b5b7-e780a8430cb3 原包加载通过。
+- [x] 两端无活动 Worker 时更新：Windows 使用原生安装器，唯一文件名避开同路径 tarball 缓存，317 个 lib 文件与包逐项匹配；包 SHA-256 92dea5e01532a40072189ab7eb2dd217d34e40698ec19d8204373f1be8ffef46。Mac 正式构建并重启，实际新版 Pi 终端验收通过；账号终端已关闭。最终 Windows 无调试重启与 Hermes 后续包另行记录。
+- 私有证据：terminal-ux-live-safe.json、terminal-ux-windows-final.png、terminal-ux-final-tests-approved-results.json、windows-electron-user-terminal-2c16676d-utf8-summary.json；位于 .test-data/windows-remote/desktop-audit/。Hermes 安装回执位于同级 hermes-install-review/。既有 Claude 官方账号/额度跳过、Kimi 额度未知等边界保持；未推送、未归档。

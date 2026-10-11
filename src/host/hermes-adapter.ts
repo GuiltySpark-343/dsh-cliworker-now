@@ -28,7 +28,11 @@ const nonempty = (value: unknown): value is string =>
   typeof value === 'string' && !!value.trim() && !value.includes('\0')
 
 export function hermesHomeDirectory(configured?: string): string {
-  const path = configured?.trim() || process.env.HERMES_HOME?.trim() || join(homedir(), '.hermes')
+  const nativeDefault =
+    process.platform === 'win32'
+      ? join(process.env.LOCALAPPDATA?.trim() || join(homedir(), 'AppData', 'Local'), 'hermes')
+      : join(homedir(), '.hermes')
+  const path = configured?.trim() || process.env.HERMES_HOME?.trim() || nativeDefault
   return validateHermesHomeDirectory(path)
 }
 

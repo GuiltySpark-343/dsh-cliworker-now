@@ -197,6 +197,10 @@ Model menus show readable names without provider or organization path prefixes o
 
 **OMP (Oh My Pi) and Pi Coding Agent are separate CLIs.** Their installations, accounts, models and sessions are managed independently. The plugin checks executable identity and does not silently replace an installation with another version.
 
+macOS and Windows share the same account terminal with text selection and copying, Cmd+V / Ctrl+V paste and a blinking block cursor. Right-click copies selected text, or pastes when nothing is selected. Login opens the native authorization page directly; the complete Windows ZCode login URL is also clickable and can be selected and copied into a browser.
+
+Windows discovers the CLI inside the current user’s verified official Codex app package, the official npm entry, and Hermes’s official installation directory. An incomplete installation without an executable is reported explicitly.
+
 Windows supports the verified official Pi launcher and the native executable declared by the OpenCode npm package. The plugin parses their fixed launch commands and validates installation identity. Unrecognized or broken entries require an installation check. Other Pi versions require SDK/RPC and native menu verification before support is added.
 
 OMP, Pi, Hermes and OpenCode display their own provider and authentication method. Account logins use a concise label such as `OpenAI账号登录`; full safe identity details and other API sources remain in the hover text. API-only authentication uses a label such as `zai.cn API 登录`. Valid authentication is not reduced to a generic “configured” state; model access is checked separately.

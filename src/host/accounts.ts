@@ -45,6 +45,7 @@ import { readKimiAccount, KIMI_MANAGE_LOGIN, prepareKimiAccountDirectory } from 
 import { readMimoAccount } from './mimo-configuration.ts'
 import { prepareMimoAccountTerminal } from './first-party-account-context.ts'
 import { spawnAccountTerminal, WindowsAccountTerminalError } from './windows-account-terminal.ts'
+import { WindowsCliInstallationError } from './windows-cli-installation.ts'
 
 const STATUS_TIMEOUT = 10_000
 const STARTUP_TIMEOUT = 30_000
@@ -448,6 +449,8 @@ export class AccountManager {
       }
       if (signal.aborted || this.controller.signal.aborted) throw new Error('账号状态查询已取消')
       const code = (error as NodeJS.ErrnoException)?.code
+      if (error instanceof WindowsCliInstallationError)
+        return { cli, installed: error.installed, state: 'unavailable', summary: error.message, actions: [] }
       if (error instanceof ClaudeOwnRouteError)
         return {
           cli,
@@ -759,6 +762,7 @@ export class AccountManager {
       if (timeout.signal.aborted) throw new Error('账号终端启动超时，正在回收启动过程；请稍后重试')
       if (error instanceof ZCodeAccountCapabilityError) throw error
       if (error instanceof WindowsAccountTerminalError) throw error
+      if (error instanceof WindowsCliInstallationError) throw error
       if (error instanceof HermesExecutableError) throw error
       if (error instanceof MimoConfigurationError) throw error
       if ((error as NodeJS.ErrnoException)?.code === 'CLI_IDENTITY_MISMATCH')
