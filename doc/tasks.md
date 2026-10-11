@@ -958,3 +958,13 @@
 - 私有证据位于 `.test-data/windows-remote/desktop-audit/`：`zcode-console-acceptance.json`、`zcode-provider-ui-evidence.json`、`windows-hidden-process-pipes-result.json`、`zcode-console-pipes-tests.log`、`zcode-console-pipes-typecheck.log`、`zcode-console-pipes-spec.log`、最终包与逐文件清单、v3/v5 窗口和动作时间报告。
 - 最终 v5 实机观测：已运行实例重开设置并刷新全部 11 个 CLI，120.906 秒窗口事件为 0；再次正常重启后首次打开设置、全部 11 个 CLI 刷新、OpenCode 原生 Add credential 登录菜单和关闭，141.629 秒窗口事件为 0，hook 均确认结束。两轮动作 UTC 与报告对应；这两次通过不抹去前述 v3 未归属事件，不宣称所有系统状态下绝无闪窗。
 - [x] 收尾：Windows 正常无调试参数启动，两端 19487 监听为 0；账号 ready scope、观察器/临时 UI 计划任务、本轮 PowerShell 和 GUI launcher 均为 0，3 条既有 Worker 状态仍为 interrupted/completed/completed，活动 Worker 为 0。清理证据为 `zcode-final-cleanup.json`；阶段提交仅包含本轮代码/规格/新增记录，不包括用户原有图标及文档改动，不推送。
+
+
+### ZCode BigModel 授权与两平台最终构建收尾（2026-10-11）
+
+- [x] 用户确认已完成 BigModel 网页授权后，对 Windows 生产安装插件做只读核验：状态为 authenticated / oauth / local，当前来源与终端保存来源均为 bigmodel，原生 BigModel 绑定存在；读取前后凭据摘要未变化。由此确认授权已落盘且插件能够识别，不推断远端额度或真实任务成功。Z.AI 仍只有原生入口及网页跳转验证，本次没有退出账号、重新登录或模型调用。
+- [x] 用户确认早期窗口观察期间手动打开过终端或运行命令。此前 v3 有效 SHOW 事件保留为“人工操作干扰期内、来源未证实”，不强行归属用户或插件。最终 v5 热态 120.906 秒、冷态 141.629 秒均无额外控制台事件，动作覆盖设置、全部 11 个 CLI 刷新及 OpenCode 原生登录菜单关闭；以此完成本次已执行路径和观察时段的验收。已定位的插件后台启动路径已修复，不宣称所有第三方 CLI 在所有环境下绝不创建窗口。
+- [x] 用户解锁 Mac 后，确认 22 条既有 Worker 均为终态（18 completed、3 failed、1 interrupted），活动数 0；通过原生界面正常退出 Harness 后执行 `pnpm --config.verifyDepsBeforeRun=false build`，退出 0，再正常打开 Desktop。正式 Host SHA-256 为 `96b9150e58639a1da318ee4597a615376a20b11824ad45edee9a2189341d419f`，与 Windows 最终验收包一致；三个启动 helper 的 source/lib/preview/types 文件分别一致，Client 除构建路径 region 注释外完全相同。
+- [x] Mac 最终实际界面显示 ZCode 已登录、模型与强度控件可用；点击登录后显示中国智谱 BigModel／海外 Z.AI 共用选择界面，选择前未创建账号终端，取消后保留原账号，最后关闭设置。Windows 本次仅只读核验授权，未再次启动调试实例；前一阶段的无调试重启和清理证据继续保留。
+- [x] 本次正式构建、实际 UI 与授权核验、差异检查通过；`pnpm --config.verifyDepsBeforeRun=false spec:check` 为 11/11，OpenSpec 本次 9.2/9.4 完成。源码未更改，完整 1788 passed / 8 skipped 与 Windows 合成生命周期 9/9 为前一实现阶段结果，本次没有重复运行或新增模型调用。历史 3.1/3.3 的 Claude 官方账号/额度跳过及 Kimi 验证边界继续保留，change 为 28/30，不归档。
+- 私有证据：`zcode-bigmodel-auth-verified-20261011.json`、`zcode-mac-final-build.log`、`zcode-mac-final-equivalence.json`、`zcode-mac-final-ui-verified-20261011.json`、`zcode-console-final-followup-20261011.json`，均在 Git 忽略的 `.test-data/windows-remote/desktop-audit/`。此前授权未确认及 Mac 锁屏是历史时点状态，由本节补齐；原报告保留。仅阶段提交本次验收记录，不混入已有文档/素材改动，不推送。
