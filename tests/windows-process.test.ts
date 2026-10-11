@@ -2,8 +2,8 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { LocalSubprocessRuntime } from '@deepseek-ai/dsh-subprocess-local'
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readFileSync, existsSync } from 'node:fs'
+import { tmpdir, release } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnManagedAgent } from '../src/host/managed-agent.ts'
@@ -82,8 +82,19 @@ it.skipIf(process.platform !== 'win32').each(['stop', 'natural-exit'] as const)(
     // CI can pin the installed GUI-subsystem runtime without changing the SDK.
     // Every payload remains synthetic; no real CLI account is read.
     const accountRuntime = process.env.CLIWORKER_TEST_ELECTRON ?? process.execPath
+    let ownerDirectory: string | undefined
+    let ownerExit: number | 'pending' | 'rejected' | null = 'pending'
     const backend = {
-      spawn: (spec: Parameters<typeof ctx.subprocess.spawn>[0]) => ctx.subprocess.spawn(spec),
+      spawn: (spec: Parameters<typeof ctx.subprocess.spawn>[0]) => {
+        const directoryIndex = spec.argv.indexOf('-Directory')
+        if (directoryIndex >= 0) ownerDirectory = spec.argv[directoryIndex + 1]
+        const handle = ctx.subprocess.spawn(spec)
+        void handle.done.then(
+          ({ exitCode }) => { ownerExit = exitCode },
+          () => { ownerExit = 'rejected' },
+        )
+        return handle
+      },
       spawnTerminal: (spec: Parameters<typeof ctx.subprocess.spawnTerminal>[0]) => {
         const argv = [...spec.argv]
         argv[argv.indexOf('-RuntimePath') + 1] = accountRuntime
@@ -142,6 +153,35 @@ it.skipIf(process.platform !== 'win32').each(['stop', 'natural-exit'] as const)(
       expect(() => process.kill(childPid!, 0)).toThrow()
       expect(() => process.kill(unrelated.pid!, 0)).not.toThrow()
       expect(consoles().filter((pid) => !beforeConsoles.includes(pid))).toEqual([])
+    } catch (error) {
+      // Preserve the owner's original fixed receipt: cleanup deliberately fails
+      // closed and can otherwise hide the first Win32/handshake failure in CI.
+      // Never upload argv, environment, terminal content or temporary paths.
+      const ownerFailure: Record<string, string | number> = {}
+      if (ownerDirectory) {
+        try {
+          const receipt = JSON.parse(readFileSync(join(ownerDirectory, 'failure'), 'utf8'))
+          const stages = ['await-bootstrap', 'create-job', 'attach-root', 'resolve-console',
+            'validate-console-parent', 'attach-console', 'await-stop', 'stop-job', 'confirm-empty']
+          if (stages.includes(receipt.stage)) ownerFailure.stage = receipt.stage
+          for (const field of ['hostPid', 'ownerPid', 'consolePid', 'consoleParentPid', 'win32Code'])
+            if (Number.isSafeInteger(receipt[field])) ownerFailure[field] = receipt[field]
+        } catch { /* A missing receipt is itself useful handshake evidence. */ }
+      }
+      const stage = error && typeof error === 'object' ? Reflect.get(error, 'stage') : undefined
+      const diagnostic = {
+        fixture: 'synthetic-windows-account-terminal', operation,
+        windowsVersion: release(), nodeVersion: process.versions.node,
+        runtime: accountRuntime === process.execPath ? 'current-node' : 'explicit-test-runtime',
+        ownerExit, ownerFailure,
+        cleanupStage: ['receipt', 'terminal', 'owner', 'directory'].includes(stage) ? stage : null,
+        receipts: Object.fromEntries(['owner-ready', 'pid', 'ready', 'cancel', 'stop', 'closed', 'exit']
+          .map((name) => [name, !!ownerDirectory && existsSync(join(ownerDirectory, name))])),
+      }
+      mkdirSync('.test-data', { recursive: true, mode: 0o700 })
+      writeFileSync(`.test-data/windows-account-process-${operation}.json`, JSON.stringify(diagnostic, null, 2), { mode: 0o600 })
+      console.error('Windows account lifecycle diagnostic:', JSON.stringify(diagnostic))
+      throw error
     } finally {
       await terminal?.terminate().catch(() => undefined)
       if (childPid) {

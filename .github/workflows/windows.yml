@@ -68,6 +68,7 @@ jobs:
           name: windows-native-runtime-evidence
           path: |
             .test-data/windows-ci-tests.json
+            .test-data/windows-account-process-*.json
             .test-data/windows-native-smoke.json
             artifacts/*.tgz
           if-no-files-found: warn
