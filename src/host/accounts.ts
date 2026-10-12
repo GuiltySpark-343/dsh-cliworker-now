@@ -53,7 +53,7 @@ import { readKimiAccount, KIMI_MANAGE_LOGIN, prepareKimiAccountDirectory } from 
 import { readMimoAccount } from './mimo-configuration.ts'
 import { prepareMimoAccountTerminal } from './first-party-account-context.ts'
 import { spawnAccountTerminal, WindowsAccountTerminalError } from './windows-account-terminal.ts'
-import { WindowsCliInstallationError } from './windows-cli-installation.ts'
+import { WindowsCliInstallationError, WindowsCliNotFoundError } from './windows-cli-installation.ts'
 import { effectiveHermesHome } from './hermes-account-context.ts'
 import { ensureHermesNousFresh, HermesRenewalError, reserveHermesAccount } from './hermes-renewal.ts'
 
@@ -490,6 +490,8 @@ export class AccountManager {
       }
       if (signal.aborted || this.controller.signal.aborted) throw new Error('账号状态查询已取消')
       const code = (error as NodeJS.ErrnoException)?.code
+      if (error instanceof WindowsCliNotFoundError)
+        return { cli, installed: false, state: 'unconfigured', summary: error.message, actions: [] }
       if (error instanceof WindowsCliInstallationError)
         return { cli, installed: error.installed, state: 'unavailable', summary: error.message, actions: [] }
       if (error instanceof ClaudeOwnRouteError)
@@ -555,6 +557,7 @@ export class AccountManager {
   }
 
   private hasCustomExecutable(cli: CliId): boolean {
+    if (cli !== 'harness' && this.config.cliExecutablePaths?.read(cli)?.mode === 'manual') return true
     if (cli === 'antigravity') return this.config.executable !== 'agy'
     if (cli === 'harness') return false
     const configured = this.config[`${cli}Executable`]

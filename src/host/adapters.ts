@@ -16,7 +16,9 @@ import {
   hasWindowsHermesInstallDirectory,
   presentWindowsCliCandidate,
   WindowsCliInstallationError,
+  WindowsCliNotFoundError,
 } from './windows-cli-installation.ts'
+import { findWindowsDesktopCli, windowsOpenCodeDesktopCli } from './windows-desktop-cli-installation.ts'
 import { resolveModel } from '../shared/models.ts'
 import { existsSync, statSync, lstatSync, accessSync, constants } from 'node:fs'
 import { homedir } from 'node:os'
@@ -368,6 +370,17 @@ export function protocolFor(
     : new CliProtocol(cli, emit, identify, maxLineBytes)
 }
 
+export function configuredCliExecutable(cli: CliId, config: RuntimeConfig): string | undefined {
+  if (cli === 'harness') return undefined
+  const value = cli === 'antigravity' ? config.executable : config[`${cli}Executable`]
+  return value && value !== (cli === 'antigravity' ? 'agy' : cli) ? value : undefined
+}
+
+function configWithExecutable(cli: CliId, config: RuntimeConfig, path: string): RuntimeConfig {
+  return { ...config, [cli === 'antigravity' ? 'executable' : `${cli}Executable`]: path }
+}
+
+/** Reuse a verified location; discovery never overwrites a later manual choice. */
 export async function resolveCliExecutable(
   cli: CliId,
   backend: ProcessBackend,
@@ -375,7 +388,56 @@ export async function resolveCliExecutable(
   signal: AbortSignal = AbortSignal.timeout(15000),
 ): Promise<string> {
   signal.throwIfAborted()
+  const store = config.cliExecutablePaths
+  if (!store || cli === 'harness') return resolveUncachedCliExecutable(cli, backend, config, signal)
+  let entry = store.read(cli)
+  const deployment = configuredCliExecutable(cli, config)
+  if (entry?.mode === 'auto' && !deployment) {
+    let present: boolean
+    try {
+      present = statSync(entry.path).isFile()
+      if (present) accessSync(entry.path, constants.R_OK)
+    } catch (error: any) {
+      if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error
+      present = false
+    }
+    if (!present) {
+      store.reset(cli)
+      entry = undefined
+    }
+  }
+  const revision = store.revision(cli)
+  const selected = entry?.mode === 'manual' ? entry.path : deployment ? undefined : entry?.path
+  const result = await resolveUncachedCliExecutable(
+    cli,
+    backend,
+    selected ? configWithExecutable(cli, config, selected) : config,
+    signal,
+  )
+  signal.throwIfAborted()
+  const current = store.read(cli)
+  if (store.revision(cli) !== revision) {
+    // Concurrent identical initial discovery is harmless; a new manual source
+    // or any different location must not admit work from this old request.
+    if (current?.mode === 'auto' && current.path === result && entry?.mode !== 'manual') return result
+    throw new Error('CLI 路径已更新，请刷新后重试')
+  }
+  if (entry?.mode !== 'manual' && !deployment && !store.remember(cli, result, revision))
+    throw new Error('CLI 路径已更新，请刷新后重试')
+  return result
+}
+
+async function resolveUncachedCliExecutable(
+  cli: CliId,
+  backend: ProcessBackend,
+  config: RuntimeConfig,
+  signal: AbortSignal = AbortSignal.timeout(15000),
+): Promise<string> {
+  signal.throwIfAborted()
   const executable = executableFor(cli, config)
+  const configured = cli !== 'antigravity' && cli !== 'harness' ? config[`${cli}Executable`] : undefined
+  const explicit = !!configured && configured !== cli
+  const desktopCli = process.platform === 'win32' && (cli === 'zcode' || cli === 'opencode')
   let resolved: string
   if (isExtendedCli(cli) && /\.[cm]?js$/.test(executable) && existsSync(executable)) {
     // JavaScript launchers run through Node and need readability, not an executable bit.
@@ -429,19 +491,45 @@ export async function resolveCliExecutable(
       signal.throwIfAborted()
       const absent =
         error instanceof SubprocessExecutableNotFoundError || ['ENOENT', 'ENOTDIR'].includes(error.code)
-      if (process.platform !== 'win32' || cli !== 'codex' || executable !== cli || !absent) throw error
-      // Appx metadata owns a child process. Unlike pure PATH lookup, cancellation
-      // must await its cleanup and preserve ProcessCleanupUnconfirmedError.
-      const entry = await findWindowsCodexAppx(
-        (argv, cwd) => captureCatalogMetadata(backend, config, argv, cwd, signal),
-        signal,
-      )
-      signal.throwIfAborted()
-      if (!entry) throw error
-      resolved = await pathLookup(() => backend.resolveExecutable(entry))
+      if (desktopCli && executable === cli && !explicit && absent) {
+        const entry = await findWindowsDesktopCli(
+          cli,
+          (argv, cwd) =>
+            captureCatalogMetadata(
+              backend,
+              { ...config, maxRunBytes: Math.min(config.maxRunBytes, 65_536) },
+              argv,
+              cwd,
+              signal,
+            ),
+          signal,
+        )
+        signal.throwIfAborted()
+        if (!entry) throw new WindowsCliNotFoundError(cli)
+        // The helper already checked the current, readable CJS file. Do not
+        // ask PATH to rediscover it or interpret a Desktop executable as a task.
+        resolved = /\.[cm]?js$/i.test(entry)
+          ? entry
+          : await pathLookup(() => backend.resolveExecutable(entry))
+      } else {
+        if (process.platform !== 'win32' || cli !== 'codex' || executable !== cli || !absent) throw error
+        // Appx metadata owns a child process. Unlike pure PATH lookup, cancellation
+        // must await its cleanup and preserve ProcessCleanupUnconfirmedError.
+        const entry = await findWindowsCodexAppx(
+          (argv, cwd) => captureCatalogMetadata(backend, config, argv, cwd, signal),
+          signal,
+        )
+        signal.throwIfAborted()
+        if (!entry) throw error
+        resolved = await pathLookup(() => backend.resolveExecutable(entry))
+      }
     }
   }
   signal.throwIfAborted()
+  if (process.platform === 'win32' && cli === 'opencode') {
+    const bundled = windowsOpenCodeDesktopCli(resolved, explicit)
+    if (bundled) resolved = bundled
+  }
   if (cli === 'pi' || cli === 'omp')
     return verifyPiOmpExecutable(cli, resolved, (argv, cwd, env) =>
       captureCatalogMetadata(backend, config, argv, cwd, signal, env),

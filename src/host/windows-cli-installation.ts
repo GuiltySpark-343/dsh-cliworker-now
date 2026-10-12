@@ -24,6 +24,14 @@ export class WindowsCliInstallationError extends Error {
   }
 }
 
+/** A completed desktop/PATH search found no CLI; absence is not a broken installation. */
+export class WindowsCliNotFoundError extends WindowsCliInstallationError {
+  constructor(cli: 'zcode' | 'opencode') {
+    super(`${cli === 'zcode' ? 'ZCode' : 'OpenCode'} CLI 未找到，请配置 ${cli}Executable`)
+    this.name = 'WindowsCliNotFoundError'
+  }
+}
+
 type WindowsEnvironment = { home?: string; env?: NodeJS.ProcessEnv }
 const unavailableCodex = () =>
   new WindowsCliInstallationError('Codex Windows 应用包入口无法确认，请检查安装', true)

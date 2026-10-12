@@ -19,11 +19,14 @@ import type {
   SubprocessTerminalHandle,
   SubprocessTerminalSpawnSpec,
 } from '@deepseek-ai/dsh-subprocess'
+import { SubprocessExecutableNotFoundError } from '@deepseek-ai/dsh-subprocess'
 import { AccountManager } from '../src/host/accounts.ts'
+import { CliExecutablePathStore } from '../src/host/cli-executable-paths.ts'
 import { DEFAULT_CONFIG, type ProcessBackend, type RuntimeConfig } from '../src/host/process.ts'
 import type { CliId } from '../src/shared/types.ts'
 import type { AccountIdentitySource } from '../src/host/account-identity.ts'
 import * as zcodeAccounts from '../src/host/zcode-grok-accounts.ts'
+import { WindowsCliInstallationError, WindowsCliNotFoundError } from '../src/host/windows-cli-installation.ts'
 const claudeSettings = vi.hoisted(() => ({ managed: {} as Record<string, unknown> }))
 // Synthetic managed settings only; account tests never read this machine's policy.
 vi.mock('../src/host/first-party-models.ts', async (load) => {
@@ -224,6 +227,53 @@ function fixture(overrides: Partial<RuntimeConfig> = {}) {
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 
 describe('account status safety (synthetic CLI output)', () => {
+  it('reports a missing manual path as a configuration failure when the SDK error has no ENOENT code', async () => {
+    const f = fixture()
+    const paths = new CliExecutablePathStore(f.config.stateDirectory!)
+    const manual = join(f.cwd, 'missing manual CLI', 'claude')
+    f.config.cliExecutablePaths = paths
+    paths.setManual('claude', manual)
+    const missing = new SubprocessExecutableNotFoundError('SYNTHETIC PRIVATE MISSING PATH')
+    vi.mocked(f.backend.resolveExecutable).mockRejectedValue(missing)
+    const status = await f.manager.status('claude', f.cwd, f.signal)
+    expect(status).toMatchObject({
+      cli: 'claude',
+      installed: false,
+      state: 'unavailable',
+      summary: 'CLI 执行路径配置失败，请检查可执行路径',
+      actions: [],
+    })
+    expect(paths.read('claude')).toEqual({ mode: 'manual', path: manual })
+    expect(f.backend.resolveExecutable).toHaveBeenCalledExactlyOnceWith(manual)
+    expect(f.backend.spawn).not.toHaveBeenCalled()
+    expect(f.backend.spawnTerminal).not.toHaveBeenCalled()
+    expect(f.identity).not.toHaveBeenCalled()
+    expect(JSON.stringify(status)).not.toContain('PRIVATE')
+  })
+
+  it.each(['zcode', 'opencode'] as const)(
+    'distinguishes Windows desktop discovery absence and failure for %s',
+    async (cli) => {
+      const f = fixture()
+      vi.mocked(f.backend.resolveExecutable).mockRejectedValue(new WindowsCliNotFoundError(cli))
+      expect(await f.manager.status(cli, f.cwd, f.signal)).toMatchObject({
+        installed: false,
+        state: 'unconfigured',
+        summary: expect.stringContaining(`${cli}Executable`),
+        actions: [],
+      })
+      const message = `${cli} 桌面已存在，但没有可用独立 CLI，请配置 ${cli}Executable`
+      vi.mocked(f.backend.resolveExecutable).mockRejectedValue(new WindowsCliInstallationError(message))
+      expect(await f.manager.status(cli, f.cwd, f.signal)).toMatchObject({
+        installed: false,
+        state: 'unavailable',
+        summary: message,
+        actions: [],
+      })
+      expect(f.backend.spawn).not.toHaveBeenCalled()
+      expect(f.backend.spawnTerminal).not.toHaveBeenCalled()
+    },
+  )
   it('keeps MiMo native login available when model configuration contains external references', async () => {
     const f = fixture()
     mkdirSync(join(f.cwd, 'mimo/config'), { recursive: true })

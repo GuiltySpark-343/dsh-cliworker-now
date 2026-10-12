@@ -1021,3 +1021,19 @@
 - [x] Windows 安装前无活动 Worker/账号终端且 Harness 已退出；原生安装器 exit 0，本地 v0.7.8 的 339 个 lib 文件及 Host/包哈希与 Mac 构建完全一致。正常启动后 5 个 Harness 进程、调试参数 0；本次原生 Claude、账号授权、测试 run、UI 任务/观察器进程均为 0。不追加 UI 全量验收。
 - 私有证据：`.test-data/claude-078/mac-minimal.json`、`mac-install.json`、`package.json`、`windows/native-probe-report.json`、`windows/minimal-report.json`、`windows/claude-own-route.json`、`windows/claude-related.json`、`windows/install-report.json`、`windows/delivery-summary.json`。本地开发包 `.test-data/claude-078/dsh-cliworker-now-0.7.8.tgz`，SHA-256 `0a6391816d4030435645b7531a5980f53619768422e3071928c2674cd497f953`。不提交凭据、私人远程配置、运行报告或用户既有素材改动；未推送、未发布 GitHub/npm。
 - [x] 本次 OpenSpec 8/8 任务按最小证据核对完成，同步三项主规格后归档至 `openspec/changes/archive/2026-10-12-fix-claude-cc-switch-routing/`；归档后严格校验 11/11，原 Windows/MiMo 活动变更仍保留 34/36 的真实账号验收边界。实现本地提交 `45f95c1`，无远程推送。
+
+
+## 2026-10-12：v0.7.8 Windows 桌面发现与本机 CLI 路径管理
+
+- 复用 OpenSpec `discover-windows-desktop-clis`：Windows ZCode/OpenCode 读取默认位置、安装登记、已运行产品位置和有界快捷方式线索；DisplayIcon 是注册表元数据，桌面无图标仍可发现。自定义中文/空格/非系统盘路径核验实际 CLI 及配套文件；多安装拒绝猜选，GUI 不冒充 CLI。
+- 全部 11 个 CLI 首次解析保存本机路径；手动指定优先于部署配置和自动记录。自动文件消失重新发现，手动错误保留并显示配置问题。Host Gateway 的路径、账号、模型和任务共用解析器，revision 防止迟到探测覆盖新选择；活动任务/账号终端时拒绝修改。
+- 每个 CLI 页独立的同级“高级设置”默认折叠，展开后显示“CLI 路径管理”、预填/输入、刷新、恢复自动识别；不置于“项目默认设置”内部。应用后清除旧账号/模型显示并刷新，路径按机器及平台保存、跨项目共用。
+- 关联自动检查：Windows 发现 helper 94 项、resolver 24 项通过；路径 store 45 项、resolver/Host API 30 项通过（最终三文件合跑 99/99）；settings-dialog 150/150 通过。账号状态专项 `-t 'missing manual path|Windows desktop discovery'` 为 3 通过、76 标题过滤。仅使用相关测试，未运行全量套件。
+- 第一阶段 Windows 原生发现 16/16：真实安装查询、ZCode/OpenCode 实际文件核验、无 shortcut 的 registry/default 独立来源、中文空格合成自定义目录/真实 .lnk、歧义、GUI 拒绝、取消及所属进程退出；fixture 与 shortcut 已清理。运行中进程位置只做了合成解析覆盖（实机两款桌面均未运行，未主动启动）。私有证据 `.test-data/desktop-cli-078/native-report.json`、`run-707518dc-281d-4aee-b8fa-6f7791d332d1/`。
+- 第一阶段 v0.7.8 本地包已在 Mac/Windows 核对安装；后续路径管理新增功能的最终包与界面验收记录另列如下，避免把前一阶段包误作最终交付。
+- 边界：安装发现、文件可读、模拟状态和设置界面通过不等于真实账号授权或模型生成；此次未调用模型、未登录/退出真实账号。无 metadata、PATH、已知目录和运行中产品线索的任意便携目录仍需手动输入。未升版本、未推送 GitHub、未发布 npm；保留其他活动变更的真实账号/模型未验收事项。
+- 第二阶段 Windows 原生 Node/文件系统路径管理 14/14：真实 store/resolver/Host API，禁止 spawn 的模拟 backend；覆盖自动保存重载、失效重找、中文空格手动路径、无效手动保留、reset/revision/迟到拒绝、API 忙碌门禁和清理阻塞。报告 `.test-data/desktop-cli-078/path-management-native-report.json`；远程 fixture 已清理。
+- 最终 Host/Client 类型检查与 `build:preview` 通过，新增 Gateway 契约由原生生成器生成。Mac 更新前 22 条历史 worker、0 活动/排队任务、0 账号桥进程；正常退出后 `pnpm build` 更新现有链接并正常重启。实际 UI 已核对同级独立高级标题、默认折叠、Antigravity 与 ZCode 展开自动预填、Antigravity 路径刷新成功、切换 CLI 恢复折叠，以及右栏滚动后输入/按钮完整可用；未修改项目模型/强度。
+- 最终本地包 `path-management-078-final.tgz` 为 v0.7.8，SHA-256 `29bcc4ce7eb8ac6780d59260c787a700d409132f2228bc82e2e32455ab278739`；Host `6687fe257d20fb6afe1dac9811541598bb711bf02fede56ea0551d762121991c`。Windows 原生安装 348/348 库文件哈希一致；Mac Host 相同，346/348 字节一致，两个 Client 差异经规范化核实仅为依赖路径注释及 source-map 路径。证据 `path-package.json`、`path-mac-install.json` 及 Windows `path-*` 私有报告。
+- Windows 最终实际 UI：ZCode 高级设置初始 Collapsed，路径输入与管理标题未挂载；展开自动预填实际 managed CLI 文件、来源自动识别，刷新一次返回“CLI 路径已刷新”，路径保持，随后关闭设置。证据 `path-windows-ui-zcode-collapsed.json`、`path-windows-ui-zcode-expanded.json` 及本轮刷新/清理报告；未进行真实登录或模型任务。
+- 已核对 11/11 任务、同步 7 项新增需求并归档 OpenSpec 为 `2026-10-12-discover-windows-desktop-clis`；归档前后严格校验均 12/12 通过，差异检查通过。其他活动变更保留 34/36 的原有未验收边界。

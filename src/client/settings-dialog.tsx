@@ -29,6 +29,7 @@ import { operationMessage } from './operation-error.ts'
 import { value, type API } from './workers.ts'
 import { RolePresetsPane } from './role-presets.tsx'
 import { AccountQueryQueue } from './account-query-queue.ts'
+import { CliExecutableSettings } from './cli-executable-settings.tsx'
 
 interface SettingsDialogProps {
   open: boolean
@@ -160,10 +161,10 @@ function OpenSettingsDialog({
   }
 
   const refreshAccount = useCallback(
-    (id: CliId, replace = false) => {
+    (id: CliId, replace = false, clearPrevious = false) => {
       if (!enabledRef.current?.[id]) return
       if (probes.current.has(id) && !replace) return
-      setAccounts((old) => ({ ...old, [id]: { data: old[id]?.data, loading: true } }))
+      setAccounts((old) => ({ ...old, [id]: { data: clearPrevious ? undefined : old[id]?.data, loading: true } }))
       probes.current.enqueue(
         id,
         async (signal) => {
@@ -348,7 +349,7 @@ function OpenSettingsDialog({
             enabled={enabled?.[cli]}
             account={accounts[cli]}
             connection={connectionStatus(enabled?.[cli], accounts[cli], settingsError)}
-            onRefreshAccount={(replace) => refreshAccount(cli, replace)}
+            onRefreshAccount={(replace, clearPrevious) => refreshAccount(cli, replace, clearPrevious)}
             onToggle={(next) => void toggleCli(cli, next)}
             toggleBusy={!!togglingCli}
             toggling={togglingCli === cli}
@@ -520,7 +521,7 @@ function CliSettings({
   enabled?: boolean
   account?: AccountEntry
   connection: ReturnType<typeof connectionStatus>
-  onRefreshAccount: (replace?: boolean) => void
+  onRefreshAccount: (replace?: boolean, clearPrevious?: boolean) => void
   onToggle: (enabled: boolean) => void
   toggleBusy: boolean
   toggling: boolean
@@ -540,6 +541,7 @@ function CliSettings({
   const [chosenAction, setChosenAction] = useState<AccountStatus['actions'][number]>()
   const [accountSource, setAccountSource] = useState<AccountSource>()
   const [loginProvider, setLoginProvider] = useState<ZCodeLoginProvider>()
+  const [pathChanging, setPathChanging] = useState(false)
   const saveController = useRef<AbortController>()
   useEffect(() => () => saveController.current?.abort(), [])
   useEffect(() => {
@@ -604,7 +606,7 @@ function CliSettings({
   const supportedEfforts = catalog?.models.find((item) => item.id === model)?.efforts ?? []
   const validPreference = !!catalog && !!model && supportedEfforts.includes(effort)
   async function save() {
-    if (inactive || saving || modelLoading || !validPreference || saveController.current) return
+    if (inactive || saving || pathChanging || modelLoading || !validPreference || saveController.current) return
     const controller = new AbortController()
     saveController.current = controller
     setSaving(true)
@@ -678,6 +680,7 @@ function CliSettings({
           accountLoading ||
           !!account?.error ||
           !!action ||
+          pathChanging ||
           !item ||
           (item.target === 'models' && !openNativeSettings)
         }
@@ -741,7 +744,7 @@ function CliSettings({
             checked={enabled ?? false}
             onChange={onToggle}
             label={`启用 ${CLI_LABELS[cli]}`}
-            disabled={enabled === undefined || toggleBusy || saving || !!action}
+            disabled={enabled === undefined || toggleBusy || saving || !!action || pathChanging}
             title={action ? '请先关闭账号终端' : undefined}
           />
         </div>
@@ -761,7 +764,7 @@ function CliSettings({
                 size="md"
                 className="cwn-refresh"
                 aria-label="刷新状态"
-                disabled={inactive || accountLoading || saving}
+                disabled={inactive || accountLoading || saving || pathChanging}
                 onClick={() => onRefreshAccount()}
               >
                 <IconRefreshOutlineRegular size={16} />
@@ -854,7 +857,7 @@ function CliSettings({
                 size="md"
                 className="cwn-refresh"
                 aria-label="刷新模型"
-                disabled={inactive || modelLoading || saving}
+                disabled={inactive || modelLoading || saving || pathChanging}
                 onClick={() => refreshModels((n) => n + 1)}
               >
                 <IconRefreshOutlineRegular size={16} />
@@ -881,7 +884,7 @@ function CliSettings({
                 id: item.id,
                 label: item.label,
               }))}
-              disabled={inactive || modelLoading || saving || !catalog}
+              disabled={inactive || modelLoading || saving || pathChanging || !catalog}
               onChange={changeModel}
             />
           </label>
@@ -894,7 +897,7 @@ function CliSettings({
               label="默认思考强度"
               selected={effort}
               choices={supportedEfforts.map((id) => ({ id, label: effortLabel(id) }))}
-              disabled={inactive || modelLoading || saving || !catalog}
+              disabled={inactive || modelLoading || saving || pathChanging || !catalog}
               onChange={(id) => {
                 setEffort(id as Preference['effort'])
                 setSaved(false)
@@ -909,7 +912,7 @@ function CliSettings({
               type="submit"
               variant="primary"
               size="md"
-              disabled={inactive || modelLoading || saving || !validPreference}
+              disabled={inactive || modelLoading || saving || pathChanging || !validPreference}
             >
               {saving && <StateDot state="ongoing" size={14} />}保存默认值
             </Button>
@@ -919,6 +922,16 @@ function CliSettings({
           </div>
         </form>
       </section>
+      <CliExecutableSettings
+        api={api}
+        sessionId={sessionId}
+        cli={cli}
+        blocked={!!action || saving || toggling}
+        accountLoading={accountLoading}
+        accountRevision={account}
+        onApplied={() => { if (enabled) onRefreshAccount(true, true) }}
+        onBusyChange={setPathChanging}
+      />
     </div>
   )
 }

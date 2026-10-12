@@ -37,7 +37,10 @@ import {
   type RuntimeConfig,
 } from './process.ts'
 import { nativeProcessBackend } from './native-process.ts'
-import { validatePreference } from './adapters.ts'
+import { validatePreference, configuredCliExecutable, resolveCliExecutable } from './adapters.ts'
+import { CliExecutablePathStore } from './cli-executable-paths.ts'
+import type { CliExecutablePathStatus } from '../shared/cli-settings.ts'
+import { WindowsCliInstallationError } from './windows-cli-installation.ts'
 import { authorizedCatalog, authorizeSelection } from './authorized-catalog.ts'
 import { WorkerStorage, type DispatchSetup } from './storage.ts'
 import { WorkerRuntime, type Submission } from './runtime.ts'
@@ -194,6 +197,9 @@ export class CliWorkerService extends TypertRemoteService {
       ...DEFAULT_CONFIG,
       ...config,
     }
+    const stateDirectory =
+      config.stateDirectory ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'cliworker-now')
+    this.options.cliExecutablePaths = new CliExecutablePathStore(stateDirectory)
     this.backend = nativeProcessBackend(ctx.subprocess)
     this.accounts = new AccountManager(this.backend, this.options)
     this.runtime = new WorkerRuntime(
@@ -829,6 +835,88 @@ export class CliWorkerService extends TypertRemoteService {
       signal.throwIfAborted()
       this.runtime.assertCliEnabled(id)
       return JSON.stringify(status)
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+
+  private executablePathSnapshot(cli: CliId): CliExecutablePathStatus {
+    const saved = this.options.cliExecutablePaths?.read(cli)
+    const configured = configuredCliExecutable(cli, this.options)
+    const manual = saved?.mode === 'manual'
+    return {
+      cli,
+      path: manual ? saved.path : (configured ?? saved?.path ?? ''),
+      source: manual ? 'manual' : configured ? 'configured' : saved ? 'auto' : 'none',
+      available: false,
+    }
+  }
+  private async probeExecutablePath(cli: CliId, signal: AbortSignal): Promise<CliExecutablePathStatus> {
+    try {
+      const path = await resolveCliExecutable(cli, this.backend, this.options, signal)
+      signal.throwIfAborted()
+      const current = this.executablePathSnapshot(cli)
+      return { ...current, path: current.source === 'manual' ? current.path : path, available: true }
+    } catch (error) {
+      if (error instanceof ProcessCleanupUnconfirmedError) {
+        this.runtime.blockOnCleanup(error)
+        throw error
+      }
+      signal.throwIfAborted()
+      return {
+        ...this.executablePathSnapshot(cli),
+        error:
+          error instanceof WindowsCliInstallationError
+            ? error.message
+            : 'CLI 路径不可用，请确认填写的是 CLI 文件的完整路径，再刷新重试',
+      }
+    }
+  }
+  /** @param parentSessionId - Owning session. @param cli - Selected CLI. @param signal - Query lifetime. @returns Machine-local executable path and availability JSON. */
+  @Remote('cliExecutablePath')
+  async cliExecutablePath(parentSessionId: string, cli: string, signal: AbortSignal): Promise<string> {
+    try {
+      await this.parent(parentSessionId)
+      const id = validate.enum(CLI_IDS).parse(cli)
+      const control = AbortSignal.any([signal, this.disposed.signal])
+      control.throwIfAborted()
+      // While a CLI is in use, expose its saved selection without probing or
+      // replacing an installation under an active task/account terminal.
+      try {
+        this.runtime.assertAccountIdle(id)
+        if (this.accounts.isBusy(id)) throw new Error('请先关闭此 CLI 的账号终端再刷新路径')
+      } catch (error) {
+        return JSON.stringify({ ...this.executablePathSnapshot(id), error: String(error) })
+      }
+      return JSON.stringify(await this.probeExecutablePath(id, control))
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning session. @param cli - Selected CLI. @param path - Full file path for manual selection. @param action - manual, refresh or auto. @param signal - Mutation/query lifetime. @returns Saved machine-local path and fresh availability JSON. */
+  @Remote('refreshCliExecutablePath')
+  async refreshCliExecutablePath(
+    parentSessionId: string,
+    cli: string,
+    path: string,
+    action: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    try {
+      await this.parent(parentSessionId)
+      const id = validate.enum(CLI_IDS).parse(cli)
+      const operation = validate.enum(['manual', 'refresh', 'auto']).parse(action)
+      const control = AbortSignal.any([signal, this.disposed.signal])
+      control.throwIfAborted()
+      this.runtime.assertAccountIdle(id)
+      if (this.accounts.isBusy(id)) throw new Error('请先关闭此 CLI 的账号终端再修改路径')
+      const store = this.options.cliExecutablePaths
+      if (!store) throw new Error('CLI 路径存储尚未就绪')
+      if (operation === 'manual') store.setManual(id, path)
+      else if (operation === 'auto') store.reset(id)
+      this.displayedBindings?.clear()
+      this.runtime.changed()
+      return JSON.stringify(await this.probeExecutablePath(id, control))
     } catch (error) {
       throw failure(error)
     }

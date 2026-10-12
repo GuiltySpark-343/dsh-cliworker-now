@@ -126,6 +126,16 @@ async function setup(
   const catalogForCli = vi.fn(async (_session, cli: CliId) => catalog(cli))
   const accountStatus = vi.fn(async (_session, cli: CliId) => status(cli))
   const configure = vi.fn().mockResolvedValue(remote({}))
+  const paths = new Map<CliId, { cli: CliId; path: string; source: string; available: boolean }>()
+  const defaultPath = (cli: CliId) => ({ cli, path: `E:\\模拟 CLI\\${cli}.exe`, source: 'auto', available: true })
+  const cliExecutablePath = vi.fn(async (_session, cli: CliId) => remote(paths.get(cli) ?? defaultPath(cli)))
+  const refreshCliExecutablePath = vi.fn(async (_session, cli: CliId, path: string, action: string) => {
+    const next = action === 'auto' ? defaultPath(cli) : action === 'manual'
+      ? { cli, path, source: 'manual', available: true }
+      : paths.get(cli) ?? defaultPath(cli)
+    paths.set(cli, next)
+    return remote(next)
+  })
   let enabled = Object.fromEntries(CLI_IDS.map((cli) => [cli, true]))
   const cliSettings = vi.fn(async () => remote({ enabled }))
   const setCliEnabled = vi.fn(async (_session, cli: CliId, next: boolean) => {
@@ -133,7 +143,7 @@ async function setup(
     return remote({ enabled })
   })
   const api = {
-    cliworker: { catalogForCli, accountStatus, configure, cliSettings, setCliEnabled, ...overrides },
+    cliworker: { catalogForCli, accountStatus, configure, cliSettings, setCliEnabled, cliExecutablePath, refreshCliExecutablePath, ...overrides },
   } as unknown as API
   let r!: ReactTestRenderer
   const render = (open: boolean) => (
@@ -177,6 +187,8 @@ async function setup(
     catalogForCli,
     cliSettings,
     setCliEnabled,
+    cliExecutablePath,
+    refreshCliExecutablePath,
   }
 }
 it('starts the selected CLI first and bounds background account discovery', async () => {
@@ -1732,4 +1744,239 @@ it('offers Hermes instead of the removed Harness account settings', async () => 
   expect(t.accountStatus.mock.calls.some((call) => call[1] === 'harness')).toBe(false)
   await t.click('Hermes Agent 设置')
   expect(t.catalogForCli).toHaveBeenCalledWith('simulation-parent', 'hermes', expect.any(AbortSignal))
+})
+
+// Explicit synthetic path management: these callbacks never launch or discover a real CLI.
+const pathInput = (t: Awaited<ReturnType<typeof setup>>) =>
+  t.r.root.findByType('input')
+const editPath = async (t: Awaited<ReturnType<typeof setup>>, path: string) => {
+  await act(async () => pathInput(t).props.onChange({ target: { value: path } }))
+}
+const submitPath = async (t: Awaited<ReturnType<typeof setup>>) => {
+  await act(async () => t.r.root.findByProps({ className: 'cwn-cli-path-settings' })
+    .findByType('form').props.onSubmit({ preventDefault() {} }))
+}
+it.each(CLI_IDS)('keeps %s advanced settings folded separately from project model defaults', async (cli) => {
+  const t = await setup({}, undefined, cli)
+  const project = t.r.root.findByProps({ 'aria-label': '项目默认设置' })
+  const advanced = t.r.root.findByProps({ 'aria-label': '高级设置', className: 'cwn-settings-section' })
+  expect(project.findByType('h3').children).toContain('项目默认设置')
+  expect(advanced.findByType('h3').findByType('button').props['aria-expanded']).toBe(false)
+  expect(project.findAllByProps({ 'aria-label': '高级设置' })).toHaveLength(0)
+  expect(t.r.root.findAllByProps({ className: 'cwn-cli-path-settings' })).toHaveLength(0)
+  expect(t.cliExecutablePath).not.toHaveBeenCalled()
+  await t.click('高级设置')
+  expect(t.button('高级设置').props['aria-expanded']).toBe(true)
+  expect(advanced.findByType('h4').children).toContain('CLI 路径管理')
+  expect(pathInput(t).props.value).toBe(`E:\\模拟 CLI\\${cli}.exe`)
+  expect(pathInput(t).props['aria-label']).toBe(`${CLI_LABELS[cli]} CLI 路径`)
+  expect(t.cliExecutablePath).toHaveBeenCalledExactlyOnceWith('simulation-parent', cli, expect.any(AbortSignal))
+  expect(t.refreshCliExecutablePath).not.toHaveBeenCalled()
+  expect(t.configure).not.toHaveBeenCalled()
+})
+it('saves an edited manual path and refreshes account and models without changing project defaults', async () => {
+  const t = await setup()
+  await t.click('高级设置')
+  const calls = t.accountStatus.mock.calls.length
+  const models = t.catalogForCli.mock.calls.length
+  const nextPath = 'F:\\自定义 工具\\真实入口\\cli.exe'
+  await editPath(t, nextPath)
+  await submitPath(t)
+  expect(t.refreshCliExecutablePath).toHaveBeenCalledExactlyOnceWith(
+    'simulation-parent', 'antigravity', nextPath, 'manual', expect.any(AbortSignal),
+  )
+  expect(pathInput(t).props.value).toBe(nextPath)
+  expect(t.accountStatus.mock.calls.length).toBeGreaterThan(calls)
+  expect(t.catalogForCli.mock.calls.length).toBeGreaterThan(models)
+  expect(t.text()).toContain('手动指定')
+  expect(t.configure).not.toHaveBeenCalled()
+})
+it('revalidates an unchanged detected path without turning it into a manual override', async () => {
+  const t = await setup()
+  await t.click('高级设置')
+  await submitPath(t)
+  expect(t.refreshCliExecutablePath).toHaveBeenCalledWith(
+    'simulation-parent', 'antigravity', 'E:\\模拟 CLI\\antigravity.exe', 'refresh', expect.any(AbortSignal),
+  )
+  expect(t.text()).toContain('自动识别')
+  expect(t.configure).not.toHaveBeenCalled()
+})
+it('retains a rejected path draft and allows correction without refreshing an unchanged account', async () => {
+  const refreshCliExecutablePath = vi.fn().mockRejectedValue(new Error('模拟：请输入完整的 CLI 路径'))
+  const t = await setup({ refreshCliExecutablePath })
+  await t.click('高级设置')
+  const calls = t.accountStatus.mock.calls.length
+  await editPath(t, 'synthetic invalid path')
+  await submitPath(t)
+  expect(pathInput(t).props.value).toBe('synthetic invalid path')
+  expect(t.text()).toContain('模拟：请输入完整的 CLI 路径')
+  expect(t.accountStatus).toHaveBeenCalledTimes(calls)
+  expect(t.button('刷新 CLI 路径').props.disabled).toBe(false)
+  expect(t.configure).not.toHaveBeenCalled()
+})
+it('retains a saved but unavailable manual path and invalidates the previous account and models', async () => {
+  let current = { cli: 'antigravity', path: 'E:\\模拟 CLI\\old.exe', source: 'auto', available: true, error: '' }
+  const cliExecutablePath = vi.fn(async () => remote(current))
+  const refreshCliExecutablePath = vi.fn(async (_session, cli: CliId, path: string) => {
+    current = { cli, path, source: 'manual', available: false, error: '模拟：此路径未找到 CLI' }
+    return remote(current)
+  })
+  const t = await setup({ cliExecutablePath, refreshCliExecutablePath })
+  await t.click('高级设置')
+  const calls = t.accountStatus.mock.calls.length
+  const models = t.catalogForCli.mock.calls.length
+  await editPath(t, 'F:\\不存在的工具\\cli.exe')
+  await submitPath(t)
+  expect(pathInput(t).props.value).toBe('F:\\不存在的工具\\cli.exe')
+  expect(t.text()).toContain('模拟：此路径未找到 CLI')
+  expect(t.text()).toContain('手动指定')
+  expect(t.accountStatus.mock.calls.length).toBeGreaterThan(calls)
+  expect(t.catalogForCli.mock.calls.length).toBeGreaterThan(models)
+  expect(t.configure).not.toHaveBeenCalled()
+})
+it('restores automatic discovery through the explicit reset button', async () => {
+  const t = await setup()
+  await t.click('高级设置')
+  await editPath(t, 'F:\\手动指定\\cli.exe')
+  await submitPath(t)
+  await t.click('恢复自动识别')
+  expect(t.refreshCliExecutablePath).toHaveBeenLastCalledWith(
+    'simulation-parent', 'antigravity', 'F:\\手动指定\\cli.exe', 'auto', expect.any(AbortSignal),
+  )
+  expect(pathInput(t).props.value).toBe('E:\\模拟 CLI\\antigravity.exe')
+  expect(t.text()).toContain('已恢复自动识别')
+  expect(t.configure).not.toHaveBeenCalled()
+})
+it('clears the previous manual path when automatic discovery completes without an available CLI', async () => {
+  let current = { cli: 'antigravity', path: 'F:\\已卸载\\cli.exe', source: 'manual', available: false, error: '' }
+  const cliExecutablePath = vi.fn(async () => remote(current))
+  const refreshCliExecutablePath = vi.fn(async () => {
+    current = { ...current, path: '', source: 'none', error: '模拟：未找到可用 CLI' }
+    return remote(current)
+  })
+  const t = await setup({ cliExecutablePath, refreshCliExecutablePath })
+  await t.click('高级设置')
+  await t.click('恢复自动识别')
+  expect(pathInput(t).props.value).toBe('')
+  expect(t.text()).toContain('模拟：未找到可用 CLI')
+})
+it('keeps path management available for a disabled CLI without starting account or model probes', async () => {
+  const cliSettings = vi.fn(async () => remote({ enabled: Object.fromEntries(CLI_IDS.map((cli) => [cli, false])) }))
+  const t = await setup({ cliSettings }, undefined, 'opencode')
+  await t.click('高级设置')
+  expect(pathInput(t).props.disabled).toBe(false)
+  expect(t.button('刷新 CLI 路径').props.disabled).toBe(false)
+  await editPath(t, 'F:\\OpenCode CLI\\opencode.exe')
+  await submitPath(t)
+  expect(t.refreshCliExecutablePath).toHaveBeenCalledOnce()
+  expect(t.accountStatus).not.toHaveBeenCalled()
+  expect(t.catalogForCli).not.toHaveBeenCalled()
+  expect(t.configure).not.toHaveBeenCalled()
+})
+it('disables path mutation while an account terminal is active', async () => {
+  const t = await setup({ accountStatus: vi.fn(async (_parent, cli: CliId) => status(cli, { actions: accountActions })) })
+  await t.click('高级设置')
+  await t.click('登录 / 切换账号')
+  expect(pathInput(t).props.disabled).toBe(true)
+  expect(t.button('刷新 CLI 路径').props.disabled).toBe(true)
+  expect(t.button('恢复自动识别').props.disabled).toBe(true)
+  expect(t.refreshCliExecutablePath).not.toHaveBeenCalled()
+  await t.click('关闭模拟账号操作')
+  expect(pathInput(t).props.disabled).toBe(false)
+})
+it('does not allow login or model preference writes during a path mutation', async () => {
+  const pending = deferred()
+  const refreshCliExecutablePath = vi.fn(() => pending.promise)
+  const t = await setup({ refreshCliExecutablePath,
+    accountStatus: vi.fn(async (_parent, cli: CliId) => status(cli, { actions: accountActions })),
+  })
+  await t.click('高级设置')
+  await editPath(t, 'F:\\CLI\\entry.exe')
+  await submitPath(t)
+  expect(t.button('登录 / 切换账号').props.disabled).toBe(true)
+  expect(t.button('保存默认值').props.disabled).toBe(true)
+  expect(pathInput(t).props.disabled).toBe(true)
+  await act(async () => pending.resolve(remote({ cli: 'antigravity', path: 'F:\\CLI\\entry.exe', source: 'manual', available: true })))
+  expect(t.button('登录 / 切换账号').props.disabled).toBe(false)
+})
+it('does not overwrite newly typed input with a late automatic path read', async () => {
+  const pending = deferred(), cliExecutablePath = vi.fn(() => pending.promise)
+  const t = await setup({ cliExecutablePath })
+  await t.click('高级设置')
+  expect(pathInput(t).props.disabled).toBe(false)
+  await editPath(t, 'F:\\刚输入的路径\\cli.exe')
+  await act(async () => pending.resolve(remote({ cli: 'antigravity', path: 'E:\\旧检测\\cli.exe', source: 'auto', available: true })))
+  expect(pathInput(t).props.value).toBe('F:\\刚输入的路径\\cli.exe')
+  expect(t.refreshCliExecutablePath).not.toHaveBeenCalled()
+})
+it('keeps a dirty path draft when a later account check refreshes automatic discovery', async () => {
+  const t = await setup()
+  await t.click('高级设置')
+  await editPath(t, 'F:\\未保存的输入\\cli.exe')
+  await t.click('刷新状态')
+  expect(t.cliExecutablePath).toHaveBeenCalledTimes(2)
+  expect(pathInput(t).props.value).toBe('F:\\未保存的输入\\cli.exe')
+  expect(t.refreshCliExecutablePath).not.toHaveBeenCalled()
+})
+it.each(['Kimi 设置', '关闭设置'])('cancels path reads on %s and ignores late results', async (leave) => {
+  const pending = deferred(), cliExecutablePath = vi.fn((_session, _cli, _signal) => pending.promise)
+  const t = await setup({ cliExecutablePath })
+  await t.click('高级设置')
+  const signal = cliExecutablePath.mock.calls[0]![2]
+  await t.click(leave)
+  expect(signal.aborted).toBe(true)
+  await act(async () => pending.resolve(remote({ cli: 'antigravity', path: 'E:\\迟到的旧 CLI.exe', source: 'auto', available: true })))
+  expect(t.text()).not.toContain('迟到的旧 CLI')
+})
+it.each(['Kimi 设置', '关闭设置'])('cancels path writes on %s and does not refresh accounts from a late completion', async (leave) => {
+  const pending = deferred()
+  const refreshCliExecutablePath = vi.fn((_session, _cli, _path, _action, _signal) => pending.promise)
+  const t = await setup({ refreshCliExecutablePath })
+  await t.click('高级设置')
+  await editPath(t, 'F:\\正在保存\\cli.exe')
+  await submitPath(t)
+  const signal = refreshCliExecutablePath.mock.calls[0]![4]
+  const calls = t.accountStatus.mock.calls.length
+  await t.click(leave)
+  expect(signal.aborted).toBe(true)
+  await act(async () => pending.resolve(remote({ cli: 'antigravity', path: 'F:\\正在保存\\cli.exe', source: 'manual', available: true })))
+  expect(t.accountStatus).toHaveBeenCalledTimes(calls)
+  expect(t.text()).not.toContain('正在保存')
+})
+it('aborts a folded path read and performs a fresh read when expanded again', async () => {
+  const pending = deferred()
+  const cliExecutablePath = vi.fn((_session, cli: CliId, _signal) => Promise.resolve(remote({ cli, path: 'E:\\新检测\\cli.exe', source: 'auto', available: true })))
+    .mockImplementationOnce(() => pending.promise)
+  const t = await setup({ cliExecutablePath })
+  await t.click('高级设置')
+  const signal = cliExecutablePath.mock.calls[0]![2]
+  await t.click('高级设置')
+  expect(signal.aborted).toBe(true)
+  await t.click('高级设置')
+  expect(pathInput(t).props.value).toBe('E:\\新检测\\cli.exe')
+  await act(async () => pending.resolve(remote({ cli: 'antigravity', path: 'E:\\旧检测\\cli.exe', source: 'auto', available: true })))
+  expect(pathInput(t).props.value).toBe('E:\\新检测\\cli.exe')
+})
+it('clears the previous green account and model choices while validating a newly saved CLI path', async () => {
+  const accountStatus = vi.fn(async (_session, cli: CliId) => status(cli, {
+    state: 'authenticated', authMethod: 'oauth', accountLabel: 'old-path@example.invalid',
+  }))
+  const t = await setup({ accountStatus })
+  await t.click('高级设置')
+  expect(visibleText(accountSummary(t.r))).toContain('old-path@example.invalid')
+  const pending = deferred()
+  accountStatus.mockImplementation((_session, cli: CliId) => cli === 'antigravity'
+    ? pending.promise : Promise.resolve(status(cli)))
+  await editPath(t, 'F:\\不同安装\\cli.exe')
+  await submitPath(t)
+  expect(visibleText(accountSummary(t.r))).not.toContain('old-path@example.invalid')
+  expect(visibleText(accountSummary(t.r))).not.toContain('已登录')
+  expect(t.button('Antigravity 设置').findByProps({ role: 'img' }).props['aria-label']).toBe('正在检查连接')
+  expect(t.button('默认模型').props.disabled).toBe(true)
+  expect(t.button('保存默认值').props.disabled).toBe(true)
+  await act(async () => pending.resolve(status('antigravity', {
+    installed: false, state: 'unavailable', summary: '模拟：新路径不可用',
+  })))
+  expect(visibleText(accountSummary(t.r))).toContain('模拟：新路径不可用')
+  expect(t.configure).not.toHaveBeenCalled()
 })

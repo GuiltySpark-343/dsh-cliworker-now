@@ -1,5 +1,7 @@
 // Management additions retain the host Menu, Tooltip, theme and motion primitives.
 export const workerManagementStyles = `
+.cwn-settings-advanced-heading{flex:1;min-width:0}.cwn-settings-advanced-heading .cwn-settings-advanced-toggle{width:100%;justify-content:space-between;padding:0;font:inherit;color:inherit}.cwn-settings-advanced-toggle[aria-expanded=true]>svg{transform:rotate(180deg)}
+.cwn-cli-path-settings{display:flex;flex-direction:column;gap:8px;min-width:0}.cwn-cli-path-settings h4{margin:0;font-size:var(--dsw-font-s-14-font-size);font-weight:500;line-height:22px}.cwn-cli-path-settings>p{margin:0}.cwn-cli-path-settings form{display:flex;flex-direction:column;gap:8px;min-width:0}.cwn-cli-path-settings label{font-size:var(--dsw-font-xxs-12-font-size);line-height:18px;color:var(--dsw-alias-label-secondary)}.cwn-cli-path-settings .cwn-cli-path-input{width:100%;min-width:0}.cwn-cli-path-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px}.cwn-cli-path-source{margin-right:auto;font-size:var(--dsw-font-xxs-12-font-size);color:var(--dsw-alias-label-tertiary)}.cwn-cli-path-feedback{min-height:18px;margin:0;font-size:var(--dsw-font-xxs-12-font-size);line-height:18px;color:var(--dsw-alias-label-tertiary);overflow-wrap:anywhere}
 .cwn-worker{display:block;padding:12px;min-height:62px}
 .cwn .cwn-worker-menu-anchor{display:block;width:100%}
 .cwn-worker-layout{display:grid;grid-template-columns:minmax(0,1fr) 14px;column-gap:10px;align-items:center;min-width:0}

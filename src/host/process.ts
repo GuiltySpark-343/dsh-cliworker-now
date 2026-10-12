@@ -8,6 +8,7 @@ import { accessSync, constants, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, parse, resolve, sep } from 'node:path'
 import type { ModelChoice, Preference, TaskMode } from '../shared/types.ts'
+import type { CliExecutablePathStore } from './cli-executable-paths.ts'
 
 export interface ProcessBackend {
   resolveExecutable(name: string): Promise<string>
@@ -22,6 +23,8 @@ export class ProcessCleanupUnconfirmedError extends Error {
   }
 }
 export interface RuntimeConfig {
+  /** Host-private machine-local CLI path preferences, shared by all entry points. */
+  cliExecutablePaths?: CliExecutablePathStore
   executable: string
   codexExecutable?: string
   claudeExecutable?: string
@@ -62,7 +65,7 @@ export function projectDirectory(input: string): string {
   if (!isAbsolute(input)) throw new Error('Project must be an absolute directory')
   const path = realpathSync(input)
   const home = realpathSync(homedir())
-  const key = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value
+  const key = (value: string) => (process.platform === 'win32' ? value.toLowerCase() : value)
   if (key(path) === key(parse(path).root) || key(path) === key(home) || key(home).startsWith(key(path + sep)))
     throw new Error('Refusing a root or home directory as workspace')
   const forbidden = [
