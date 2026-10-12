@@ -121,6 +121,10 @@ The settings dialog allows at most two concurrent account-status requests, inclu
 
 Verified Kimi managed OAuth model capabilities and Claude command-parameter capabilities can also be reused briefly. Each catalog query still checks current credentials, expiry and remote access; remote quota is not cached. Windows launchers hide extra console windows for background queries and embedded account terminals.
 
+Initial settings loading, refreshes and automatic model/effort saves retain their account and catalog checks. For the verified Codex npm 0.162.1 launcher, Windows background calls use the native CLI from the same installation, avoiding an extra terminal created inside the JavaScript launcher. The saved installation path, package-manager environment and process cleanup are preserved. Other launcher revisions keep their existing behavior; see the [verification log](doc/tasks.md) for the observed window coverage.
+
+On Windows, background Antigravity model queries and tasks use the official environment switch to disable auto-update for that child process, preventing its updater from opening another terminal. This does not change updates in user-opened Antigravity terminals or behavior on macOS.
+
 Successful extended-CLI catalog queries remove their private temporary directory and extracted native cache after process exit is confirmed. Failed or unconfirmed cleanup preserves the query files and never deletes native account files.
 
 Probe records: [ZCode](doc/zcode-probe.md) · [Grok](doc/grok-probe.md) · [Pi / OMP](doc/pi-omp-probe.md) · [Hermes](doc/hermes-probe.md) · [OpenCode](doc/opencode-probe.md)

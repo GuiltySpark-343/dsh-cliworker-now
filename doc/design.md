@@ -625,3 +625,11 @@ Windows 官方源码安装的 distlib 入口在隔离 `HERMES_HOME` 下无法定
 - v0.7.7（`021441b`）正常 PATH/npm 解析不检查桌面归档；v0.7.8 的 `1b12366` 新增桌面身份检查后，Electron 对不存在的 `resources/app.asar` 抛无 code 的 `Invalid package`，导致正确 npm CLI 被误报不可用。真实 Host 已捕获此异常，不能归因于用户安装或账号。
 - Windows 安装 helper 局部懒加载 Electron 内置 `original-fs`，普通 Node 沿用 `node:fs`；普通文件、权限、真实路径和 PE 检查使用相同物理 FS。不存在的可选归档正常视作不存在，真实归档按磁盘文件处理。保留显式 GUI 拒绝、损坏/权限失败、同安装独立 CLI 核验与路径优先级。
 - 不改变全局 `process.noAsar`，不吞异常字符串、不回退另一 CLI，不新增依赖或存储迁移。最小专项及 Windows Desktop 自动路径验收见 `doc/tasks.md`；版本保持 v0.7.8。
+
+## 2026-10-13：v0.7.8 Windows 设置后台终端弹窗修复
+
+- 首次打开设置会查询全部启用 CLI 的账号，再读当前 CLI 目录；模型／思考强度自动保存经授权目录校验，包含前后账号绑定检查。这些必要查询保留，不以省略校验消除窗口。
+- 实机确认 Codex npm 0.162.1 的 `codex.js` 内部使用 `spawn(binaryPath, argv, { stdio: "inherit", env })`，无隐藏选项。外层 Electron GUI 启动正确，但内部原生子进程仍触发 Windows Terminal。后台专用 `windows-codex-launch.ts` 对已核验脚本指纹生成同安装原生描述符，进入既有 GUI 引导器／管道／私有退出回执，保留完整 Job 范围清理。
+- 核对主包声明、可选平台 npm 别名、版本／os／cpu、真实包根及原生 PE。平台依赖真正缺失时才按原脚本回退本包 vendor；已有损坏平台包不得换安装。沿用 npm/Bun/pnpm/Vite+ 管理器环境增量与删除标记，不回填 SDK 已清理的父环境、不猜旧版 PATH 注入。
+- 已存储 JS/shim 路径、解析优先级、macOS 和显式账号终端不变；不修改第三方 CLI 安装或父进程全局模块。未核验源码指纹继续原有启动方式，不能宣称任意第三方脚本内部派生均已验证。本轮确认的是当前安装的 0.162.1 脚本；后续新脚本按其真实语义扩展。
+- Antigravity 热读原生入口及账号 PowerShell 已进入隐藏层；随后冷开仍复现 AGY 自身派生两层与可见窗口。本机 `auto_updater.go` 日志记录的更新进程 PID 28472 与实际父链一致，确认后台自动更新为该窗口来源。官方 [自动更新说明](https://antigravity.google/docs/cli/troubleshooting/) 给出 15 分钟 TTL 与 `AGY_CLI_DISABLE_AUTO_UPDATE=true`。Windows 当前／旧模型读取和任务仅合并本次子进程禁自动更新变量；helper 独立于交互共用的 firstPartyEnvironment，不改用户更新标记、系统环境或账号终端。具体实机核对以 doc/tasks.md 为准。

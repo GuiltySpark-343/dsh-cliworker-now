@@ -122,6 +122,10 @@ MiMo 短时间重复加载模型能力时复用有界内存缓存，减少 Windo
 
 Kimi 已核验的 managed OAuth 模型能力和 Claude 的命令参数能力也可短时复用；每次目录查询仍核对当前凭据、有效期和远端权限，不缓存远端额度。Windows 后台查询及嵌入式账号终端的启动器隐藏额外控制台窗口。
 
+Windows 的设置首次加载、刷新与模型／强度自动保存继续执行必要的账号和目录校验。已核验的 Codex npm 0.162.1 启动脚本在后台直接使用同安装的原生 CLI，避免脚本内部再次启动程序时弹出终端；保留原安装路径、包管理器环境和进程清理。其他脚本版本保留原启动方式，具体窗口验证范围见 [实际验证记录](doc/tasks.md)。
+
+Windows 的 Antigravity 后台模型查询及任务使用官方环境开关关闭本次进程的自动更新，避免更新程序另开终端。该开关只作用于插件后台子进程，用户正常打开的 Antigravity 终端仍按原方式更新；macOS 行为不变。
+
 成功且进程退出已确认的扩展 CLI 模型查询会自动删除本次临时目录和原生解压缓存；失败或清理未确认时保留现场，不删除原始账号文件。
 
 专项记录：[ZCode](doc/zcode-probe.md) · [Grok](doc/grok-probe.md) · [Pi / OMP](doc/pi-omp-probe.md) · [Hermes](doc/hermes-probe.md) · [OpenCode](doc/opencode-probe.md)

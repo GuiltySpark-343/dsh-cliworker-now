@@ -805,6 +805,24 @@ describe('user-operated account terminals (synthetic PTY)', () => {
     },
   )
 
+  it('AGY background updater suppression never changes the Windows interactive account environment', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    vi.stubEnv('AGY_CLI_DISABLE_AUTO_UPDATE', 'false')
+    const f = fixture()
+    try {
+      const opened = await f.manager.start('parent', 'antigravity', 'login', f.cwd, f.signal)
+      const spec = vi.mocked(f.backend.spawnTerminal!).mock.calls[0]![0]
+      expect(spec.env).toEqual({})
+      expect(process.env.AGY_CLI_DISABLE_AUTO_UPDATE).toBe('false')
+      expect(f.backend.spawn).not.toHaveBeenCalled()
+      await f.manager.stop('parent', opened.id)
+    } finally {
+      await f.manager.close()
+      Object.defineProperty(process, 'platform', platform)
+    }
+  })
+
   it.each([
     { env: { ANTHROPIC_API_KEY: 'synthetic-managed-key' } },
     { env: { CLAUDE_CONFIG_DIR: '/synthetic/managed-account' } },

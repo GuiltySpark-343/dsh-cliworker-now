@@ -9,6 +9,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, parse, resolve, sep } from 'node:path'
 import type { ModelChoice, Preference, TaskMode } from '../shared/types.ts'
 import type { CliExecutablePathStore } from './cli-executable-paths.ts'
+import { agyBackgroundEnvironment } from './agy-background-environment.ts'
 
 export interface ProcessBackend {
   resolveExecutable(name: string): Promise<string>
@@ -147,6 +148,7 @@ export async function discoverModels(
   const process = backend.spawn({
     argv: [executable, 'models'],
     cwd,
+    env: agyBackgroundEnvironment('antigravity'),
     stdio: { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' },
     graceMs: config.graceMs,
     signal: control,

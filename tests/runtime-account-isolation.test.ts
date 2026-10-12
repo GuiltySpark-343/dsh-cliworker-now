@@ -103,6 +103,27 @@ function setup() {
   return { project, backend, runtime, storage, finishes, submit }
 }
 
+it.each(['win32', 'darwin'] as const)('AGY background task scopes updater suppression on %s without changing the parent', async system => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { ...platform, value: system })
+  vi.stubEnv('AGY_CLI_DISABLE_AUTO_UPDATE', 'false')
+  const { backend, finishes, submit } = setup()
+  const task = submit()
+  try {
+    await vi.waitFor(() => expect(backend.spawn).toHaveBeenCalledOnce())
+    const launch = vi.mocked(backend.spawn).mock.calls[0]![0]
+    expect(launch.env).toEqual(system === 'win32' ? { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' } : {})
+    expect(launch.argv).toContain('--print')
+    expect(launch.argv).toContain('synthetic/model')
+    expect(process.env.AGY_CLI_DISABLE_AUTO_UPDATE).toBe('false')
+  } finally {
+    for (const finish of finishes) finish()
+    await task.done
+    Object.defineProperty(process, 'platform', platform)
+  }
+  expect((await task.done).status).toBe('completed')
+})
+
 it('rejects MiMo config interpolation before worker spawn even when metadata authorization succeeds', async () => {
   const { project, backend, submit } = setup()
   vi.stubEnv('MIMOCODE_HOME', join(project, 'mimo'))

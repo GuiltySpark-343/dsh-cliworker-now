@@ -2,6 +2,7 @@ import { readClaudeOwnRoute, claudeNativeSettingsArguments } from './claude-own-
 import { discoverClaudeNativeOAuth } from './claude-native-oauth.ts'
 import { discoverCodexModels } from './codex-models.ts'
 import { discoverAgyAccountModels } from './agy-models.ts'
+import { agyBackgroundEnvironment } from './agy-background-environment.ts'
 import { discoverFirstPartySources, readFirstPartyModelSources } from './first-party-models.ts'
 import { nativeAgyAccountIdentity } from './agy-windows-account.ts'
 import { extendedCatalog, isExtendedCli } from './extended-adapters.ts'
@@ -197,7 +198,7 @@ export async function catalogFor(
   }
   if (cli === 'antigravity') {
     const models = await discoverAgyAccountModels(
-      () => capture(backend, config, [executable, 'models'], cwd, signal),
+      () => capture(backend, config, [executable, 'models'], cwd, signal, agyBackgroundEnvironment(cli)),
       signal,
       undefined,
       nativeAgyAccountIdentity(backend, config),

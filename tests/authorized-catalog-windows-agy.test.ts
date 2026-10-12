@@ -20,6 +20,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   Object.defineProperty(process, 'platform', platform)
+  vi.unstubAllEnvs()
   rmSync(state.home, { recursive: true, force: true })
 })
 const account = (subject = 'a') => ({ state: 'authenticated', principalHash: subject.repeat(64) })
@@ -56,6 +57,24 @@ function fixture(projections: object[] = [account(), account()], onModels?: () =
   }
   return { backend, handles, counts: () => ({ accountReads, modelReads }) }
 }
+
+it.each(['win32', 'darwin'] as const)('AGY background current model discovery scopes updater suppression on %s', async system => {
+  Object.defineProperty(process, 'platform', { ...platform, value: system })
+  vi.stubEnv('AGY_CLI_DISABLE_AUTO_UPDATE', 'false')
+  writeFileSync(join(state.home, '.gemini/jetski-standalone-oauth-token'), JSON.stringify({
+    auth_method: 'consumer', token: { access_token: 'synthetic-access', refresh_token: 'synthetic-refresh' },
+  }))
+  const f = fixture()
+  const catalog = await catalogFor('antigravity', f.backend, DEFAULT_CONFIG, state.home, signal())
+  expect(catalog.models.map(model => model.id)).toEqual(['synthetic-model'])
+  const launches = vi.mocked(f.backend.spawn).mock.calls.map(([spec]) => spec)
+  expect(launches.find(spec => spec.argv[1] === 'models')?.env)
+    .toEqual(system === 'win32' ? { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' } : {})
+  for (const spec of launches.filter(spec => spec.argv.some(arg => arg.endsWith('windows-agy-account.ps1'))))
+    expect(spec.env).toBeUndefined()
+  expect(process.env.AGY_CLI_DISABLE_AUTO_UPDATE).toBe('false')
+  for (const handle of f.handles) expect(handle.waitForExit).toHaveBeenCalledOnce()
+})
 
 it('uses two native identity reads per authorized directory and does not reuse them in another request', async () => {
   const f = fixture([account(), account(), account(), account()])

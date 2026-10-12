@@ -44,6 +44,7 @@ import { WorkerStorage } from './storage.ts'
 import { authorizeSelection, ACCOUNT_CHANGED } from './authorized-catalog.ts'
 import { readCliAccountBinding } from './cli-account-binding.ts'
 import { assertFirstPartyConfiguration, firstPartyEnvironment } from './first-party-models.ts'
+import { agyBackgroundEnvironment } from './agy-background-environment.ts'
 
 interface Task {
   worker: Worker
@@ -591,7 +592,10 @@ export class WorkerRuntime {
               controller.signal,
             )
           : {
-              env: firstPartyEnvironment(cliOf(worker.preference)),
+              env: {
+                ...firstPartyEnvironment(cliOf(worker.preference)),
+                ...agyBackgroundEnvironment(cliOf(worker.preference)),
+              },
               argv: workerArguments(
                 executable,
                 worker.project,

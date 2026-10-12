@@ -3,6 +3,7 @@ import { win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ProcessBackend } from './process.ts'
 import { isCurrentWindowsRuntime, needsWindowsHiddenLaunch, spawnWindowsHidden } from './windows-hidden-process.ts'
+import { windowsCodexBackgroundLaunch } from './windows-codex-launch.ts'
 const privateLauncher = fileURLToPath(new URL('./private-launch.mjs', import.meta.url))
 
 /** One normalization boundary for tasks, metadata and interactive account menus. */
@@ -11,13 +12,22 @@ export function nativeProcessBackend(
   platform = process.platform,
   options: { electron?: boolean } = {},
 ): ProcessBackend {
-  const normalize = <T extends { argv: readonly string[]; env?: NodeJS.ProcessEnv }>(spec: T) => {
-    const argv = nativeLaunchArgv(spec.argv, platform)
+  const normalize = <T extends { argv: readonly string[]; env?: NodeJS.ProcessEnv }>(spec: T, background = false) => {
+    const requested = nativeLaunchArgv(spec.argv, platform)
+    // A known npm launcher can itself spawn a console executable with inherited
+    // handles. Preserve its installation/env semantics before adding Node mode
+    // for our own GUI helpers; that mode does not belong to the native target.
+    const launch = background && platform === 'win32'
+      ? windowsCodexBackgroundLaunch(requested, spec.env, { platform })
+      : undefined
+    const argv = launch?.argv ?? requested
+    const env = launch?.env ?? spec.env
     return {
       ...spec,
       argv,
+      ...(launch ? { env } : {}),
       ...(argv[0] === process.execPath || (platform === 'win32' && isCurrentWindowsRuntime(argv[0]!))
-        ? { env: { ...spec.env, ELECTRON_RUN_AS_NODE: '1' } } : {}),
+        ? { env: { ...env, ELECTRON_RUN_AS_NODE: '1' } } : {}),
     }
   }
   return {
@@ -25,7 +35,7 @@ export function nativeProcessBackend(
       return resolveNativeEntry(await backend.resolveExecutable(resolveNativeEntry(name, platform)), platform)
     },
     spawn(spec) {
-      const normalized = normalize(spec)
+      const normalized = normalize(spec, true)
       const electron = options.electron ?? !!process.versions.electron
       // Fold only our exact private-umask helper into the background relay.
       // Leaving another pipe relay beneath it would delay the native exit
