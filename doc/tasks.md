@@ -1037,3 +1037,20 @@
 - 最终本地包 `path-management-078-final.tgz` 为 v0.7.8，SHA-256 `29bcc4ce7eb8ac6780d59260c787a700d409132f2228bc82e2e32455ab278739`；Host `6687fe257d20fb6afe1dac9811541598bb711bf02fede56ea0551d762121991c`。Windows 原生安装 348/348 库文件哈希一致；Mac Host 相同，346/348 字节一致，两个 Client 差异经规范化核实仅为依赖路径注释及 source-map 路径。证据 `path-package.json`、`path-mac-install.json` 及 Windows `path-*` 私有报告。
 - Windows 最终实际 UI：ZCode 高级设置初始 Collapsed，路径输入与管理标题未挂载；展开自动预填实际 managed CLI 文件、来源自动识别，刷新一次返回“CLI 路径已刷新”，路径保持，随后关闭设置。证据 `path-windows-ui-zcode-collapsed.json`、`path-windows-ui-zcode-expanded.json` 及本轮刷新/清理报告；未进行真实登录或模型任务。
 - 已核对 11/11 任务、同步 7 项新增需求并归档 OpenSpec 为 `2026-10-12-discover-windows-desktop-clis`；归档前后严格校验均 12/12 通过，差异检查通过。其他活动变更保留 34/36 的原有未验收边界。
+
+
+## 2026-10-12：v0.7.8 设置自动保存及截图细化
+
+- `polish-cli-settings-autosave`：删除保存默认值按钮，模型/强度的用户选择自动保存；初始化/刷新不写偏好，连续选择串行保存最新组合，失败可重选重试，关闭/切 CLI/账号变化取消旧请求。
+- 高级设置为独立静态 h3 + 右侧箭头按钮，默认折叠并保留 grid/opacity 过渡和 reduced-motion。路径管理改普通标签，与模型/强度一致；删除重复可见 CLI 路径与来源文字，保留输入可访问名称、说明和操作。
+- 继续按截图去掉思考强度末行底边，避免与高级分区线重复；模型和强度菜单移除固定 300px，使用按钮实际宽度，保持原生 Menu portal/start 定位，ResizeObserver 随关闭/卸载清理。
+- 最小自动检查：最终 `vitest run tests/settings-dialog.test.tsx` 158/158 通过；Client 类型检查、Host/Client typecheck 及最终 `build:preview` 通过；仅 NativeChoice 变更后重跑相关 UI 文件，不重跑 Host 原生发现或全量套件。最终报告 `.test-data/settings-polish-078/settings-final-tests.json`、`preview-final.log`。
+- 最终本地包 `settings-polish-078-layout-final.tgz`，v0.7.8，SHA-256 `735d45ba8373262f83513475138d69abc64f201c37fb9f7d4aeeb04f43c21994`；Host 未改，SHA `6687fe257d20fb6afe1dac9811541598bb711bf02fede56ea0551d762121991c`。Mac 更新前 22 历史 worker、0 活动、0 账号桥，正常退出/构建/重启。346/348 库文件与 preview 字节一致，两个 Client 差异仅为依赖路径注释/source-map 路径，规范化对比通过。
+- 自动保存 Windows 实机中间包证据：原模型及 Low 原强度分别重选，均显示默认设置已保存；偏好内容哈希保持不变，mtime 分别前进，确认写入。未调用模型、未变更账号。最终样式包的实际检查另记如下。
+- Mac 最终实机：模型与强度菜单均目测与各自选择框左右对齐；只剩一条高级分区线。原 GLM-5.3-Flash/Low 分别重选，均出现“默认设置已保存”；8 份偏好内容哈希全部保持，仅对应偏好 mtime 两次依次前进。高级设置初始折叠，点击静态标题不切换，右箭头展开/折叠正常；普通路径标签、说明、输入及两按钮可见，无重复标签/来源。已关闭设置。证据 `.test-data/settings-polish-078/mac-layout-ui-report.json`；未额外检查窗口缩放。
+- 用户继续要求统一排版，前述 layout 包及其 UI 证据改记本阶段中间结果；最终交付另以统一参数包为准。新增 `doc/settings-ui-design.md`，将字号/行高/字重、16px 行留白、8px 标题后距、4px 文字组间距、单条边界及反馈规则固定成共同规范，并接入 AGENTS/README。
+- 统一排版最终纯 CSS：`build:preview` 与正式 `build` 均通过（含必要编译），不重复运行已通过的 158 项交互回归。最终包 `settings-polish-078-uniform-final.tgz`，v0.7.8，SHA-256 `fe5226b5c8632335e3a8f666b36dd7daa27013061cd24bcc4beed319bde905f8`；Host 不变，348 个 lib 文件，Mac 346 个字节一致、两个 Client 仅构建路径差异。
+- Mac 统一排版实机已核对：项目/高级标题到首个文字组的距离一致、标题和标签层级一致、模型/强度及分区均单条分隔线、路径输入和按钮滚动后完整可见、折叠后内容留白一并收起，强度菜单仍与选择框等宽。设置已关闭；8 份偏好文件哈希及 mtime 与前一次自动保存检查后完全一致。证据 `mac-uniform-idle.json`、`mac-uniform-install.json`、`mac-uniform-ui-report.json`。
+- Windows 统一排版包原生安装 348/348 文件哈希匹配，正常启动。UIA 测得项目标题与模型标签顶部差 109 屏幕像素，高级标题与路径标签顶部差也为 109；两处标题高度均 44、普通标签高度均 37，初始折叠。证据 `uniform-windows-ui-layout-final.json`；数值为当前缩放后的屏幕物理像素，并非 CSS 参数。
+- Windows 统一排版最终 UI：完整路径输入/恢复/刷新可见可操作，高级区展开前与收起后高度均 121 屏幕像素，无额外折叠留白；模型及强度菜单均 480px，与选择框一致。设置已关闭，无新增偏好写入或模型/登录调用。证据 `uniform-windows-ui-layout-final.json`、`uniform-windows-ui-states.json`、`uniform-windows-ui-menus-final.json`。远程通道继续用于用户随后反馈的 OpenCode 识别问题，相关诊断和最终清理单独记录。
+- 设置页 OpenSpec 4/4 完成；已同步两项主规格，再归档到 `2026-10-12-polish-cli-settings-autosave`。严格校验归档前 13/13、归档后 12/12。原 Windows/MiMo 活动变更继续保留 34/36 未验收边界；未增版本、未上传 GitHub，未跑全量验收。

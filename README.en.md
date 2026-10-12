@@ -72,7 +72,7 @@ The settings dialog manages role cards by name and summary. Seven writing roles 
 
 ### 3.3 CLI connections, accounts and model preferences
 
-Enable each CLI separately and manage its account, project default model and reasoning effort. Supported CLIs can open their native account terminal. Authentication information follows the CLI's actual account source.
+Enable each CLI separately and manage its account, project default model and reasoning effort. Selecting a model or effort saves the project defaults automatically; opening settings or refreshing the list does not change them. Save failures remain visible and can be retried by selecting again. Supported CLIs can open their native account terminal. Authentication information follows the CLI's actual account source.
 
 ![CLI connection settings in Harness, using an OMP page without personal account identifiers](doc/assets/readme/cli-settings.jpg)
 
@@ -217,7 +217,9 @@ macOS and Windows share the same account terminal with text selection and copyin
 
 Windows discovers the CLI inside the current user’s verified official Codex app package, the official npm entry, and Hermes’s official installation directory. An incomplete installation without an executable is reported explicitly.
 
-Each CLI settings page has a separate **Advanced settings** section, collapsed by default. Expand it to manage the CLI path: the first successful discovery is saved locally and reused, or enter a full file path and click Refresh to update CLI status. Restore automatic discovery removes the local selection. Paths are shared across projects on the same machine and OS; manual choices take precedence over deployment configuration, which takes precedence over automatically saved paths. A missing automatic path triggers discovery again; an invalid manual path remains selected and reports an error. Enter the CLI file, without a desktop GUI, directory, command arguments or surrounding quotes.
+Each CLI settings page has a separate **Advanced settings** section, collapsed by default. Use its right-hand arrow to expand and manage the CLI path: the first successful discovery is saved locally and reused, or enter a full file path and click Refresh to update CLI status. Restore automatic discovery removes the local selection. Paths are shared across projects on the same machine and OS; manual choices take precedence over deployment configuration, which takes precedence over automatically saved paths. A missing automatic path triggers discovery again; an invalid manual path remains selected and reports an error. Enter the CLI file, without a desktop GUI, directory, command arguments or surrounding quotes.
+
+Headings, labels, spacing, dividers and controls follow the [shared settings design specification](doc/settings-ui-design.md). Future settings reuse the same parameters.
 
 Windows also discovers ZCode and OpenCode in custom directories through known default directories, per-user/system installation records, image paths of already running product processes, and Start menu/Desktop shortcuts, including non-system drives and paths with spaces or Chinese characters. ZCode requires its bundled CLI and provider file; OpenCode requires a real standalone `opencode-cli.exe`. Desktop versions without that CLI report the missing component. Explicit paths, a deployed ZCode runtime and working PATH entries retain priority. Multiple usable installations require `zcodeExecutable` / `opencodeExecutable`; `DisplayIcon` is an installation registry value, not a requirement for a visible desktop icon. Portable folders in arbitrary locations without registration, shortcuts or PATH still need explicit configuration when the application is not running. Finding the CLI does not establish login or model access.
 

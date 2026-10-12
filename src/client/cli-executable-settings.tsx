@@ -30,8 +30,8 @@ export function CliExecutableSettings({
   onBusyChange: (busy: boolean) => void
 }) {
   const [expanded, setExpanded] = useState(false)
+  const [hasExpanded, setHasExpanded] = useState(false)
   const [draft, setDraft] = useState('')
-  const [current, setCurrent] = useState<CliExecutablePathStatus>()
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -68,7 +68,6 @@ export function CliExecutableSettings({
         const next = readPath(value(await service.cliExecutablePath(sessionId, cli, controller.signal)), cli)
         if (controller.signal.aborted || revision.current !== editRevision) return
         baseline.current = next.path
-        setCurrent(next)
         if (!dirty) {
           draftRef.current = next.path
           setDraft(next.path)
@@ -102,7 +101,6 @@ export function CliExecutableSettings({
       )), cli)
       if (controller.signal.aborted) return
       baseline.current = next.path
-      setCurrent(next)
       if (action === 'auto' || next.available) {
         draftRef.current = next.path
         setDraft(next.path)
@@ -123,63 +121,66 @@ export function CliExecutableSettings({
     }
   }
 
-  const sourceLabel = current && {
-    auto: '自动识别', manual: '手动指定', configured: '已配置路径', none: '未找到 CLI',
-  }[current.source]
   return (
     <section className="cwn-settings-section" aria-label="高级设置">
       <div className="cwn-settings-section-head">
-        <h3 className="cwn-settings-advanced-heading">
-          <Button
-            type="button" variant="ghost" size="md" className="cwn-settings-advanced-toggle"
-            aria-label="高级设置" aria-expanded={expanded} aria-controls={contentId}
-            onClick={() => setExpanded((old) => !old)}
-          >
-            <span>高级设置</span>
-            <IconChevronDownOutlineRegular size={14} />
-          </Button>
-        </h3>
+        <h3 className="cwn-settings-advanced-heading">高级设置</h3>
+        <Button
+          type="button" variant="ghost" size="md" className="cwn-settings-advanced-toggle"
+          aria-label="高级设置" aria-expanded={expanded} aria-controls={contentId}
+          onClick={() => {
+            setHasExpanded(true)
+            setExpanded((old) => !old)
+          }}
+        >
+          <IconChevronDownOutlineRegular size={14} />
+        </Button>
       </div>
-      {expanded && (
-        <div id={contentId} className="cwn-cli-path-settings">
-          <h4>CLI 路径管理</h4>
-          <p className="cwn-setting-description" id={hintId}>
-            自动识别安装位置，也可输入 CLI 可执行文件的完整路径。
-          </p>
-          <form onSubmit={(event) => {
-            event.preventDefault()
-            void refresh(draftRef.current.trim() === baseline.current ? 'refresh' : 'manual')
-          }}>
-            <label htmlFor={inputId}>CLI 路径</label>
-            <Input
-              id={inputId} className="cwn-control-input cwn-cli-path-input"
-              aria-label={`${CLI_LABELS[cli]} CLI 路径`} aria-describedby={hintId}
-              value={draft} disabled={blocked || saving} spellCheck={false} autoComplete="off"
-              placeholder="输入 CLI 可执行文件的完整路径"
-              onChange={(event) => {
-                revision.current++
-                draftRef.current = event.target.value
-                setDraft(event.target.value)
-                setError('')
-                setFeedback('')
-              }}
-            />
-            <div className="cwn-cli-path-actions">
-              <span className="cwn-cli-path-source">{sourceLabel || ''}</span>
-              <Button type="button" variant="ghost" size="md" disabled={blocked || saving}
-                onClick={() => void refresh('auto')}>恢复自动识别</Button>
-              <Button type="submit" variant="outline" size="md" aria-label="刷新 CLI 路径"
-                disabled={blocked || saving}>
-                {(loading || saving) && <StateDot state="ongoing" size={14} />}
-                刷新
-              </Button>
+      <div id={contentId} className="cwn-settings-advanced-body" data-expanded={expanded}
+        aria-hidden={!expanded} {...(!expanded ? { inert: '' } : {})}>
+        <div className="cwn-settings-advanced-body-inner">
+          {hasExpanded && (
+            <div className="cwn-cli-path-settings">
+              <label className="cwn-setting-row-text" htmlFor={inputId}>
+                <span>CLI 路径管理</span>
+                <span className="cwn-setting-description" id={hintId}>
+                  自动识别安装位置，也可输入 CLI 可执行文件的完整路径。
+                </span>
+              </label>
+              <form onSubmit={(event) => {
+                event.preventDefault()
+                void refresh(draftRef.current.trim() === baseline.current ? 'refresh' : 'manual')
+              }}>
+                <Input
+                  id={inputId} className="cwn-control-input cwn-cli-path-input"
+                  aria-label={`${CLI_LABELS[cli]} CLI 路径`} aria-describedby={hintId}
+                  value={draft} disabled={blocked || saving} spellCheck={false} autoComplete="off"
+                  placeholder="输入 CLI 可执行文件的完整路径"
+                  onChange={(event) => {
+                    revision.current++
+                    draftRef.current = event.target.value
+                    setDraft(event.target.value)
+                    setError('')
+                    setFeedback('')
+                  }}
+                />
+                <div className="cwn-cli-path-actions">
+                  <Button type="button" variant="ghost" size="md" disabled={blocked || saving}
+                    onClick={() => void refresh('auto')}>恢复自动识别</Button>
+                  <Button type="submit" variant="outline" size="md" aria-label="刷新 CLI 路径"
+                    disabled={blocked || saving}>
+                    {(loading || saving) && <StateDot state="ongoing" size={14} />}
+                    刷新
+                  </Button>
+                </div>
+                <p className="cwn-cli-path-feedback" role="status">
+                  {blocked ? '请先结束当前账号操作或设置保存' : error || feedback || (loading ? '正在检查 CLI 路径…' : '')}
+                </p>
+              </form>
             </div>
-            <p className="cwn-cli-path-feedback" role="status">
-              {blocked ? '请先结束当前账号操作或设置保存' : error || feedback || (loading ? '正在检查 CLI 路径…' : '')}
-            </p>
-          </form>
+          )}
         </div>
-      )}
+      </div>
     </section>
   )
 }

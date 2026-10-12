@@ -164,7 +164,10 @@ function OpenSettingsDialog({
     (id: CliId, replace = false, clearPrevious = false) => {
       if (!enabledRef.current?.[id]) return
       if (probes.current.has(id) && !replace) return
-      setAccounts((old) => ({ ...old, [id]: { data: clearPrevious ? undefined : old[id]?.data, loading: true } }))
+      setAccounts((old) => ({
+        ...old,
+        [id]: { data: clearPrevious ? undefined : old[id]?.data, loading: true },
+      }))
       probes.current.enqueue(
         id,
         async (signal) => {
@@ -376,17 +379,34 @@ function NativeChoice({
   onChange: (value: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const anchor = useRef<HTMLButtonElement>(null)
+  const [anchorWidth, setAnchorWidth] = useState<number>()
+  const menuClass = `cwn-settings-choice-menu-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
   useEffect(() => {
     if (disabled) setOpen(false)
   }, [disabled])
+  useEffect(() => {
+    const button = anchor.current
+    if (!open || !button) return
+    const measure = () => {
+      const width = button.getBoundingClientRect().width
+      if (width > 0) setAnchorWidth(width)
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(button)
+    return () => observer.disconnect()
+  }, [open])
   return (
+    <>
+    <style>{anchorWidth === undefined ? '' : `.${menuClass}{--cwn-settings-choice-width:${anchorWidth}px}`}</style>
     <Menu
       open={open && !disabled}
       onClose={() => setOpen(false)}
       portal
       align="start"
       className="cwn-settings-choice"
-      listClassName="cwn-settings-choice-menu"
+      listClassName={`cwn-settings-choice-menu ${menuClass}`}
       selectedId={selected}
       items={choices}
       onSelect={(id) => {
@@ -395,6 +415,7 @@ function NativeChoice({
       }}
       anchor={
         <Button
+          ref={anchor}
           type="button"
           variant="outline"
           size="md"
@@ -402,7 +423,13 @@ function NativeChoice({
           aria-haspopup="menu"
           aria-expanded={open && !disabled}
           disabled={disabled}
-          onClick={() => setOpen((old) => !old)}
+          onClick={() => {
+            if (!open) {
+              const width = anchor.current?.getBoundingClientRect().width
+              if (width && width > 0) setAnchorWidth(width)
+            }
+            setOpen((old) => !old)
+          }}
         >
           <span>
             {choices.find((choice) => choice.id === selected)?.label ??
@@ -412,6 +439,7 @@ function NativeChoice({
         </Button>
       }
     />
+    </>
   )
 }
 
@@ -542,9 +570,29 @@ function CliSettings({
   const [accountSource, setAccountSource] = useState<AccountSource>()
   const [loginProvider, setLoginProvider] = useState<ZCodeLoginProvider>()
   const [pathChanging, setPathChanging] = useState(false)
-  const saveController = useRef<AbortController>()
-  useEffect(() => () => saveController.current?.abort(), [])
+  const saves = useRef(new AccountQueryQueue<'preference'>(1))
+  const saveRevision = useRef(0)
+  const latestSave = useRef<{ key: string; revision: number; state: 'pending' | 'saved' | 'failed' }>()
+  const selection = useRef({ model: '', effort: 'default' as Preference['effort'] })
+  const mounted = useRef(true)
+  const cancelSaves = useCallback((updateState = true) => {
+    saveRevision.current++
+    latestSave.current = undefined
+    saves.current.clear()
+    if (updateState) setSaving(false)
+  }, [])
   useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      cancelSaves(false)
+    }
+  }, [cancelSaves])
+  useEffect(() => {
+    // A refreshed account/catalog owns a new model scope. Only subsequent
+    // human choice events may write a preference in that scope.
+    cancelSaves()
+    selection.current = { model: '', effort: 'default' }
     setCatalog(undefined)
     setModel('')
     setEffort('default')
@@ -580,12 +628,13 @@ function CliSettings({
         const chosen = next.preference ? saved : visibleModelChoices(next.models)[0]
         if (next.preference && !saved && next.models.length)
           setModelError('原默认模型已不可用，请重新选择模型')
-        setModel(chosen?.id ?? '')
-        setEffort(
+        const effort =
           next.preference && chosen?.efforts?.includes(next.preference.effort)
             ? next.preference.effort
-            : (chosen?.efforts?.[0] ?? 'default'),
-        )
+            : (chosen?.efforts?.[0] ?? 'default')
+        selection.current = { model: chosen?.id ?? '', effort }
+        setModel(selection.current.model)
+        setEffort(effort)
       } catch (error) {
         if (!controller.signal.aborted) {
           setCatalog(undefined)
@@ -599,38 +648,66 @@ function CliSettings({
     return () => {
       controller.abort()
     }
-  }, [api, sessionId, cli, enabled, account, modelRevision])
+  }, [api, sessionId, cli, enabled, account, modelRevision, cancelSaves])
   const inactive = !enabled || toggling
   const settingsPending = enabled === undefined && !settingsError
   const accountLoading = !settingsError && enabled !== false && (!account || account.loading)
   const supportedEfforts = catalog?.models.find((item) => item.id === model)?.efforts ?? []
-  const validPreference = !!catalog && !!model && supportedEfforts.includes(effort)
-  async function save() {
-    if (inactive || saving || pathChanging || modelLoading || !validPreference || saveController.current) return
-    const controller = new AbortController()
-    saveController.current = controller
+  const choiceDisabled = inactive || pathChanging || modelLoading || accountLoading || !!action || !catalog
+  function savePreference(preference: Preference) {
+    const key = JSON.stringify(preference)
+    if (latestSave.current?.key === key && latestSave.current.state === 'pending') return
+    const revision = ++saveRevision.current
+    latestSave.current = { key, revision, state: 'pending' }
     setSaving(true)
     setSaveError('')
     setSaved(false)
-    try {
-      value(
-        await api.cliworker.configure(sessionId, JSON.stringify({ cli, model, effort }), controller.signal),
-      )
-      if (!controller.signal.aborted) setSaved(true)
-    } catch (error) {
-      if (!controller.signal.aborted) setSaveError(operationMessage(error))
-    } finally {
-      if (!controller.signal.aborted) {
-        saveController.current = undefined
-        setSaving(false)
-      }
-    }
+    // New events replace the waiting choice and cancel the previous request.
+    // The queue waits for that request to settle before starting the latest
+    // selection, preserving Host cleanup and preventing out-of-order writes.
+    saves.current.enqueue(
+      'preference',
+      async (signal) => {
+        const current = () => mounted.current && !signal.aborted && latestSave.current?.revision === revision
+        try {
+          value(await api.cliworker.configure(sessionId, JSON.stringify(preference), signal))
+          if (current()) {
+            latestSave.current!.state = 'saved'
+            setSaved(true)
+          }
+        } catch (error) {
+          if (current()) {
+            latestSave.current!.state = 'failed'
+            setSaveError(`${operationMessage(error)}；请重新选择模型或思考强度重试`)
+          }
+        } finally {
+          if (current()) setSaving(false)
+        }
+      },
+      true,
+    )
   }
   const changeModel = (id: string) => {
+    if (choiceDisabled) return
+    const chosen = catalog?.models.find((item) => item.id === id)
+    if (!chosen?.efforts?.length) return
+    const effort = chosen.efforts.includes(selection.current.effort)
+      ? selection.current.effort
+      : chosen.efforts[0]!
+    selection.current = { model: id, effort }
     setModel(id)
-    setSaved(false)
-    const efforts = catalog?.models.find((item) => item.id === id)?.efforts ?? ['default']
-    if (!efforts.includes(effort)) setEffort(efforts[0] ?? 'default')
+    setEffort(effort)
+    setModelError('')
+    savePreference({ cli, model: id, effort })
+  }
+  const changeEffort = (id: string) => {
+    if (choiceDisabled) return
+    const chosen = catalog?.models.find((item) => item.id === selection.current.model)
+    const effort = chosen?.efforts?.find((effort) => effort === id)
+    if (!chosen || !effort) return
+    selection.current = { model: chosen.id, effort }
+    setEffort(effort)
+    savePreference({ cli, model: chosen.id, effort })
   }
   const finishedAccountAction = () => {
     onRefreshAccount(true)
@@ -680,6 +757,7 @@ function CliSettings({
           accountLoading ||
           !!account?.error ||
           !!action ||
+          saving ||
           pathChanging ||
           !item ||
           (item.target === 'models' && !openNativeSettings)
@@ -869,7 +947,6 @@ function CliSettings({
           className="cwn-settings-form"
           onSubmit={(event) => {
             event.preventDefault()
-            void save()
           }}
         >
           <label className="cwn-setting-row">
@@ -884,7 +961,7 @@ function CliSettings({
                 id: item.id,
                 label: item.label,
               }))}
-              disabled={inactive || modelLoading || saving || pathChanging || !catalog}
+              disabled={choiceDisabled}
               onChange={changeModel}
             />
           </label>
@@ -897,29 +974,21 @@ function CliSettings({
               label="默认思考强度"
               selected={effort}
               choices={supportedEfforts.map((id) => ({ id, label: effortLabel(id) }))}
-              disabled={inactive || modelLoading || saving || pathChanging || !catalog}
-              onChange={(id) => {
-                setEffort(id as Preference['effort'])
-                setSaved(false)
-              }}
+              disabled={choiceDisabled || !supportedEfforts.length}
+              onChange={changeEffort}
             />
           </label>
           <p className="cwn-settings-notice cwn-settings-hint" role="status">
             {modelError || ''}
           </p>
-          <div className="cwn-settings-save">
-            <Button
-              type="submit"
-              variant="primary"
-              size="md"
-              disabled={inactive || modelLoading || saving || pathChanging || !validPreference}
-            >
-              {saving && <StateDot state="ongoing" size={14} />}保存默认值
-            </Button>
-            <span className="cwn-settings-feedback-slot" role="status">
-              {saveError || (saved ? '默认设置已保存' : '')}
-            </span>
-          </div>
+          {(saving || saved || saveError) && (
+            <div className="cwn-settings-save">
+              <span className="cwn-settings-feedback-slot" role="status">
+                {saving && <StateDot state="ongoing" size={14} />}
+                {saveError || (saving ? '正在保存默认设置…' : '默认设置已保存')}
+              </span>
+            </div>
+          )}
         </form>
       </section>
       <CliExecutableSettings
@@ -929,7 +998,9 @@ function CliSettings({
         blocked={!!action || saving || toggling}
         accountLoading={accountLoading}
         accountRevision={account}
-        onApplied={() => { if (enabled) onRefreshAccount(true, true) }}
+        onApplied={() => {
+          if (enabled) onRefreshAccount(true, true)
+        }}
         onBusyChange={setPathChanging}
       />
     </div>

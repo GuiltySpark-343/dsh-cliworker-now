@@ -127,12 +127,20 @@ async function setup(
   const accountStatus = vi.fn(async (_session, cli: CliId) => status(cli))
   const configure = vi.fn().mockResolvedValue(remote({}))
   const paths = new Map<CliId, { cli: CliId; path: string; source: string; available: boolean }>()
-  const defaultPath = (cli: CliId) => ({ cli, path: `E:\\模拟 CLI\\${cli}.exe`, source: 'auto', available: true })
+  const defaultPath = (cli: CliId) => ({
+    cli,
+    path: `E:\\模拟 CLI\\${cli}.exe`,
+    source: 'auto',
+    available: true,
+  })
   const cliExecutablePath = vi.fn(async (_session, cli: CliId) => remote(paths.get(cli) ?? defaultPath(cli)))
   const refreshCliExecutablePath = vi.fn(async (_session, cli: CliId, path: string, action: string) => {
-    const next = action === 'auto' ? defaultPath(cli) : action === 'manual'
-      ? { cli, path, source: 'manual', available: true }
-      : paths.get(cli) ?? defaultPath(cli)
+    const next =
+      action === 'auto'
+        ? defaultPath(cli)
+        : action === 'manual'
+          ? { cli, path, source: 'manual', available: true }
+          : (paths.get(cli) ?? defaultPath(cli))
     paths.set(cli, next)
     return remote(next)
   })
@@ -143,7 +151,16 @@ async function setup(
     return remote({ enabled })
   })
   const api = {
-    cliworker: { catalogForCli, accountStatus, configure, cliSettings, setCliEnabled, cliExecutablePath, refreshCliExecutablePath, ...overrides },
+    cliworker: {
+      catalogForCli,
+      accountStatus,
+      configure,
+      cliSettings,
+      setCliEnabled,
+      cliExecutablePath,
+      refreshCliExecutablePath,
+      ...overrides,
+    },
   } as unknown as API
   let r!: ReactTestRenderer
   const render = (open: boolean) => (
@@ -169,10 +186,13 @@ async function setup(
   const open = async () => {
     await act(async () => r.update(render(true)))
   }
-  const submit = async () => {
-    await act(async () =>
-      r.root.findByProps({ className: 'cwn-settings-form' }).props.onSubmit({ preventDefault() {} }),
-    )
+  const chooseModel = async (label: string) => {
+    await click('默认模型')
+    await click(label)
+  }
+  const chooseEffort = async (label: string) => {
+    await click('默认思考强度')
+    await click(label)
   }
   return {
     r,
@@ -180,7 +200,8 @@ async function setup(
     button,
     click,
     open,
-    submit,
+    chooseModel,
+    chooseEffort,
     api,
     configure,
     accountStatus,
@@ -286,7 +307,7 @@ it('keeps CLI navigation and dismissal available while account and model discove
   })
   expect(t.text()).toContain('正在读取 Antigravity 模型')
   expect(t.text()).toContain('正在读取 Antigravity 账号')
-  expect(t.button('保存默认值').props.disabled).toBe(true)
+  expect(t.button('默认模型').props.disabled).toBe(true)
   expect(t.button('Codex 设置').props.disabled).not.toBe(true)
   expect(t.button('关闭设置').props.disabled).not.toBe(true)
   await t.click('Codex 设置')
@@ -318,8 +339,9 @@ it('ignores a request from a previous dialog instance after closing and reopenin
 it('lets model defaults work independently when account discovery fails', async () => {
   const t = await setup({ accountStatus: vi.fn().mockRejectedValue(new Error('模拟账号查询失败')) })
   expect(t.text()).toContain('模拟账号查询失败')
-  expect(t.button('保存默认值').props.disabled).toBe(false)
-  await t.submit()
+  expect(t.button('默认模型').props.disabled).toBe(false)
+  expect(t.configure).not.toHaveBeenCalled()
+  await t.chooseModel('antigravity-fixture')
   expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({
     cli: 'antigravity',
     model: 'antigravity-fixture',
@@ -350,11 +372,14 @@ it('never treats unknown account status as logged out or mounts a terminal witho
 })
 it('keeps a delayed save scoped to its original CLI and leaves navigation usable', async () => {
   const saved = deferred()
-  const t = await setup({ configure: vi.fn().mockReturnValue(saved.promise) })
-  await t.submit()
+  const configure = vi.fn().mockReturnValue(saved.promise)
+  const t = await setup({ configure })
+  await t.chooseEffort('High')
+  expect(configure).toHaveBeenCalledOnce()
   expect(t.text()).toContain('data-loading')
   expect(t.button('Kimi 设置').props.disabled).not.toBe(true)
   await t.click('Kimi 设置')
+  expect(configure.mock.calls[0]![2].aborted).toBe(true)
   await act(async () => saved.reject(new Error('stale save failure')))
   expect(t.text()).not.toContain('stale save failure')
   expect(t.text()).not.toContain('默认设置已保存')
@@ -627,7 +652,8 @@ it('displays only the native model name while saving the exact provider/model id
   expect(visibleText(t.button('默认模型'))).toContain('GLM-5.3')
   expect(visibleText(t.button('默认模型'))).not.toContain('BigModel')
   expect(visibleText(t.button('默认模型'))).not.toMatch(/[()（）]/u)
-  await t.submit()
+  expect(t.configure).not.toHaveBeenCalled()
+  await t.chooseModel('GLM-5.3')
   expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({ cli: 'zcode', model: id, effort: 'default' })
 })
 
@@ -655,7 +681,6 @@ it('deduplicates route names and puts proven free models first without combining
   expect(visibleText(menu)).not.toMatch(/source|[()（）]/u)
   await t.click('GLM-5.3-Flash')
   expect(visibleText(t.button('默认思考强度')).trim()).toBe('Medium')
-  await t.submit()
   expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({
     cli: 'zcode',
     model: 'paid/GLM-5.3-Flash',
@@ -682,7 +707,6 @@ it('retains the exact valid saved paid route when a free duplicate is available'
   await t.click('默认模型')
   expect(t.r.root.findByProps({ role: 'menu' }).findAllByType('button')).toHaveLength(1)
   await t.click('Chat')
-  await t.submit()
   expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({ cli: 'pi', model: 'paid/chat', effort: 'high' })
 })
 
@@ -701,12 +725,10 @@ it('asks to reselect an unavailable saved route instead of silently switching to
   await t.click('OMP 设置')
   expect(visibleText(t.button('默认模型')).trim()).toBe('选择模型')
   expect(t.text()).toContain('原默认模型已不可用，请重新选择模型')
-  expect(t.button('保存默认值').props.disabled).toBe(true)
-  await t.submit()
+  expect(t.button('默认模型').props.disabled).toBe(false)
   expect(t.configure).not.toHaveBeenCalled()
   await t.click('默认模型')
   await t.click('Chat')
-  await t.submit()
   expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({
     cli: 'omp',
     model: 'free/chat',
@@ -725,7 +747,7 @@ it('uses Kimi supported default effort without a saved preference and can persis
   await t.click('Kimi 设置')
   expect(t.text()).toContain('kimi-simulation')
   expect(t.text()).toContain('默认')
-  expect(t.button('保存默认值').props.disabled).toBe(false)
+  expect(t.button('默认模型').props.disabled).toBe(false)
   await t.click('默认思考强度')
   expect(
     t.r.root
@@ -734,7 +756,6 @@ it('uses Kimi supported default effort without a saved preference and can persis
       .map((item) => item.children.join('')),
   ).toEqual(['默认'])
   await t.click('默认')
-  await t.submit()
   expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({
     cli: 'kimi',
     model: 'kimi-simulation',
@@ -758,7 +779,6 @@ it('persists each CLI switch without moving the current navigation row until reo
   expect(t.button('启用 Antigravity').props['aria-checked']).toBe(false)
   expect(t.button('Antigravity 设置').props['data-enabled']).toBe(false)
   expect(t.button('默认模型').props.disabled).toBe(true)
-  expect(t.button('保存默认值').props.disabled).toBe(true)
   expect(navigation()[0]!.props['aria-label']).toBe('Antigravity 设置')
   await t.click('Codex 设置')
   expect(t.button('启用 Codex').props['aria-checked']).toBe(true)
@@ -912,7 +932,7 @@ it.each(['zcode', 'grok', 'omp', 'pi', 'hermes', 'opencode'] as const)(
     )
     await t.click(nav)
     expect(t.button(nav).findAllByProps({ 'data-loading': true })).toHaveLength(0)
-    expect(t.button('保存默认值').props.disabled).toBe(true)
+    expect(t.button('默认模型').props.disabled).toBe(true)
     await act(async () => models.resolve(catalog(cli)))
     expect(t.button(nav).findByProps({ className: 'cwn-connection-dot' }).props['data-state']).toBe(
       'unverified',
@@ -934,15 +954,13 @@ it.each(['antigravity', 'mimo'] as const)(
       ),
     })
     await t.click(`${CLI_LABELS[cli]} 设置`)
-    expect(t.button('保存默认值').props.disabled).toBe(false)
+    expect(t.button('默认模型').props.disabled).toBe(false)
     t.catalogForCli.mockReturnValueOnce(read.promise)
     await t.click('刷新模型')
     expect(t.button(`${CLI_LABELS[cli]} 设置`).findAllByProps({ 'data-loading': true })).toHaveLength(0)
     expect(visibleText(accountSummary(t.r))).toContain('已登录')
     expect(visibleText(t.button('默认模型'))).toContain('选择模型')
     expect(t.button('默认模型').props.disabled).toBe(true)
-    expect(t.button('保存默认值').props.disabled).toBe(true)
-    await t.submit()
     await act(async () => read.reject(new Error('模拟：当前账号无可用模型')))
     expect(
       t.button(`${CLI_LABELS[cli]} 设置`).findByProps({ className: 'cwn-connection-dot' }).props[
@@ -951,7 +969,7 @@ it.each(['antigravity', 'mimo'] as const)(
     ).toBe('connected')
     expect(visibleText(accountSummary(t.r))).toContain('已登录')
     expect(t.text()).not.toContain(`${cli}-fixture`)
-    expect(t.button('保存默认值').props.disabled).toBe(true)
+    expect(t.button('默认模型').props.disabled).toBe(true)
     expect(t.text()).toContain('模拟：当前账号无可用模型')
     expect(t.configure).not.toHaveBeenCalled()
   },
@@ -973,7 +991,7 @@ it('waits for a refreshed account before reading its new model scope and ignores
   await t.click('刷新状态')
   expect(catalogForCli).toHaveBeenCalledTimes(2)
   expect(catalogForCli.mock.calls[1]![2].aborted).toBe(true)
-  expect(t.button('保存默认值').props.disabled).toBe(true)
+  expect(t.button('默认模型').props.disabled).toBe(true)
   expect(visibleText(accountSummary(t.r))).toContain('已登录')
   expect(
     t.button('Antigravity 设置').findByProps({ className: 'cwn-connection-dot' }).props['data-state'],
@@ -984,7 +1002,7 @@ it('waits for a refreshed account before reading its new model scope and ignores
     account.resolve(status('antigravity', { state: 'configured', verification: 'local' })),
   )
   expect(catalogForCli).toHaveBeenCalledTimes(3)
-  expect(t.button('保存默认值').props.disabled).toBe(true)
+  expect(t.button('默认模型').props.disabled).toBe(true)
   expect(visibleText(accountSummary(t.r))).toContain('已配置')
   expect(
     t.button('Antigravity 设置').findByProps({ className: 'cwn-connection-dot' }).props['data-state'],
@@ -1006,7 +1024,7 @@ it('rejects cross-CLI account and model responses without exposing their identit
   expect(t.text()).toContain('收到不匹配的 CLI 模型目录')
   expect(t.text()).not.toContain('wrong-account')
   expect(t.text()).not.toContain('wrong-cli-model')
-  expect(t.button('保存默认值').props.disabled).toBe(true)
+  expect(t.button('默认模型').props.disabled).toBe(true)
   expect(terminal.started).not.toHaveBeenCalled()
 })
 
@@ -1028,7 +1046,10 @@ it('shows an empty catalog reason and releases its pending navigation indicator 
   await t.click('Codex 设置')
   expect(t.button('Antigravity 设置').findAllByProps({ 'data-loading': true })).toHaveLength(0)
   expect(t.text()).toContain('模拟：当前账号范围未知，请完成原生登录后刷新')
-  expect(t.button('保存默认值').props.disabled).toBe(true)
+  await t.click('默认模型')
+  expect(t.r.root.findByProps({ role: 'menu' }).findAllByType('button')).toHaveLength(0)
+  expect(t.button('默认思考强度').props.disabled).toBe(true)
+  expect(t.configure).not.toHaveBeenCalled()
   await act(async () => read.resolve(catalog('antigravity', 'late-model')))
   expect(t.text()).not.toContain('late-model')
 })
@@ -1173,7 +1194,11 @@ it.each(['rejected', 'empty'] as const)(
     expect(t.text()).toContain(reason)
     expect(t.text()).not.toContain('Error:')
     if (failure === 'rejected') expect(t.button('默认模型').props.disabled).toBe(true)
-    expect(t.button('保存默认值').props.disabled).toBe(true)
+    else {
+      await t.click('默认模型')
+      expect(t.r.root.findByProps({ role: 'menu' }).findAllByType('button')).toHaveLength(0)
+    }
+    expect(t.button('默认思考强度').props.disabled).toBe(true)
     expect(t.configure).not.toHaveBeenCalled()
   },
 )
@@ -1537,7 +1562,6 @@ it('preserves provider logins through a failed model refresh and removes them wh
   await t.click('刷新模型')
   expect(visibleText(accountSummary(t.r))).toContain(label)
   expect(t.button('默认模型').props.disabled).toBe(true)
-  expect(t.button('保存默认值').props.disabled).toBe(true)
   await act(async () => models.reject(new Error('模拟：当前账号目录不可用')))
   expect(visibleText(accountSummary(t.r))).toContain(label)
   expect(
@@ -1689,7 +1713,7 @@ it('preserves the last confirmed account while refreshing and replaces it after 
   )
   expect(t.button('Antigravity 设置').findAllByProps({ 'data-loading': true })).toHaveLength(0)
   expect(t.button('刷新状态').props.disabled).toBe(true)
-  expect(t.button('保存默认值').props.disabled).toBe(true)
+  expect(t.button('默认模型').props.disabled).toBe(true)
   await act(async () => refresh.reject(new Error('模拟：账号状态刷新失败')))
   expect(accountSummary(t.r)).toBe(before)
   expect(visibleText(accountSummary(t.r))).toContain('模拟：账号状态刷新失败')
@@ -1747,30 +1771,49 @@ it('offers Hermes instead of the removed Harness account settings', async () => 
 })
 
 // Explicit synthetic path management: these callbacks never launch or discover a real CLI.
-const pathInput = (t: Awaited<ReturnType<typeof setup>>) =>
-  t.r.root.findByType('input')
+const pathInput = (t: Awaited<ReturnType<typeof setup>>) => t.r.root.findByType('input')
 const editPath = async (t: Awaited<ReturnType<typeof setup>>, path: string) => {
   await act(async () => pathInput(t).props.onChange({ target: { value: path } }))
 }
 const submitPath = async (t: Awaited<ReturnType<typeof setup>>) => {
-  await act(async () => t.r.root.findByProps({ className: 'cwn-cli-path-settings' })
-    .findByType('form').props.onSubmit({ preventDefault() {} }))
+  await act(async () =>
+    t.r.root
+      .findByProps({ className: 'cwn-cli-path-settings' })
+      .findByType('form')
+      .props.onSubmit({ preventDefault() {} }),
+  )
 }
 it.each(CLI_IDS)('keeps %s advanced settings folded separately from project model defaults', async (cli) => {
   const t = await setup({}, undefined, cli)
   const project = t.r.root.findByProps({ 'aria-label': '项目默认设置' })
   const advanced = t.r.root.findByProps({ 'aria-label': '高级设置', className: 'cwn-settings-section' })
   expect(project.findByType('h3').children).toContain('项目默认设置')
-  expect(advanced.findByType('h3').findByType('button').props['aria-expanded']).toBe(false)
+  expect(advanced.findByType('h3').children).toContain('高级设置')
+  expect(advanced.findByType('h3').props.onClick).toBeUndefined()
+  expect(advanced.findByType('h3').findAllByType('button')).toHaveLength(0)
+  const arrows = advanced
+    .findAllByType('button')
+    .filter((button) => button.props['aria-label'] === '高级设置')
+  expect(arrows).toHaveLength(1)
+  expect(visibleText(arrows[0]!).trim()).toBe('')
+  expect(arrows[0]!.props['aria-expanded']).toBe(false)
   expect(project.findAllByProps({ 'aria-label': '高级设置' })).toHaveLength(0)
   expect(t.r.root.findAllByProps({ className: 'cwn-cli-path-settings' })).toHaveLength(0)
   expect(t.cliExecutablePath).not.toHaveBeenCalled()
   await t.click('高级设置')
   expect(t.button('高级设置').props['aria-expanded']).toBe(true)
-  expect(advanced.findByType('h4').children).toContain('CLI 路径管理')
+  expect(advanced.findAllByType('h4')).toHaveLength(0)
+  expect(advanced.findAllByType('label')).toHaveLength(1)
+  expect(visibleText(advanced.findByType('label').findAllByType('span')[0]!).trim()).toBe('CLI 路径管理')
+  expect(advanced.findByType('label').props.htmlFor).toBe(pathInput(t).props.id)
+  expect(advanced.findAllByProps({ className: 'cwn-cli-path-source' })).toHaveLength(0)
   expect(pathInput(t).props.value).toBe(`E:\\模拟 CLI\\${cli}.exe`)
   expect(pathInput(t).props['aria-label']).toBe(`${CLI_LABELS[cli]} CLI 路径`)
-  expect(t.cliExecutablePath).toHaveBeenCalledExactlyOnceWith('simulation-parent', cli, expect.any(AbortSignal))
+  expect(t.cliExecutablePath).toHaveBeenCalledExactlyOnceWith(
+    'simulation-parent',
+    cli,
+    expect.any(AbortSignal),
+  )
   expect(t.refreshCliExecutablePath).not.toHaveBeenCalled()
   expect(t.configure).not.toHaveBeenCalled()
 })
@@ -1783,12 +1826,16 @@ it('saves an edited manual path and refreshes account and models without changin
   await editPath(t, nextPath)
   await submitPath(t)
   expect(t.refreshCliExecutablePath).toHaveBeenCalledExactlyOnceWith(
-    'simulation-parent', 'antigravity', nextPath, 'manual', expect.any(AbortSignal),
+    'simulation-parent',
+    'antigravity',
+    nextPath,
+    'manual',
+    expect.any(AbortSignal),
   )
   expect(pathInput(t).props.value).toBe(nextPath)
   expect(t.accountStatus.mock.calls.length).toBeGreaterThan(calls)
   expect(t.catalogForCli.mock.calls.length).toBeGreaterThan(models)
-  expect(t.text()).toContain('手动指定')
+  expect(t.r.root.findAllByProps({ className: 'cwn-cli-path-source' })).toHaveLength(0)
   expect(t.configure).not.toHaveBeenCalled()
 })
 it('revalidates an unchanged detected path without turning it into a manual override', async () => {
@@ -1796,9 +1843,13 @@ it('revalidates an unchanged detected path without turning it into a manual over
   await t.click('高级设置')
   await submitPath(t)
   expect(t.refreshCliExecutablePath).toHaveBeenCalledWith(
-    'simulation-parent', 'antigravity', 'E:\\模拟 CLI\\antigravity.exe', 'refresh', expect.any(AbortSignal),
+    'simulation-parent',
+    'antigravity',
+    'E:\\模拟 CLI\\antigravity.exe',
+    'refresh',
+    expect.any(AbortSignal),
   )
-  expect(t.text()).toContain('自动识别')
+  expect(t.r.root.findAllByProps({ className: 'cwn-cli-path-source' })).toHaveLength(0)
   expect(t.configure).not.toHaveBeenCalled()
 })
 it('retains a rejected path draft and allows correction without refreshing an unchanged account', async () => {
@@ -1815,7 +1866,13 @@ it('retains a rejected path draft and allows correction without refreshing an un
   expect(t.configure).not.toHaveBeenCalled()
 })
 it('retains a saved but unavailable manual path and invalidates the previous account and models', async () => {
-  let current = { cli: 'antigravity', path: 'E:\\模拟 CLI\\old.exe', source: 'auto', available: true, error: '' }
+  let current = {
+    cli: 'antigravity',
+    path: 'E:\\模拟 CLI\\old.exe',
+    source: 'auto',
+    available: true,
+    error: '',
+  }
   const cliExecutablePath = vi.fn(async () => remote(current))
   const refreshCliExecutablePath = vi.fn(async (_session, cli: CliId, path: string) => {
     current = { cli, path, source: 'manual', available: false, error: '模拟：此路径未找到 CLI' }
@@ -1829,7 +1886,7 @@ it('retains a saved but unavailable manual path and invalidates the previous acc
   await submitPath(t)
   expect(pathInput(t).props.value).toBe('F:\\不存在的工具\\cli.exe')
   expect(t.text()).toContain('模拟：此路径未找到 CLI')
-  expect(t.text()).toContain('手动指定')
+  expect(t.r.root.findAllByProps({ className: 'cwn-cli-path-source' })).toHaveLength(0)
   expect(t.accountStatus.mock.calls.length).toBeGreaterThan(calls)
   expect(t.catalogForCli.mock.calls.length).toBeGreaterThan(models)
   expect(t.configure).not.toHaveBeenCalled()
@@ -1841,14 +1898,24 @@ it('restores automatic discovery through the explicit reset button', async () =>
   await submitPath(t)
   await t.click('恢复自动识别')
   expect(t.refreshCliExecutablePath).toHaveBeenLastCalledWith(
-    'simulation-parent', 'antigravity', 'F:\\手动指定\\cli.exe', 'auto', expect.any(AbortSignal),
+    'simulation-parent',
+    'antigravity',
+    'F:\\手动指定\\cli.exe',
+    'auto',
+    expect.any(AbortSignal),
   )
   expect(pathInput(t).props.value).toBe('E:\\模拟 CLI\\antigravity.exe')
   expect(t.text()).toContain('已恢复自动识别')
   expect(t.configure).not.toHaveBeenCalled()
 })
 it('clears the previous manual path when automatic discovery completes without an available CLI', async () => {
-  let current = { cli: 'antigravity', path: 'F:\\已卸载\\cli.exe', source: 'manual', available: false, error: '' }
+  let current = {
+    cli: 'antigravity',
+    path: 'F:\\已卸载\\cli.exe',
+    source: 'manual',
+    available: false,
+    error: '',
+  }
   const cliExecutablePath = vi.fn(async () => remote(current))
   const refreshCliExecutablePath = vi.fn(async () => {
     current = { ...current, path: '', source: 'none', error: '模拟：未找到可用 CLI' }
@@ -1861,7 +1928,9 @@ it('clears the previous manual path when automatic discovery completes without a
   expect(t.text()).toContain('模拟：未找到可用 CLI')
 })
 it('keeps path management available for a disabled CLI without starting account or model probes', async () => {
-  const cliSettings = vi.fn(async () => remote({ enabled: Object.fromEntries(CLI_IDS.map((cli) => [cli, false])) }))
+  const cliSettings = vi.fn(async () =>
+    remote({ enabled: Object.fromEntries(CLI_IDS.map((cli) => [cli, false])) }),
+  )
   const t = await setup({ cliSettings }, undefined, 'opencode')
   await t.click('高级设置')
   expect(pathInput(t).props.disabled).toBe(false)
@@ -1874,7 +1943,9 @@ it('keeps path management available for a disabled CLI without starting account 
   expect(t.configure).not.toHaveBeenCalled()
 })
 it('disables path mutation while an account terminal is active', async () => {
-  const t = await setup({ accountStatus: vi.fn(async (_parent, cli: CliId) => status(cli, { actions: accountActions })) })
+  const t = await setup({
+    accountStatus: vi.fn(async (_parent, cli: CliId) => status(cli, { actions: accountActions })),
+  })
   await t.click('高级设置')
   await t.click('登录 / 切换账号')
   expect(pathInput(t).props.disabled).toBe(true)
@@ -1887,25 +1958,35 @@ it('disables path mutation while an account terminal is active', async () => {
 it('does not allow login or model preference writes during a path mutation', async () => {
   const pending = deferred()
   const refreshCliExecutablePath = vi.fn(() => pending.promise)
-  const t = await setup({ refreshCliExecutablePath,
+  const t = await setup({
+    refreshCliExecutablePath,
     accountStatus: vi.fn(async (_parent, cli: CliId) => status(cli, { actions: accountActions })),
   })
   await t.click('高级设置')
   await editPath(t, 'F:\\CLI\\entry.exe')
   await submitPath(t)
   expect(t.button('登录 / 切换账号').props.disabled).toBe(true)
-  expect(t.button('保存默认值').props.disabled).toBe(true)
+  expect(t.button('默认模型').props.disabled).toBe(true)
   expect(pathInput(t).props.disabled).toBe(true)
-  await act(async () => pending.resolve(remote({ cli: 'antigravity', path: 'F:\\CLI\\entry.exe', source: 'manual', available: true })))
+  await act(async () =>
+    pending.resolve(
+      remote({ cli: 'antigravity', path: 'F:\\CLI\\entry.exe', source: 'manual', available: true }),
+    ),
+  )
   expect(t.button('登录 / 切换账号').props.disabled).toBe(false)
 })
 it('does not overwrite newly typed input with a late automatic path read', async () => {
-  const pending = deferred(), cliExecutablePath = vi.fn(() => pending.promise)
+  const pending = deferred(),
+    cliExecutablePath = vi.fn(() => pending.promise)
   const t = await setup({ cliExecutablePath })
   await t.click('高级设置')
   expect(pathInput(t).props.disabled).toBe(false)
   await editPath(t, 'F:\\刚输入的路径\\cli.exe')
-  await act(async () => pending.resolve(remote({ cli: 'antigravity', path: 'E:\\旧检测\\cli.exe', source: 'auto', available: true })))
+  await act(async () =>
+    pending.resolve(
+      remote({ cli: 'antigravity', path: 'E:\\旧检测\\cli.exe', source: 'auto', available: true }),
+    ),
+  )
   expect(pathInput(t).props.value).toBe('F:\\刚输入的路径\\cli.exe')
   expect(t.refreshCliExecutablePath).not.toHaveBeenCalled()
 })
@@ -1919,33 +2000,48 @@ it('keeps a dirty path draft when a later account check refreshes automatic disc
   expect(t.refreshCliExecutablePath).not.toHaveBeenCalled()
 })
 it.each(['Kimi 设置', '关闭设置'])('cancels path reads on %s and ignores late results', async (leave) => {
-  const pending = deferred(), cliExecutablePath = vi.fn((_session, _cli, _signal) => pending.promise)
+  const pending = deferred(),
+    cliExecutablePath = vi.fn((_session, _cli, _signal) => pending.promise)
   const t = await setup({ cliExecutablePath })
   await t.click('高级设置')
   const signal = cliExecutablePath.mock.calls[0]![2]
   await t.click(leave)
   expect(signal.aborted).toBe(true)
-  await act(async () => pending.resolve(remote({ cli: 'antigravity', path: 'E:\\迟到的旧 CLI.exe', source: 'auto', available: true })))
+  await act(async () =>
+    pending.resolve(
+      remote({ cli: 'antigravity', path: 'E:\\迟到的旧 CLI.exe', source: 'auto', available: true }),
+    ),
+  )
   expect(t.text()).not.toContain('迟到的旧 CLI')
 })
-it.each(['Kimi 设置', '关闭设置'])('cancels path writes on %s and does not refresh accounts from a late completion', async (leave) => {
-  const pending = deferred()
-  const refreshCliExecutablePath = vi.fn((_session, _cli, _path, _action, _signal) => pending.promise)
-  const t = await setup({ refreshCliExecutablePath })
-  await t.click('高级设置')
-  await editPath(t, 'F:\\正在保存\\cli.exe')
-  await submitPath(t)
-  const signal = refreshCliExecutablePath.mock.calls[0]![4]
-  const calls = t.accountStatus.mock.calls.length
-  await t.click(leave)
-  expect(signal.aborted).toBe(true)
-  await act(async () => pending.resolve(remote({ cli: 'antigravity', path: 'F:\\正在保存\\cli.exe', source: 'manual', available: true })))
-  expect(t.accountStatus).toHaveBeenCalledTimes(calls)
-  expect(t.text()).not.toContain('正在保存')
-})
+it.each(['Kimi 设置', '关闭设置'])(
+  'cancels path writes on %s and does not refresh accounts from a late completion',
+  async (leave) => {
+    const pending = deferred()
+    const refreshCliExecutablePath = vi.fn((_session, _cli, _path, _action, _signal) => pending.promise)
+    const t = await setup({ refreshCliExecutablePath })
+    await t.click('高级设置')
+    await editPath(t, 'F:\\正在保存\\cli.exe')
+    await submitPath(t)
+    const signal = refreshCliExecutablePath.mock.calls[0]![4]
+    const calls = t.accountStatus.mock.calls.length
+    await t.click(leave)
+    expect(signal.aborted).toBe(true)
+    await act(async () =>
+      pending.resolve(
+        remote({ cli: 'antigravity', path: 'F:\\正在保存\\cli.exe', source: 'manual', available: true }),
+      ),
+    )
+    expect(t.accountStatus).toHaveBeenCalledTimes(calls)
+    expect(t.text()).not.toContain('正在保存')
+  },
+)
 it('aborts a folded path read and performs a fresh read when expanded again', async () => {
   const pending = deferred()
-  const cliExecutablePath = vi.fn((_session, cli: CliId, _signal) => Promise.resolve(remote({ cli, path: 'E:\\新检测\\cli.exe', source: 'auto', available: true })))
+  const cliExecutablePath = vi
+    .fn((_session, cli: CliId, _signal) =>
+      Promise.resolve(remote({ cli, path: 'E:\\新检测\\cli.exe', source: 'auto', available: true })),
+    )
     .mockImplementationOnce(() => pending.promise)
   const t = await setup({ cliExecutablePath })
   await t.click('高级设置')
@@ -1954,29 +2050,227 @@ it('aborts a folded path read and performs a fresh read when expanded again', as
   expect(signal.aborted).toBe(true)
   await t.click('高级设置')
   expect(pathInput(t).props.value).toBe('E:\\新检测\\cli.exe')
-  await act(async () => pending.resolve(remote({ cli: 'antigravity', path: 'E:\\旧检测\\cli.exe', source: 'auto', available: true })))
+  await act(async () =>
+    pending.resolve(
+      remote({ cli: 'antigravity', path: 'E:\\旧检测\\cli.exe', source: 'auto', available: true }),
+    ),
+  )
   expect(pathInput(t).props.value).toBe('E:\\新检测\\cli.exe')
 })
 it('clears the previous green account and model choices while validating a newly saved CLI path', async () => {
-  const accountStatus = vi.fn(async (_session, cli: CliId) => status(cli, {
-    state: 'authenticated', authMethod: 'oauth', accountLabel: 'old-path@example.invalid',
-  }))
+  const accountStatus = vi.fn(async (_session, cli: CliId) =>
+    status(cli, {
+      state: 'authenticated',
+      authMethod: 'oauth',
+      accountLabel: 'old-path@example.invalid',
+    }),
+  )
   const t = await setup({ accountStatus })
   await t.click('高级设置')
   expect(visibleText(accountSummary(t.r))).toContain('old-path@example.invalid')
   const pending = deferred()
-  accountStatus.mockImplementation((_session, cli: CliId) => cli === 'antigravity'
-    ? pending.promise : Promise.resolve(status(cli)))
+  accountStatus.mockImplementation((_session, cli: CliId) =>
+    cli === 'antigravity' ? pending.promise : Promise.resolve(status(cli)),
+  )
   await editPath(t, 'F:\\不同安装\\cli.exe')
   await submitPath(t)
   expect(visibleText(accountSummary(t.r))).not.toContain('old-path@example.invalid')
   expect(visibleText(accountSummary(t.r))).not.toContain('已登录')
   expect(t.button('Antigravity 设置').findByProps({ role: 'img' }).props['aria-label']).toBe('正在检查连接')
   expect(t.button('默认模型').props.disabled).toBe(true)
-  expect(t.button('保存默认值').props.disabled).toBe(true)
-  await act(async () => pending.resolve(status('antigravity', {
-    installed: false, state: 'unavailable', summary: '模拟：新路径不可用',
-  })))
+  await act(async () =>
+    pending.resolve(
+      status('antigravity', {
+        installed: false,
+        state: 'unavailable',
+        summary: '模拟：新路径不可用',
+      }),
+    ),
+  )
   expect(visibleText(accountSummary(t.r))).toContain('模拟：新路径不可用')
+  expect(t.configure).not.toHaveBeenCalled()
+})
+
+it('does not write model defaults on initialization, capability refresh, or CLI navigation and has no save button', async () => {
+  const t = await setup({
+    catalogForCli: vi.fn(async (_parent, cli: CliId) =>
+      remote({
+        cli,
+        models: [{ id: `${cli}-saved`, efforts: ['low', 'high'] }],
+        preference: { cli, model: `${cli}-saved`, effort: 'high' },
+      }),
+    ),
+  })
+  expect(visibleText(t.button('默认思考强度')).trim()).toBe('High')
+  expect(t.button('保存默认值')).toBeUndefined()
+  expect(t.configure).not.toHaveBeenCalled()
+  await t.click('刷新模型')
+  await t.click('Codex 设置')
+  await t.click('Antigravity 设置')
+  expect(t.configure).not.toHaveBeenCalled()
+  expect(t.button('保存默认值')).toBeUndefined()
+})
+
+it('writes an explicitly reselected saved value but never submits unchanged defaults from the form', async () => {
+  const t = await setup({
+    catalogForCli: vi.fn(async (_parent, cli: CliId) =>
+      remote({
+        cli,
+        models: [{ id: `${cli}-saved`, label: 'Saved model', efforts: ['low', 'high'] }],
+        preference: { cli, model: `${cli}-saved`, effort: 'high' },
+      }),
+    ),
+  })
+  const preventDefault = vi.fn()
+  await act(async () =>
+    t.r.root.findByProps({ className: 'cwn-settings-form' }).props.onSubmit({ preventDefault }),
+  )
+  expect(preventDefault).toHaveBeenCalledOnce()
+  expect(t.configure).not.toHaveBeenCalled()
+  await t.chooseModel('Saved model')
+  await t.chooseEffort('High')
+  expect(t.configure).toHaveBeenCalledTimes(2)
+  for (const call of t.configure.mock.calls) {
+    expect(JSON.parse(call[1]!)).toEqual({ cli: 'antigravity', model: 'antigravity-saved', effort: 'high' })
+  }
+  expect(t.text()).toContain('默认设置已保存')
+})
+
+it('automatically saves an explicit effort and pairs a new model with its supported effort', async () => {
+  const t = await setup({
+    catalogForCli: vi.fn(async (_parent, cli: CliId) =>
+      remote({
+        cli,
+        models: [
+          { id: 'source/alpha', label: 'Alpha', efforts: ['low', 'high'] },
+          { id: 'source/beta', label: 'Beta', efforts: ['medium'] },
+        ],
+      }),
+    ),
+  })
+  expect(t.configure).not.toHaveBeenCalled()
+  await t.chooseEffort('High')
+  expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({
+    cli: 'antigravity',
+    model: 'source/alpha',
+    effort: 'high',
+  })
+  await t.chooseModel('Beta')
+  expect(JSON.parse(t.configure.mock.calls[1]![1])).toEqual({
+    cli: 'antigravity',
+    model: 'source/beta',
+    effort: 'medium',
+  })
+  expect(visibleText(t.button('默认模型')).trim()).toBe('Beta')
+  expect(visibleText(t.button('默认思考强度')).trim()).toBe('Medium')
+  expect(t.configure).toHaveBeenCalledTimes(2)
+  expect(t.text()).toContain('默认设置已保存')
+})
+
+it('serializes automatic saves and commits only the newest model-effort pair after an aborted write settles', async () => {
+  const first = deferred(),
+    latest = deferred()
+  const configure = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(latest.promise)
+  const t = await setup({
+    configure,
+    catalogForCli: vi.fn(async (_parent, cli: CliId) =>
+      remote({
+        cli,
+        models: [
+          { id: 'source/alpha', label: 'Alpha', efforts: ['low', 'high'] },
+          { id: 'source/beta', label: 'Beta', efforts: ['high', 'medium'] },
+        ],
+      }),
+    ),
+  })
+  await t.chooseEffort('High')
+  expect(configure).toHaveBeenCalledOnce()
+  expect(t.button('默认模型').props.disabled).toBe(false)
+  await t.chooseModel('Beta')
+  await t.chooseEffort('Medium')
+  expect(configure).toHaveBeenCalledOnce()
+  expect(configure.mock.calls[0]![2].aborted).toBe(true)
+  expect(visibleText(t.button('默认模型')).trim()).toBe('Beta')
+  expect(visibleText(t.button('默认思考强度')).trim()).toBe('Medium')
+  await act(async () => first.resolve(remote({})))
+  expect(configure).toHaveBeenCalledTimes(2)
+  expect(JSON.parse(configure.mock.calls[1]![1])).toEqual({
+    cli: 'antigravity',
+    model: 'source/beta',
+    effort: 'medium',
+  })
+  expect(t.text()).not.toContain('默认设置已保存')
+  await act(async () => latest.resolve(remote({})))
+  expect(t.text()).toContain('默认设置已保存')
+  expect(configure).toHaveBeenCalledTimes(2)
+})
+
+it('keeps a failed automatic selection visible and retries it only after another explicit selection', async () => {
+  const configure = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('模拟：自动保存失败'))
+    .mockResolvedValue(remote({}))
+  const t = await setup({ configure })
+  await t.chooseEffort('High')
+  expect(configure).toHaveBeenCalledOnce()
+  expect(visibleText(t.button('默认思考强度')).trim()).toBe('High')
+  expect(t.text()).toContain('模拟：自动保存失败')
+  expect(t.text()).not.toContain('默认设置已保存')
+  expect(t.button('默认思考强度').props.disabled).toBe(false)
+  await t.chooseEffort('High')
+  expect(configure).toHaveBeenCalledTimes(2)
+  expect(JSON.parse(configure.mock.calls[1]![1])).toEqual({
+    cli: 'antigravity',
+    model: 'antigravity-fixture',
+    effort: 'high',
+  })
+  expect(t.text()).not.toContain('模拟：自动保存失败')
+  expect(t.text()).toContain('默认设置已保存')
+})
+
+it.each(['Kimi 设置', '关闭设置'])(
+  'cancels active and queued automatic saves on %s without reporting late completion',
+  async (leave) => {
+    const pending = deferred()
+    const configure = vi.fn().mockReturnValue(pending.promise)
+    const t = await setup({ configure })
+    await t.chooseEffort('High')
+    await t.chooseEffort('Low')
+    expect(configure).toHaveBeenCalledOnce()
+    const signal = configure.mock.calls[0]![2]
+    await t.click(leave)
+    expect(signal.aborted).toBe(true)
+    await act(async () => pending.resolve(remote({})))
+    expect(configure).toHaveBeenCalledOnce()
+    expect(t.text()).not.toContain('默认设置已保存')
+    if (leave === 'Kimi 设置') expect(t.text()).toContain('kimi-fixture')
+    else expect(t.r.toJSON()).toBe(null)
+  },
+)
+
+it('toggles advanced content only through its separate arrow and preserves hidden content for collapse animation', async () => {
+  const t = await setup()
+  const advanced = t.r.root.findByProps({ 'aria-label': '高级设置', className: 'cwn-settings-section' })
+  const heading = advanced.findByType('h3')
+  expect(visibleText(heading)).toBe('高级设置')
+  expect(heading.props.onClick).toBeUndefined()
+  expect(heading.findAllByType('button')).toHaveLength(0)
+  expect(visibleText(t.button('高级设置'))).toBe('')
+  await t.click('高级设置')
+  const content = t.r.root.findByProps({ className: 'cwn-cli-path-settings' })
+  expect(content.findAllByType('label')).toHaveLength(1)
+  expect(visibleText(content.findByType('label').findAllByType('span')[0]!).trim()).toBe('CLI 路径管理')
+  expect(content.findByType('label').props.htmlFor).toBe(pathInput(t).props.id)
+  expect(content.findAllByType('h4')).toHaveLength(0)
+  expect(content.findAllByProps({ className: 'cwn-cli-path-source' })).toHaveLength(0)
+  await t.click('高级设置')
+  expect(t.button('高级设置').props['aria-expanded']).toBe(false)
+  expect(t.r.root.findByProps({ className: 'cwn-cli-path-settings' })).toBe(content)
+  const hidden = advanced.findAll(
+    (node) => typeof node.type === 'string' && node.props['aria-hidden'] === true,
+  )
+  expect(hidden.some((node) => node.props.inert !== undefined)).toBe(true)
+  await t.click('高级设置')
+  expect(t.button('高级设置').props['aria-expanded']).toBe(true)
   expect(t.configure).not.toHaveBeenCalled()
 })
