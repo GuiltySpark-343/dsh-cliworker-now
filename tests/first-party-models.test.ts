@@ -268,7 +268,7 @@ async function mimoFixture() {
     await mkdir(join(root, path), { recursive: true })
   vi.stubEnv('MIMOCODE_HOME', root)
   vi.stubEnv('HOME', root)
-  const capture = vi.fn(async (argv: string[]) =>
+  const capture = vi.fn(async (argv: string[], _env?: Record<string, string>) =>
     argv.includes('paths')
       ? `data ${root}/data\nconfig ${root}/config\n`
       : argv.includes('config')
@@ -497,6 +497,7 @@ async function claudeFixture() {
     if (/ANTHROPIC|CLAUDE_CODE_(?:OAUTH|USE_|API)|AWS_|GOOGLE_|CLOUD_ML|API_KEY|BEARER_TOKEN/.test(key))
       vi.stubEnv(key, '')
   vi.stubEnv('CLAUDE_CONFIG_DIR', user)
+  vi.stubEnv('DSH_HOME', join(root, 'dsh'))
   const capture = vi.fn(async (argv: string[]) =>
     argv.includes('status')
       ? JSON.stringify({ loggedIn: true, authMethod: 'api_key' })
@@ -511,6 +512,119 @@ async function claudeFixture() {
   }
 }
 describe('Claude own native settings API path', () => {
+  async function gateway() {
+    const f = await claudeFixture()
+    await writeFile(
+      join(f.user, 'settings.json'),
+      JSON.stringify({
+        model: 'synthetic-fable[1M]',
+        env: {
+          ANTHROPIC_API_KEY: 'synthetic-own-api',
+          ANTHROPIC_BASE_URL: 'https://gateway.example.test',
+          ANTHROPIC_DEFAULT_FABLE_MODEL: 'synthetic-fable[1M]',
+          ANTHROPIC_DEFAULT_FABLE_MODEL_NAME: 'Synthetic Fable',
+          ANTHROPIC_DEFAULT_SONNET_MODEL: 'synthetic-sonnet',
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: 'synthetic-haiku',
+        },
+      }),
+    )
+    return { ...f, sources: await f.read() }
+  }
+  it.each([404, 405])(
+    'uses only explicit Claude gateway models when metadata is unavailable (%s)',
+    async (status) => {
+      const f = await gateway()
+      const models = await discoverFirstPartySources(f.sources, signal(), { fetch: fetchModels([], status) })
+      expect(models.map((m) => m.id).sort()).toEqual([
+        'synthetic-fable[1M]',
+        'synthetic-haiku',
+        'synthetic-sonnet',
+      ])
+      expect(models.every((m) => m.cost === 'unknown' && m.efforts?.join() === 'default')).toBe(true)
+      const argv = workerArguments(
+        'claude',
+        f.project,
+        { cli: 'claude', model: 'synthetic-fable[1M]', effort: 'default' },
+        'plan',
+        'synthetic prompt',
+        1000,
+      )
+      expect(argv[argv.indexOf('--model') + 1]).toBe('synthetic-fable[1M]')
+    },
+  )
+  it('intersects Claude configured context IDs with the current route catalog', async () => {
+    const f = await gateway()
+    const models = await discoverFirstPartySources(f.sources, signal(), {
+      fetch: fetchModels(['synthetic-fable', 'synthetic-haiku', 'another-model']),
+    })
+    expect(models.map((m) => m.id)).toContain('synthetic-fable[1M]')
+    expect(models.map((m) => m.id)).not.toContain('synthetic-sonnet')
+    expect(models.map((m) => m.id)).not.toContain('Synthetic Fable')
+  })
+  it.each([401, 403, 500])(
+    'never covers Claude gateway rejection or failure with configured models (%s)',
+    async (status) => {
+      const f = await gateway()
+      await expect(
+        discoverFirstPartySources(f.sources, signal(), {
+          fetch: fetchModels([], status),
+        }),
+      ).rejects.toThrow(status === 500 ? '目录无法确认' : '认证失败')
+    },
+  )
+  it('does not use Claude config after malformed metadata, network failure or cancellation', async () => {
+    const f = await gateway()
+    for (const fetch of [
+      vi.fn<typeof globalThis.fetch>(async () => new Response('{}')),
+      vi.fn<typeof globalThis.fetch>(async () => {
+        throw new Error('synthetic network failure')
+      }),
+    ])
+      await expect(discoverFirstPartySources(f.sources, signal(), { fetch })).rejects.toThrow('目录无法确认')
+    const abort = new AbortController()
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => {
+      abort.abort()
+      return new Response('', { status: 404 })
+    })
+    await expect(discoverFirstPartySources(f.sources, abort.signal, { fetch })).rejects.toThrow()
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+  it('does not extend Claude official API permissions using custom gateway fallback', async () => {
+    const f = await claudeFixture()
+    await writeFile(
+      join(f.user, 'settings.json'),
+      JSON.stringify({
+        env: {
+          ANTHROPIC_API_KEY: 'synthetic-official-api',
+          ANTHROPIC_MODEL: 'synthetic-custom',
+        },
+      }),
+    )
+    await expect(
+      discoverFirstPartySources(await f.read(), signal(), {
+        fetch: fetchModels([], 404),
+      }),
+    ).rejects.toThrow('目录无法确认')
+  })
+  it('pins Claude metadata to a private route snapshot and cleans it after capture', async () => {
+    const f = await gateway()
+    const paths: string[] = []
+    vi.stubEnv('ANTHROPIC_API_KEY', 'synthetic-foreign-secret')
+    f.capture.mockImplementation(async (argv, env) => {
+      if (!argv.includes('status')) return '--model --output-format --settings'
+      const path = argv[argv.indexOf('--settings') + 1]!
+      paths.push(path)
+      const settings = JSON.parse(await readFile(path, 'utf8'))
+      expect(settings.env.ANTHROPIC_API_KEY).toBe('synthetic-own-api')
+      expect(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('synthetic-fable[1M]')
+      expect(env?.ANTHROPIC_API_KEY).toBe('')
+      expect(JSON.stringify(argv)).not.toMatch(/synthetic-own-api|synthetic-foreign-secret/)
+      return JSON.stringify({ loggedIn: true, authMethod: 'api_key' })
+    })
+    expect((await f.read())[0]?.credential.key).toBe('synthetic-own-api')
+    expect(paths).toHaveLength(1)
+    await expect(readFile(paths[0]!, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
   it.each(['api_key', 'claude.ai', 'none'])(
     'does not treat an own bearer config with native %s status as verified bearer routing',
     async (authMethod) => {
@@ -532,7 +646,7 @@ describe('Claude own native settings API path', () => {
     },
   )
   it.each(['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'])(
-    'rejects ambient %s before querying a configured own bearer source',
+    'clears ambient %s while querying the current own bearer source',
     async (name) => {
       const f = await claudeFixture()
       await writeFile(
@@ -545,8 +659,14 @@ describe('Claude own native settings API path', () => {
         }),
       )
       vi.stubEnv(name, 'synthetic-foreign-secret')
-      expect(await f.read()).toEqual([])
-      expect(f.capture).not.toHaveBeenCalled()
+      f.capture.mockImplementation(async (argv) =>
+        argv.includes('status')
+          ? JSON.stringify({ loggedIn: true, authMethod: 'oauth_token' })
+          : '--model --output-format --settings',
+      )
+      expect((await f.read())[0]?.credential.key).toBe('synthetic-own-bearer')
+      expect(JSON.stringify(f.capture.mock.calls)).not.toContain('synthetic-foreign-secret')
+      expect(f.capture.mock.calls[0]?.[1]).toMatchObject({ [name]: '' })
     },
   )
   it.each([
@@ -654,11 +774,11 @@ describe('Claude own native settings API path', () => {
     )
     expect(await f.read()).toEqual([])
   })
-  it('rejects ambient keys and native auth mode disagreement', async () => {
+  it('ignores ambient keys but rejects native auth mode disagreement', async () => {
     const f = await claudeFixture()
     await writeFile(join(f.user, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_API_KEY: 'own-key' } }))
     vi.stubEnv('ANTHROPIC_API_KEY', 'foreign-key')
-    expect(await f.read()).toEqual([])
+    expect((await f.read())[0]?.credential.key).toBe('own-key')
     vi.stubEnv('ANTHROPIC_API_KEY', '')
     f.capture.mockResolvedValue(JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }))
     expect(await f.read()).toEqual([])

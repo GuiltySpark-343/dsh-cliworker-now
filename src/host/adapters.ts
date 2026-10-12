@@ -102,8 +102,7 @@ export const executableFor = (cli: CliId, config: RuntimeConfig): string => {
     }
     return configured || cli
   }
-  if (cli === 'zcode')
-    return '/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs'
+  if (cli === 'zcode') return '/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs'
   if (cli === 'grok') return join(homedir(), '.grok/bin/grok')
   if (cli === 'pi') {
     const native = join(homedir(), '.local/bin/pi')
@@ -217,7 +216,7 @@ export async function catalogFor(
         executable,
         cwd,
         signal,
-        claudeNativeSettingsArguments(claudeRoute.configDirectory),
+        claudeNativeSettingsArguments(claudeRoute.configDirectory, claudeRoute.suppressedEnvironment),
       )
       return { cli, models, notice: 'Claude 官方账号当前可用模型' }
     }
@@ -233,7 +232,9 @@ export async function catalogFor(
     return {
       cli,
       models,
-      notice: claudeRoute?.kind === 'proxy' ? 'Claude 本地代理当前可用模型' : '当前账号可用模型',
+      notice: claudeRoute
+        ? 'Claude 路由模型；目录未提供时使用自身配置，远端可用性以实际调用为准'
+        : '当前账号可用模型',
     }
   }
   throw new Error('Unsupported CLI')
@@ -390,8 +391,11 @@ export async function resolveCliExecutable(
         const absent =
           error instanceof SubprocessExecutableNotFoundError || ['ENOENT', 'ENOTDIR'].includes(error.code)
         if (
-          process.platform === 'win32' && executable === cli && absent &&
-          cli === 'hermes' && hasWindowsHermesInstallDirectory()
+          process.platform === 'win32' &&
+          executable === cli &&
+          absent &&
+          cli === 'hermes' &&
+          hasWindowsHermesInstallDirectory()
         )
           throw new WindowsCliInstallationError(
             '检测到 Hermes 安装目录，但未找到可用 CLI 入口，请完成安装或配置已有入口',

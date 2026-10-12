@@ -3,6 +3,8 @@ export interface AccountModelScope {
   source: 'account-models' | 'configured-custom' | 'verified-route' | 'unknown'
   /** Safe metadata classification; absent when the server did not establish a specific cause. */
   denialReason?: 'authentication' | 'quota'
+  /** Endpoint explicitly returned 404/405; never inferred from network or parse errors. */
+  catalogUnavailable?: boolean
   models: { id: string; name?: string; cost: 'free' | 'paid' | 'unknown' }[]
 }
 export interface AccountModelInput {

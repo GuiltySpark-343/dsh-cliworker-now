@@ -253,7 +253,10 @@ export async function probeAccountModels(input, options = {}) {
           models: verified.map((id) => ({ id, cost: 'unknown' })),
         }
     }
-    return unknown()
+    return {
+      ...unknown(),
+      ...([404, 405].includes(modelResponse?.status) ? { catalogUnavailable: true } : {}),
+    }
   } catch {
     return unknown()
   } finally {

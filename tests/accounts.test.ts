@@ -24,6 +24,16 @@ import { DEFAULT_CONFIG, type ProcessBackend, type RuntimeConfig } from '../src/
 import type { CliId } from '../src/shared/types.ts'
 import type { AccountIdentitySource } from '../src/host/account-identity.ts'
 import * as zcodeAccounts from '../src/host/zcode-grok-accounts.ts'
+const claudeSettings = vi.hoisted(() => ({ managed: {} as Record<string, unknown> }))
+// Synthetic managed settings only; account tests never read this machine's policy.
+vi.mock('../src/host/first-party-models.ts', async (load) => {
+  const actual = await load<typeof import('../src/host/first-party-models.ts')>()
+  return {
+    ...actual,
+    readFirstPartyJson: async (path: string) =>
+      path === actual.claudeManagedSettingsPath() ? claudeSettings.managed : actual.readFirstPartyJson(path),
+  }
+})
 // Manager transport/lifecycle tests use a simulated PTY on every platform.
 // Windows Job/ConPTY ownership has its own simulated and real-OS suites.
 vi.mock('../src/host/windows-account-terminal.ts', async (load) => ({
@@ -79,6 +89,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
   vi.useRealTimers()
   vi.unstubAllEnvs()
+  claudeSettings.managed = {}
 })
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -121,10 +132,26 @@ function fixture(overrides: Partial<RuntimeConfig> = {}) {
     exitCode = 0
   let codexAccount: unknown
   const statusProcesses: SubprocessHandle[] = []
+  const claudeStatusLaunches: {
+    argv: string[]
+    env: Record<string, string>
+    settings: Record<string, any>
+    path?: string
+  }[] = []
   const backend: ProcessBackend = {
     resolveExecutable: vi.fn(async (name) => (name.startsWith('/') ? name : `/synthetic/${name}`)),
     spawnTerminal: vi.fn(async () => terminal),
     spawn: vi.fn((spec) => {
+      if (spec.argv.includes('auth') && spec.argv.includes('status') && spec.argv.includes('--settings')) {
+        const settings = spec.argv[spec.argv.indexOf('--settings') + 1]!
+        const inline = settings.startsWith('{')
+        claudeStatusLaunches.push({
+          argv: [...spec.argv],
+          env: { ...spec.env },
+          settings: JSON.parse(inline ? settings : readFileSync(settings, 'utf8')),
+          ...(inline ? {} : { path: settings }),
+        })
+      }
       const appServer = spec.argv.includes('app-server')
       const child: SubprocessHandle = {
         stdin: appServer
@@ -179,6 +206,7 @@ function fixture(overrides: Partial<RuntimeConfig> = {}) {
     output,
     result,
     statusProcesses,
+    claudeStatusLaunches,
     signal: new AbortController().signal,
     status: (text: string, code = 0) => {
       raw = text
@@ -364,6 +392,74 @@ describe('account status safety (synthetic CLI output)', () => {
     expect(api).toMatchObject({ state: 'authenticated', authMethod: 'api' })
     expect(api.accountLabel).toBeUndefined()
     expect(JSON.stringify(api)).not.toContain('SECRET')
+  })
+
+  it('pins Claude status to current synthetic CC Switch settings and clears stale inherited routing', async () => {
+    const f = fixture()
+    const path = join(f.cwd, 'claude/settings.json')
+    const settings = JSON.stringify({
+      model: 'synthetic-current-model[1m]',
+      env: {
+        ANTHROPIC_AUTH_TOKEN: 'synthetic-current-router-key',
+        ANTHROPIC_BASE_URL: 'https://current-router.example.test',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'synthetic-current-sonnet[1m]',
+      },
+    })
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, settings, { mode: 0o600 })
+    for (const [key, value] of Object.entries({
+      ANTHROPIC_AUTH_TOKEN: 'synthetic-stale-key',
+      ANTHROPIC_API_KEY: 'synthetic-stale-api-key',
+      ANTHROPIC_BASE_URL: 'https://stale-router.example.test',
+      CLAUDE_CODE_USE_BEDROCK: '1',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'synthetic-stale-model',
+    }))
+      vi.stubEnv(key, value)
+    f.status(JSON.stringify({ loggedIn: true, authMethod: 'oauth_token' }))
+
+    expect(await f.manager.status('claude', f.cwd, f.signal)).toMatchObject({
+      state: 'authenticated',
+      authMethod: 'api',
+    })
+    const launch = f.claudeStatusLaunches.at(-1)!
+    expect(launch.argv.slice(-3)).toEqual(['auth', 'status', '--json'])
+    expect(launch.path).toBeDefined()
+    expect(launch.settings).toMatchObject({
+      model: 'synthetic-current-model[1m]',
+      env: {
+        ANTHROPIC_AUTH_TOKEN: 'synthetic-current-router-key',
+        ANTHROPIC_API_KEY: '',
+        ANTHROPIC_BASE_URL: 'https://current-router.example.test',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'synthetic-current-sonnet[1m]',
+      },
+    })
+    expect(launch.env).toMatchObject({
+      ANTHROPIC_AUTH_TOKEN: '',
+      ANTHROPIC_API_KEY: '',
+      ANTHROPIC_BASE_URL: '',
+      CLAUDE_CODE_USE_BEDROCK: '',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: '',
+    })
+    expect(JSON.stringify(launch.argv)).not.toMatch(/synthetic-current-router-key|current-router\.example/)
+    expect(existsSync(launch.path!)).toBe(false)
+    expect(readFileSync(path, 'utf8')).toBe(settings)
+  })
+
+  it('removes the private Claude status snapshot after an authentication rejection without switching accounts', async () => {
+    const f = fixture()
+    const path = join(f.cwd, 'claude/settings.json')
+    mkdirSync(dirname(path), { recursive: true })
+    const settings = JSON.stringify({
+      env: { ANTHROPIC_API_KEY: 'synthetic-rejected-route', ANTHROPIC_BASE_URL: 'https://own.example.test' },
+    })
+    writeFileSync(path, settings, { mode: 0o600 })
+    f.status(JSON.stringify({ loggedIn: false, authMethod: 'none' }), 1)
+    expect(await f.manager.status('claude', f.cwd, f.signal)).toMatchObject({ state: 'unavailable' })
+    expect(f.backend.spawn).toHaveBeenCalledOnce()
+    const launch = f.claudeStatusLaunches[0]!
+    expect(launch.path).toBeDefined()
+    expect(existsSync(launch.path!)).toBe(false)
+    expect(readFileSync(path, 'utf8')).toBe(settings)
   })
 
   it('uses safe local Antigravity identity without launching any login or task process', async () => {
@@ -592,6 +688,86 @@ describe('account status safety (synthetic CLI output)', () => {
 })
 
 describe('user-operated account terminals (synthetic PTY)', () => {
+  it.each(['login', 'logout'] as const)(
+    'opens Claude official %s despite malformed synthetic CC Switch routing and stale ambient auth',
+    async (action) => {
+      const f = fixture()
+      const path = join(f.cwd, 'claude/settings.json')
+      // This is valid settings JSON with unusable API routing, never a real secret.
+      const settings = JSON.stringify({
+        apiKeyHelper: 'synthetic-unused-helper',
+        env: {
+          ANTHROPIC_BASE_URL: 'synthetic-invalid-endpoint',
+          ANTHROPIC_API_KEY: 'synthetic-own key with spaces',
+          ANTHROPIC_AUTH_TOKEN: 'synthetic-own-bearer',
+          ANTHROPIC_DEFAULT_SONNET_MODEL: 'synthetic-router-model',
+        },
+      })
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, settings, { mode: 0o600 })
+      vi.stubEnv('ANTHROPIC_AUTH_TOKEN', 'synthetic-stale-router')
+      vi.stubEnv('ANTHROPIC_BASE_URL', 'https://stale.example.test')
+      vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'synthetic-stale-oauth')
+      vi.stubEnv('CLAUDE_CODE_USE_BEDROCK', '1')
+      const opened = await f.manager.start('parent', 'claude', action, f.cwd, f.signal)
+      const spec = vi.mocked(f.backend.spawnTerminal!).mock.calls[0]![0]
+      expect(spec.argv.slice(3)).toEqual(['auth', action, ...(action === 'login' ? ['--claudeai'] : [])])
+      expect(JSON.parse(spec.argv[2]!)).toMatchObject({
+        apiKeyHelper: '',
+        env: {
+          CLAUDE_CONFIG_DIR: join(f.cwd, 'claude'),
+          ANTHROPIC_BASE_URL: 'https://api.anthropic.com',
+          ANTHROPIC_AUTH_TOKEN: '',
+          ANTHROPIC_API_KEY: '',
+          CLAUDE_CODE_OAUTH_TOKEN: '',
+          CLAUDE_CODE_USE_BEDROCK: '',
+          ANTHROPIC_DEFAULT_SONNET_MODEL: '',
+        },
+      })
+      expect(spec.env).toMatchObject({
+        ANTHROPIC_AUTH_TOKEN: '',
+        ANTHROPIC_BASE_URL: '',
+        CLAUDE_CODE_OAUTH_TOKEN: '',
+        CLAUDE_CODE_USE_BEDROCK: '',
+      })
+      expect(f.backend.spawn).not.toHaveBeenCalled()
+      expect(f.terminal.write).not.toHaveBeenCalled()
+      expect(JSON.stringify(spec.argv)).not.toContain('synthetic-own-bearer')
+      await f.manager.stop('parent', opened.id)
+      expect(readFileSync(path, 'utf8')).toBe(settings)
+      expect(f.manager.isBusy('claude')).toBe(false)
+    },
+  )
+
+  it.each(['CLAUDE_CONFIG_DIR', 'HOME', 'USERPROFILE', 'XDG_CONFIG_HOME'])(
+    'rejects Claude official login when own settings redirect %s to another account store',
+    async (key) => {
+      const f = fixture()
+      const path = join(f.cwd, 'claude/settings.json')
+      mkdirSync(dirname(path), { recursive: true })
+      const settings = JSON.stringify({ env: { [key]: join(f.cwd, 'another-account') } })
+      writeFileSync(path, settings, { mode: 0o600 })
+      await expect(f.manager.start('parent', 'claude', 'login', f.cwd, f.signal)).rejects.toThrow()
+      expect(f.backend.spawnTerminal).not.toHaveBeenCalled()
+      expect(f.backend.spawn).not.toHaveBeenCalled()
+      expect(readFileSync(path, 'utf8')).toBe(settings)
+      expect(f.manager.isBusy('claude')).toBe(false)
+    },
+  )
+
+  it.each([
+    { env: { ANTHROPIC_API_KEY: 'synthetic-managed-key' } },
+    { env: { CLAUDE_CONFIG_DIR: '/synthetic/managed-account' } },
+    { apiKeyHelper: 'synthetic-managed-helper' },
+  ])('rejects Claude official login under unoverridable synthetic managed settings %j', async (managed) => {
+    const f = fixture()
+    claudeSettings.managed = managed
+    await expect(f.manager.start('parent', 'claude', 'login', f.cwd, f.signal)).rejects.toThrow()
+    expect(f.backend.spawnTerminal).not.toHaveBeenCalled()
+    expect(f.backend.spawn).not.toHaveBeenCalled()
+    expect(f.manager.isBusy('claude')).toBe(false)
+  })
+
   it('opens an actionable Kimi management TUI for the current login without logging out or forcing auth', async () => {
     const f = fixture({ kimiExecutable: '/synthetic/kimi' })
     mkdirSync(join(f.cwd, 'kimi/credentials'), { recursive: true })

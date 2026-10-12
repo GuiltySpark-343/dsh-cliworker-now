@@ -3,6 +3,7 @@ import {
   claudeRouteStatusArguments,
   claudeRouteIdentity,
   ClaudeOwnRouteError,
+  claudeLaunchEnvironment,
   type ClaudeOwnRoute,
 } from './claude-own-route.ts'
 import { constants } from 'node:fs'
@@ -353,7 +354,7 @@ async function material(
             claudeRouteStatusArguments(executable, route),
             project,
             signal,
-            undefined,
+            claudeLaunchEnvironment(),
             [0, 1],
           ),
         )
@@ -380,13 +381,15 @@ async function material(
           }
         throw new ClaudeOwnRouteError('Claude 官方账号未登录，请使用原生登录')
       }
-      if (selectedClaudeRoute) {
+      {
         const source = route.source
         if (!source) throw new ClaudeOwnRouteError()
         const entry = credentialEntry(source.provider, source.credential, {
           baseUrl: source.baseUrl,
           apiType: source.apiType,
           anthropicAuth: source.anthropicAuth,
+          modelEnvironment: source.modelEnvironment,
+          model: source.model,
         })
         return { sourceIds: source.sourceIds, entries: entry ? [entry] : [] }
       }
@@ -499,7 +502,10 @@ async function material(
   if (cli === 'hermes') {
     const root = effectiveHermesHome(config)
     await ensureHermesNousFresh({
-      home: root, backend, signal, graceMs: config.graceMs,
+      home: root,
+      backend,
+      signal,
+      graceMs: config.graceMs,
       resolveExecutable: (control) => resolveCliExecutable(cli, backend, config, control),
     })
     const raw = await assertHermesOwnAccounts(root, signal)

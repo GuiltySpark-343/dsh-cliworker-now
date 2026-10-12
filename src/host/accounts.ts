@@ -1,7 +1,9 @@
 import {
   readClaudeOwnRoute,
+  readClaudeOfficialAccountRoute,
   claudeNativeSettingsArguments,
-  claudeRouteStatusArguments,
+  claudeLaunchEnvironment,
+  prepareClaudeWorkerLaunch,
   claudeRouteIdentity,
   ClaudeOwnRouteError,
 } from './claude-own-route.ts'
@@ -340,8 +342,11 @@ export class AccountManager {
           local.summary === 'Hermes 登录已保存，等待自动续期'
         )
           await ensureHermesNousFresh({
-            home: effectiveHermesHome(this.config), executable,
-            backend: this.backend, signal: control, graceMs: this.config.graceMs,
+            home: effectiveHermesHome(this.config),
+            executable,
+            backend: this.backend,
+            signal: control,
+            graceMs: this.config.graceMs,
           })
       }
       if (isExtendedCli(cli)) {
@@ -403,14 +408,30 @@ export class AccountManager {
             : cli === 'kimi'
               ? ['provider', 'list', '--json']
               : ['auth', 'whoami']
-      const child = this.backend.spawn({
-        argv: claudeRoute ? claudeRouteStatusArguments(executable, claudeRoute) : [executable, ...argv],
-        env: firstPartyEnvironment(cli),
-        cwd,
-        stdio: { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' },
-        graceMs: this.config.graceMs,
-        signal: control,
-      })
+      const launch = claudeRoute
+        ? await prepareClaudeWorkerLaunch(
+            claudeRoute,
+            [executable, ...argv],
+            this.config.stateDirectory ??
+              join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'cliworker-now'),
+            control,
+          )
+        : { argv: [executable, ...argv], env: firstPartyEnvironment(cli) }
+      let child: ReturnType<ProcessBackend['spawn']>
+      try {
+        control.throwIfAborted()
+        child = this.backend.spawn({
+          argv: launch.argv,
+          env: launch.env,
+          cwd,
+          stdio: { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' },
+          graceMs: this.config.graceMs,
+          signal: control,
+        })
+      } catch (error) {
+        if ('cleanup' in launch) await launch.cleanup?.()
+        throw error
+      }
       void child.done.catch(() => undefined)
       let raw = '',
         bytes = 0
@@ -454,6 +475,7 @@ export class AccountManager {
         }
         await Promise.allSettled([child.done, ...readers])
         raw = ''
+        if ('cleanup' in launch) await launch.cleanup?.()
       }
     } catch (error) {
       if (error instanceof ProcessCleanupUnconfirmedError) {
@@ -484,8 +506,12 @@ export class AccountManager {
         return { cli, installed, state: 'unavailable', summary: error.message, actions: [] }
       if (error instanceof HermesRenewalError)
         return {
-          cli, installed, state: error.state === 'relogin' ? 'unauthenticated' : 'unavailable',
-          verification: 'local', summary: error.message, actions: actionsFor(cli, this.config),
+          cli,
+          installed,
+          state: error.state === 'relogin' ? 'unauthenticated' : 'unavailable',
+          verification: 'local',
+          summary: error.message,
+          actions: actionsFor(cli, this.config),
         }
       if (code === 'CLI_LAUNCHER_UNSUPPORTED')
         return {
@@ -620,15 +646,19 @@ export class AccountManager {
         cwd,
       }
       if (cli === 'claude') {
-        const claudeAccountRoute = await readClaudeOwnRoute(cwd, startup)
+        const claudeAccountRoute = await readClaudeOfficialAccountRoute(cwd, startup)
         startup.throwIfAborted()
         // Login/logout always address the native official account; proxy settings remain untouched.
         launch.argv = [
           executable,
-          ...claudeNativeSettingsArguments(claudeAccountRoute.configDirectory),
+          ...claudeNativeSettingsArguments(
+            claudeAccountRoute.configDirectory,
+            claudeAccountRoute.suppressedEnvironment,
+          ),
           ...argumentsFor(cli, action),
           ...(action === 'login' ? ['--claudeai'] : []),
         ]
+        launch.env = claudeLaunchEnvironment()
         instruction =
           action === 'logout'
             ? '退出 Claude 官方账号；本地代理设置保留。'
@@ -691,10 +721,15 @@ export class AccountManager {
       } else if (cli === 'hermes') {
         const oldHome = effectiveHermesHome(this.config)
         const releases = [await reserveHermesAccount(oldHome, startup)]
-        release = () => { for (const free of releases) free() }
+        release = () => {
+          for (const free of releases) free()
+        }
         const prepared = await prepareHermesAccount(action, executable, cwd, this.config, startup, source)
         const cleanup = release
-        release = async () => { await prepared.cleanup(); await cleanup() }
+        release = async () => {
+          await prepared.cleanup()
+          await cleanup()
+        }
         const selectedHome = effectiveHermesHome(this.config)
         if (selectedHome !== oldHome) releases.push(await reserveHermesAccount(selectedHome, startup))
         launch = prepared

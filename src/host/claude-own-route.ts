@@ -13,11 +13,119 @@ import {
 const record = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v)
 const literal = (v: unknown): v is string =>
   typeof v === 'string' && !!v.trim() && !/[\s\x00-\x1f{}$]/.test(v) && !v.startsWith('!')
-const authOption = /ANTHROPIC|CLAUDE_CODE_(?:OAUTH|USE_|API)|AWS_|GOOGLE_|CLOUD_ML|API_KEY|BEARER_TOKEN/
+const authOption =
+  /ANTHROPIC|CLAUDE_CODE_(?:OAUTH|USE_|API|SKIP_(?:BEDROCK|VERTEX|FOUNDRY|AWS)_AUTH|PROVIDER_MANAGED_BY_HOST|GATEWAY)|AWS_|GOOGLE_|CLOUD_ML|API_KEY|BEARER_TOKEN/i
 const allowed = new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'])
-const modelOption = /^ANTHROPIC_(?:MODEL|SMALL_FAST_MODEL|DEFAULT_(?:HAIKU|SONNET|OPUS)_MODEL(?:_NAME)?)$/
+const families = ['HAIKU', 'SONNET', 'OPUS', 'FABLE'] as const
+const modelOption =
+  /^(?:ANTHROPIC_(?:MODEL|DEFAULT_MODEL|SMALL_FAST_MODEL|(?:DEFAULT_(?:HAIKU|SONNET|OPUS|FABLE)_MODEL|CUSTOM_MODEL_OPTION)(?:_NAME|_DESCRIPTION|_SUPPORTED_CAPABILITIES)?)|CLAUDE_CODE_SUBAGENT_MODEL(?:_FORCE)?)$/
+const claudeEnvironment =
+  /^(?:ANTHROPIC_|CLAUDE_CODE_(?:OAUTH|USE_|API|SKIP_(?:BEDROCK|VERTEX|FOUNDRY|AWS)_AUTH|SUBAGENT_MODEL|MODEL|PROVIDER_MANAGED_BY_HOST|GATEWAY))/i
 const officialBase = 'https://api.anthropic.com'
-const homeOption = /^(?:CLAUDE_CONFIG_DIR|HOME|USERPROFILE|XDG_CONFIG_HOME)$/
+const homeOption = /^(?:CLAUDE_CONFIG_DIR|HOME|USERPROFILE|XDG_CONFIG_HOME)$/i
+const modelKeys = [
+  'ANTHROPIC_MODEL',
+  'ANTHROPIC_DEFAULT_MODEL',
+  'ANTHROPIC_SMALL_FAST_MODEL',
+  'ANTHROPIC_CUSTOM_MODEL_OPTION',
+  'CLAUDE_CODE_SUBAGENT_MODEL',
+  'CLAUDE_CODE_SUBAGENT_MODEL_FORCE',
+  ...families.flatMap((family) =>
+    ['', '_NAME', '_DESCRIPTION', '_SUPPORTED_CAPABILITIES'].map(
+      (suffix) => `ANTHROPIC_DEFAULT_${family}_MODEL${suffix}`,
+    ),
+  ),
+  ...['_NAME', '_DESCRIPTION', '_SUPPORTED_CAPABILITIES'].map(
+    (suffix) => `ANTHROPIC_CUSTOM_MODEL_OPTION${suffix}`,
+  ),
+]
+const routeEnvironment = {
+  CLAUDE_CODE_USE_BEDROCK: '',
+  CLAUDE_CODE_USE_VERTEX: '',
+  CLAUDE_CODE_USE_FOUNDRY: '',
+  CLAUDE_CODE_USE_AWS: '',
+  CLAUDE_CODE_OAUTH_TOKEN: '',
+  CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '',
+  CLAUDE_CODE_SKIP_BEDROCK_AUTH: '',
+  CLAUDE_CODE_SKIP_VERTEX_AUTH: '',
+  CLAUDE_CODE_SKIP_FOUNDRY_AUTH: '',
+  CLAUDE_CODE_SKIP_AWS_AUTH: '',
+  ANTHROPIC_AUTH_TOKEN: '',
+  ANTHROPIC_API_KEY: '',
+  ANTHROPIC_CUSTOM_HEADERS: '',
+}
+
+/** Only this Claude child is changed; inherited credentials are never account evidence. */
+export function claudeLaunchEnvironment(): Record<string, string> {
+  return {
+    ...routeEnvironment,
+    ...Object.fromEntries(modelKeys.map((key) => [key, ''])),
+    ANTHROPIC_BASE_URL: '',
+    ...Object.fromEntries(
+      Object.keys(process.env)
+        .filter((key) => claudeEnvironment.test(key))
+        .map((key) => [key, '']),
+    ),
+  }
+}
+
+export function claudeRemoteModelId(value: string): string {
+  return value.replace(/\[1m\]$/i, '')
+}
+
+/** Exact settings IDs only. Labels and capability metadata never invent a model. */
+export function claudeConfiguredModels(
+  env: Record<string, unknown>,
+  settingsModel?: unknown,
+): FirstPartyModelSource['nativeModels'] {
+  const secrets = ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']
+    .map((key) => env[key])
+    .filter((value): value is string => typeof value === 'string' && !!value)
+  const safe = (value: unknown, maximum: number) =>
+    typeof value === 'string' &&
+    value.length <= maximum &&
+    !/[\x00-\x1f]/.test(value) &&
+    !secrets.some((secret) => value === secret || (secret.length >= 12 && value.includes(secret)))
+  const valid = (value: unknown): value is string =>
+    safe(value, 1024) &&
+    typeof value === 'string' &&
+    /^[A-Za-z0-9][A-Za-z0-9._:/@-]*(?:\[1m\])?$/i.test(value) &&
+    !/^(?:sk-|Bearer|oauth[_-]|PROXY_MANAGED$)/i.test(value)
+  const models = new Map<string, FirstPartyModelSource['nativeModels'][number]>()
+  const add = (value: unknown, name?: unknown) => {
+    if (!valid(value)) return
+    const base = claudeRemoteModelId(value),
+      alias = base.toLowerCase()
+    if (['default', 'best', 'opusplan'].includes(alias)) return
+    if (families.some((family) => family.toLowerCase() === alias)) {
+      const mapped = env[`ANTHROPIC_DEFAULT_${alias.toUpperCase()}_MODEL`]
+      if (
+        !valid(mapped) ||
+        families.some((family) => family.toLowerCase() === claudeRemoteModelId(mapped).toLowerCase())
+      )
+        return
+      const id = /\[1m\]$/i.test(value) && !/\[1m\]$/i.test(mapped) ? `${mapped}${value.slice(-4)}` : mapped
+      add(id, env[`ANTHROPIC_DEFAULT_${alias.toUpperCase()}_MODEL_NAME`])
+      return
+    }
+    if (models.has(value)) return
+    models.set(value, {
+      remoteId: claudeRemoteModelId(value),
+      choice: {
+        id: value,
+        label: safe(name, 4096) && typeof name === 'string' && name.trim() ? name : value,
+        efforts: ['default'],
+      },
+    })
+  }
+  for (const family of families)
+    add(env[`ANTHROPIC_DEFAULT_${family}_MODEL`], env[`ANTHROPIC_DEFAULT_${family}_MODEL_NAME`])
+  add(env.ANTHROPIC_CUSTOM_MODEL_OPTION, env.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME)
+  add(env.ANTHROPIC_MODEL)
+  add(env.ANTHROPIC_DEFAULT_MODEL)
+  add(settingsModel)
+  return [...models.values()]
+}
 
 /** Public errors never interpolate native configuration or credentials. */
 export class ClaudeOwnRouteError extends Error {
@@ -31,33 +139,30 @@ export interface ClaudeOwnRoute {
   kind: 'native' | 'proxy' | 'api'
   sourceIds: string[]
   configDirectory?: string
+  /** Host-only current model configuration; included in admission and launch snapshots. */
+  modelEnvironment?: Record<string, string>
+  model?: string
+  /** Field names only, with empty values; native operations suppress own route overrides. */
+  suppressedEnvironment?: Record<string, string>
   /** Host-only; never project this material to Gateway. */
   source?: FirstPartyModelSource
 }
 
 /** Verified on native 2.1.296: empty settings.env unsets provider selectors for this process. */
-export function claudeNativeSettingsArguments(configDirectory?: string): string[] {
+export function claudeNativeSettingsArguments(
+  configDirectory?: string,
+  suppressedEnvironment: Record<string, string> = {},
+): string[] {
   return [
     '--settings',
     JSON.stringify({
       apiKeyHelper: '',
+      model: 'default',
       env: {
+        ...claudeLaunchEnvironment(),
+        ...suppressedEnvironment,
         ...(configDirectory ? { CLAUDE_CONFIG_DIR: configDirectory } : {}),
-        CLAUDE_CODE_USE_BEDROCK: '',
-        CLAUDE_CODE_USE_VERTEX: '',
-        CLAUDE_CODE_USE_FOUNDRY: '',
-        ANTHROPIC_AUTH_TOKEN: '',
-        ANTHROPIC_API_KEY: '',
-        CLAUDE_CODE_OAUTH_TOKEN: '',
         ANTHROPIC_BASE_URL: officialBase,
-        ANTHROPIC_MODEL: '',
-        ANTHROPIC_SMALL_FAST_MODEL: '',
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: '',
-        ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME: '',
-        ANTHROPIC_DEFAULT_SONNET_MODEL: '',
-        ANTHROPIC_DEFAULT_SONNET_MODEL_NAME: '',
-        ANTHROPIC_DEFAULT_OPUS_MODEL: '',
-        ANTHROPIC_DEFAULT_OPUS_MODEL_NAME: '',
       },
     }),
   ]
@@ -91,11 +196,7 @@ export async function claudeLoopbackAvailable(url: URL, signal: AbortSignal): Pr
   })
 }
 
-export async function readClaudeOwnRoute(
-  project: string,
-  signal: AbortSignal,
-  options: { available?: typeof claudeLoopbackAvailable } = {},
-): Promise<ClaudeOwnRoute> {
+async function readClaudeSettings(project: string, signal: AbortSignal) {
   signal.throwIfAborted()
   const root = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), '.claude')
   if (!isAbsolute(root)) throw new ClaudeOwnRouteError('Claude 账号目录必须使用绝对路径')
@@ -115,20 +216,47 @@ export async function readClaudeOwnRoute(
   const managed = await readFirstPartyJson(claudeManagedSettingsPath())
   signal.throwIfAborted()
   if (
-    Object.entries(process.env).some(
-      ([key, value]) => value && authOption.test(key) && !modelOption.test(key),
-    )
-  )
-    throw new ClaudeOwnRouteError('Claude 检测到环境账号覆盖，请先在该 CLI 自身设置中明确账号来源')
-  if (
-    configured.apiKeyHelper ||
     managed.apiKeyHelper ||
+    managed.forceLoginMethod ||
+    managed.forceLoginOrgUUID ||
+    managed.forceLoginGatewayUrl ||
     (record(managed.env) &&
       Object.entries(managed.env).some(
         ([key, value]) => value && (authOption.test(key) || homeOption.test(key)),
       ))
   )
     throw new ClaudeOwnRouteError()
+  if (Object.entries(env).some(([key, value]) => value && homeOption.test(key)))
+    throw new ClaudeOwnRouteError()
+  const suppressedEnvironment = Object.fromEntries(
+    Object.keys(env)
+      .filter((key) => claudeEnvironment.test(key))
+      .map((key) => [key, '']),
+  )
+  return { root, paths, configured, env, suppressedEnvironment }
+}
+
+/** Official account operations never probe or require an API/proxy route. */
+export async function readClaudeOfficialAccountRoute(
+  project: string,
+  signal: AbortSignal,
+): Promise<ClaudeOwnRoute> {
+  const { root, suppressedEnvironment } = await readClaudeSettings(project, signal)
+  return {
+    kind: 'native',
+    configDirectory: root,
+    sourceIds: [root, 'native:claude-official-login'],
+    suppressedEnvironment,
+  }
+}
+
+export async function readClaudeOwnRoute(
+  project: string,
+  signal: AbortSignal,
+  options: { available?: typeof claudeLoopbackAvailable } = {},
+): Promise<ClaudeOwnRoute> {
+  const { root, paths, configured, env, suppressedEnvironment } = await readClaudeSettings(project, signal)
+  if (configured.apiKeyHelper) throw new ClaudeOwnRouteError()
   if (
     Object.entries(env).some(
       ([key, value]) =>
@@ -152,18 +280,36 @@ export async function readClaudeOwnRoute(
   const loopback = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname.toLowerCase())
   if (loopback && !(await (options.available ?? claudeLoopbackAvailable)(url, signal))) {
     signal.throwIfAborted()
-    return { kind: 'native', configDirectory: root, sourceIds: [root, 'native:claude-official-login'] }
+    return {
+      kind: 'native',
+      configDirectory: root,
+      sourceIds: [root, 'native:claude-official-login'],
+      suppressedEnvironment,
+    }
   }
   signal.throwIfAborted()
   if (!key && !bearer) {
     if (loopback || url.href.replace(/\/$/, '') !== officialBase)
       throw new ClaudeOwnRouteError('Claude 服务已配置，但无法确认该服务的自身凭据')
-    return { kind: 'native', configDirectory: root, sourceIds: [root, 'native:claude-official-login'] }
+    return {
+      kind: 'native',
+      configDirectory: root,
+      sourceIds: [root, 'native:claude-official-login'],
+      suppressedEnvironment,
+    }
   }
+  const modelEnvironment = Object.fromEntries(
+    Object.entries(env).filter(([name, value]) => modelOption.test(name) && typeof value === 'string'),
+  ) as Record<string, string>
+  const model = typeof configured.model === 'string' ? configured.model : undefined
+  const custom = loopback || url.href.replace(/\/$/, '') !== officialBase
   return {
     kind: loopback ? 'proxy' : 'api',
     configDirectory: root,
     sourceIds: paths,
+    modelEnvironment,
+    model,
+    suppressedEnvironment,
     source: {
       provider: 'anthropic',
       credential: { type: 'api', key: bearer || key },
@@ -171,9 +317,12 @@ export async function readClaudeOwnRoute(
       apiType: 'anthropic-messages',
       ...(bearer ? { anthropicAuth: 'bearer' as const } : {}),
       sourceIds: paths,
-      nativeModels: [],
+      nativeModels: custom ? claudeConfiguredModels(env, model) : [],
       nativeFullModelIds: true,
       claudeRoute: loopback ? 'proxy' : 'api',
+      ...(custom ? { claudeConfiguredModels: true } : {}),
+      modelEnvironment,
+      model,
     },
   }
 }
@@ -181,7 +330,9 @@ export async function readClaudeOwnRoute(
 export function claudeRouteStatusArguments(executable: string, route: ClaudeOwnRoute): string[] {
   return [
     executable,
-    ...(route.kind === 'native' ? claudeNativeSettingsArguments(route.configDirectory) : []),
+    ...(route.kind === 'native'
+      ? claudeNativeSettingsArguments(route.configDirectory, route.suppressedEnvironment)
+      : []),
     'auth',
     'status',
     '--json',
@@ -248,8 +399,12 @@ export async function prepareClaudeWorkerLaunch(
   signal.throwIfAborted()
   if (route.kind === 'native')
     return {
-      argv: [argv[0]!, ...claudeNativeSettingsArguments(route.configDirectory), ...argv.slice(1)],
-      env: {},
+      argv: [
+        argv[0]!,
+        ...claudeNativeSettingsArguments(route.configDirectory, route.suppressedEnvironment),
+        ...argv.slice(1),
+      ],
+      env: claudeLaunchEnvironment(),
     }
   if (!route.source) throw new ClaudeOwnRouteError()
   const parent = join(stateDirectory, 'claude-route')
@@ -263,11 +418,12 @@ export async function prepareClaudeWorkerLaunch(
       path,
       JSON.stringify({
         apiKeyHelper: '',
+        model: route.model ?? 'default',
         env: {
+          ...claudeLaunchEnvironment(),
+          ...route.suppressedEnvironment,
+          ...route.modelEnvironment,
           ...(route.configDirectory ? { CLAUDE_CONFIG_DIR: route.configDirectory } : {}),
-          CLAUDE_CODE_USE_BEDROCK: '',
-          CLAUDE_CODE_USE_VERTEX: '',
-          CLAUDE_CODE_USE_FOUNDRY: '',
           ANTHROPIC_BASE_URL: route.source.baseUrl,
           ANTHROPIC_AUTH_TOKEN: route.source.anthropicAuth === 'bearer' ? route.source.credential.key : '',
           ANTHROPIC_API_KEY: route.source.anthropicAuth === 'bearer' ? '' : route.source.credential.key,
@@ -279,7 +435,7 @@ export async function prepareClaudeWorkerLaunch(
     signal.throwIfAborted()
     return {
       argv: [argv[0]!, '--settings', path, ...argv.slice(1)],
-      env: {},
+      env: claudeLaunchEnvironment(),
       cleanup: () => rm(directory, { recursive: true, force: true }),
     }
   } catch (error) {

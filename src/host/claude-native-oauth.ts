@@ -2,6 +2,7 @@ import { StringDecoder } from 'node:string_decoder'
 import { EFFORTS, type ModelChoice } from '../shared/types.ts'
 import { accountEmail } from './account-identity.ts'
 import { ProcessCleanupUnconfirmedError, type ProcessBackend, type RuntimeConfig } from './process.ts'
+import { claudeLaunchEnvironment } from './claude-own-route.ts'
 
 const record = (value: unknown): value is Record<string, any> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
@@ -179,6 +180,7 @@ export async function discoverClaudeNativeOAuth(
     ],
     cwd,
     env: {
+      ...claudeLaunchEnvironment(),
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       DISABLE_TELEMETRY: '1',
       DISABLE_ERROR_REPORTING: '1',

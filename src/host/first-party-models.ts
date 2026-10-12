@@ -1,8 +1,10 @@
 import {
   readClaudeOwnRoute,
-  claudeRouteStatusArguments,
   claudeRouteIdentity,
   ClaudeOwnRouteError,
+  prepareClaudeWorkerLaunch,
+  claudeRemoteModelId,
+  claudeLaunchEnvironment,
 } from './claude-own-route.ts'
 import { constants } from 'node:fs'
 import { lstat, open } from 'node:fs/promises'
@@ -21,6 +23,7 @@ import {
 import { metadataFileFingerprint, NativeCapabilityCache } from './native-capability-cache.ts'
 import { readKimiOAuthModelSources, probeKimiOAuthModels } from './kimi-oauth-models.ts'
 import { readKimiOwnToken } from './kimi-accounts.ts'
+import { ProcessCleanupUnconfirmedError } from './process.ts'
 import {
   assertMimoConfiguration,
   mimoConfigurationFiles,
@@ -53,6 +56,10 @@ export interface FirstPartyModelSource extends AccountModelInput {
   sourceIds: string[]
   claudeRoute?: 'proxy' | 'api'
   nativeFullModelIds?: boolean
+  /** Claude-only explicit native route declarations, never account entitlement evidence. */
+  claudeConfiguredModels?: boolean
+  modelEnvironment?: Record<string, string>
+  model?: string
   nativeModels: { remoteId: string; choice: ModelChoice }[]
 }
 export async function readFirstPartyJson(path: string): Promise<Record<string, any>> {
@@ -451,7 +458,20 @@ export async function readFirstPartyModelSources(
     throw error
   }
   if (route.kind === 'native' || !route.source) return []
-  const raw = await capture(claudeRouteStatusArguments(executable, route))
+  const launch = await prepareClaudeWorkerLaunch(
+    route,
+    [executable, 'auth', 'status', '--json'],
+    join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'cliworker-now'),
+    signal,
+  )
+  let raw: string
+  try {
+    raw = await capture(launch.argv, launch.env)
+  } catch (error) {
+    if (!(error instanceof ProcessCleanupUnconfirmedError) && 'cleanup' in launch) await launch.cleanup?.()
+    throw error
+  }
+  if ('cleanup' in launch) await launch.cleanup?.()
   signal.throwIfAborted()
   try {
     claudeRouteIdentity(route, raw, 0)
@@ -469,7 +489,7 @@ export async function readFirstPartyModelSources(
   }
   const key = await keyFor()
   if (!claudeHelpCapabilities.get(key)) {
-    const help = await capture([executable, '--help'])
+    const help = await capture([executable, '--help'], claudeLaunchEnvironment())
     signal.throwIfAborted()
     if (!help.includes('--model') || !help.includes('--output-format') || !help.includes('--settings'))
       throw new Error('Claude 版本不支持原生来源参数，请升级')
@@ -505,17 +525,29 @@ export async function discoverFirstPartySources(
     }
     signal.throwIfAborted()
     if (scope.state !== 'supported') {
-      if (source.claudeRoute === 'proxy')
+      if (source.claudeConfiguredModels && scope.catalogUnavailable) {
+        for (const { choice } of source.nativeModels) models.set(choice.id, { ...choice, cost: 'unknown' })
+        continue
+      }
+      if (source.claudeRoute)
         throw new ClaudeOwnRouteError(
           scope.state === 'denied'
-            ? 'Claude 本地代理认证失败，请检查代理配置'
-            : 'Claude 本地代理模型目录无法确认，请检查代理服务',
+            ? source.claudeRoute === 'proxy'
+              ? 'Claude 本地代理认证失败，请检查代理配置'
+              : 'Claude 路由认证失败，请检查配置'
+            : source.claudeRoute === 'proxy'
+              ? 'Claude 本地代理模型目录无法确认，请检查代理服务'
+              : 'Claude 路由模型目录无法确认，请检查服务',
         )
       continue
     }
     const nativeModels = source.nativeFullModelIds
       ? scope.models
-          .filter((model) => id(model.id) && !['sonnet', 'opus', 'haiku'].includes(model.id))
+          .filter(
+            (model) =>
+              id(source.claudeRoute ? claudeRemoteModelId(model.id) : model.id) &&
+              !['sonnet', 'opus', 'haiku', 'fable'].includes(model.id),
+          )
           .map((model) => ({
             remoteId: model.id,
             choice: {
@@ -525,8 +557,15 @@ export async function discoverFirstPartySources(
             },
           }))
       : source.nativeModels
-    for (const { remoteId, choice } of nativeModels) {
-      const available = scope.models.find((model) => model.id === remoteId)
+    const candidates = source.claudeConfiguredModels
+      ? [...source.nativeModels, ...nativeModels]
+      : nativeModels
+    for (const { remoteId, choice } of candidates) {
+      const available = scope.models.find(
+        (model) =>
+          model.id === remoteId ||
+          (source.claudeConfiguredModels && model.id === claudeRemoteModelId(remoteId)),
+      )
       if (available) models.set(choice.id, { ...choice, cost: available.cost })
     }
   }

@@ -27,6 +27,8 @@ vi.mock('node:os', async (original) => ({
 vi.mock('../src/host/adapters.ts', () => ({
   resolveCliExecutable: vi.fn(async (cli: string) => `/synthetic/${cli}`),
   captureCatalogMetadata: vi.fn(async () => JSON.stringify(fixture.status)),
+  catalogFor: vi.fn(),
+  validatePreference: vi.fn(),
 }))
 vi.mock('../src/host/first-party-models.ts', async (original) => ({
   ...(await original<typeof import('../src/host/first-party-models.ts')>()),
@@ -36,7 +38,13 @@ vi.mock('../src/host/claude-own-route.ts', async (original) => ({
   ...(await original<typeof import('../src/host/claude-own-route.ts')>()),
   readClaudeOwnRoute: vi.fn(async () =>
     fixture.sources.claude?.length
-      ? { kind: 'api', sourceIds: fixture.sources.claude[0].sourceIds, source: fixture.sources.claude[0] }
+      ? {
+          kind: 'api',
+          sourceIds: fixture.sources.claude[0].sourceIds,
+          source: fixture.sources.claude[0],
+          modelEnvironment: fixture.sources.claude[0].modelEnvironment,
+          model: fixture.sources.claude[0].model,
+        }
       : { kind: 'native', sourceIds: [fixture.home] },
   ),
 }))
@@ -48,7 +56,8 @@ vi.mock('../src/host/agy-windows-account.ts', async (original) => ({
   readWindowsAgyAccount: vi.fn(async () => fixture.windowsAgy ?? { identity: { state: 'unconfigured' } }),
 }))
 import { readCliAccountBinding, readCodexOwnAccountSource } from '../src/host/cli-account-binding.ts'
-import { captureCatalogMetadata } from '../src/host/adapters.ts'
+import { captureCatalogMetadata, catalogFor } from '../src/host/adapters.ts'
+import { authorizeSelection } from '../src/host/authorized-catalog.ts'
 const backend: ProcessBackend = { resolveExecutable: vi.fn(), spawn: vi.fn() }
 let config: RuntimeConfig, project: string
 const write = (path: string, value: unknown, raw = false) => {
@@ -88,6 +97,48 @@ it('binds explicit Claude bearer credentials as API material, including endpoint
   await expect(run('claude')).rejects.toThrow('Claude 官方登录来源无法确认')
   fixture.status = { loggedIn: false, authMethod: 'none' }
   await expect(run('claude')).rejects.toThrow('Claude 官方账号未登录')
+})
+
+it('invalidates Claude preferences when CC Switch changes only its synthetic model mapping', async () => {
+  fixture.status = { loggedIn: true, authMethod: 'oauth_token' }
+  const source = {
+    provider: 'anthropic',
+    credential: { type: 'api', key: 'synthetic-unchanged-router-key' },
+    sourceIds: [join(fixture.home, '.claude/settings.json')],
+    baseUrl: 'https://unchanged-router.example.test',
+    apiType: 'anthropic-messages',
+    anthropicAuth: 'bearer',
+    model: 'sonnet',
+    modelEnvironment: {
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'synthetic-route-a[1m]',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'synthetic-route-opus',
+    },
+  }
+  fixture.sources.claude = [source]
+  const admitted = await run('claude')
+  // Object ordering alone is not a route change.
+  source.modelEnvironment = {
+    ANTHROPIC_DEFAULT_OPUS_MODEL: 'synthetic-route-opus',
+    ANTHROPIC_DEFAULT_SONNET_MODEL: 'synthetic-route-a[1m]',
+  }
+  expect(await run('claude')).toBe(admitted)
+  source.modelEnvironment.ANTHROPIC_DEFAULT_SONNET_MODEL = 'synthetic-route-b[1m]'
+  expect(await run('claude')).not.toBe(admitted)
+  await expect(
+    authorizeSelection(
+      { cli: 'claude', model: 'sonnet', effort: 'default' },
+      backend,
+      config,
+      project,
+      new AbortController().signal,
+      admitted,
+    ),
+  ).rejects.toThrow('账号已变更')
+  expect(catalogFor).not.toHaveBeenCalled()
+  source.modelEnvironment.ANTHROPIC_DEFAULT_SONNET_MODEL = 'synthetic-route-a[1m]'
+  source.model = 'opus'
+  expect(await run('claude')).not.toBe(admitted)
+  expect(admitted).not.toMatch(/synthetic-unchanged-router-key|unchanged-router|synthetic-route-a/)
 })
 
 it('binds supported OpenCode API accounts even alongside an unsupported opaque OAuth account', async () => {
@@ -509,6 +560,8 @@ it('binds the exact selected Claude source snapshot instead of silently rereadin
     anthropicAuth: 'bearer',
     sourceIds: [join(fixture.home, '.claude/settings.json')],
     nativeModels: [],
+    model: 'sonnet',
+    modelEnvironment: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'synthetic-model-a' },
   }
   fixture.sources.claude = [a]
   const admitted = await run('claude')
@@ -523,4 +576,19 @@ it('binds the exact selected Claude source snapshot instead of silently rereadin
   )
   expect(prepared).not.toBe(admitted)
   expect(await run('claude')).toBe(admitted)
+  const remapped = {
+    ...a,
+    modelEnvironment: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'synthetic-model-b' },
+  }
+  fixture.sources.claude = [remapped]
+  expect(await run('claude')).not.toBe(admitted)
+  expect(
+    await readCliAccountBinding('claude', backend, config, project, new AbortController().signal, {
+      kind: 'proxy',
+      sourceIds: a.sourceIds,
+      source: a,
+      model: a.model,
+      modelEnvironment: a.modelEnvironment,
+    }),
+  ).toBe(admitted)
 })

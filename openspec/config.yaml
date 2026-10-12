@@ -16,7 +16,9 @@ context: |
   活跃 CLI 和 retired harness ID 必须区分；外部 Harness 历史不能迁作 Hermes 原生会话或账号。
   项目固定 OpenSpec 开发依赖，通过 pnpm spec 执行（包括技能示例中的裸 openspec 命令），不依赖全局安装。
   不手改 .agents/skills/openspec-* 生成文件；项目规则放本配置与 AGENTS.md。
-  验证命令：pnpm spec:check、pnpm typecheck、pnpm test、pnpm build:preview。
+  当前开发版本为 v0.7.8；只有用户明确批准才增加版本号或提交 GitHub；未批准且未上传 GitHub 的调整属于该版本，可本地分阶段提交。
+  日常只做影响范围对应的最小验收（关联测试、必要 typecheck/preview/平台检查）；全量验收仅在获准的版本发布流程执行。
+  验证入口：pnpm spec:check、pnpm typecheck、pnpm test <关联文件>、pnpm build:preview。
   真实 CLI 调用需已有模型选型授权；检查事件、退出状态和实际产物，模拟或本地目录可读不代表远端成功。
   先隔离 preview 验收，再于无活动任务时正式 build 更新 Desktop；工作流/文档修改无需更新 Desktop。
   Git 使用 /Library/Developer/CommandLineTools/usr/bin/git；只提交本次范围，不推送远程。

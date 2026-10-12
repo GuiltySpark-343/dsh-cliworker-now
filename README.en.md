@@ -17,6 +17,8 @@ Choose a CLI, model and role, dispatch a named agent, follow its work in the sid
 
 </div>
 
+The current development version is **v0.7.8 (unreleased)**. Installation commands below still target the published v0.7.7. Routine changes use focused verification; full acceptance runs during an approved release. Version increases and GitHub uploads require user approval.
+
 **On this page**
 
 [1. Overview](#1-overview) · [2. Features](#2-features) · [3. Screenshots](#3-features-in-the-interface) · [4. Support](#4-requirements-and-cli-support) · [5. Installation](#5-installation-and-updates) · [6. Usage](#6-using-cli-worker-now) · [7. Permissions and FAQ](#7-permissions-data-and-faq) · [8. Development](#8-development-and-verification) · [9. Documentation](#9-documentation-feedback-and-license)
@@ -122,6 +124,12 @@ Verified Kimi managed OAuth model capabilities and Claude command-parameter capa
 Successful extended-CLI catalog queries remove their private temporary directory and extracted native cache after process exit is confirmed. Failed or unconfirmed cleanup preserves the query files and never deletes native account files.
 
 Probe records: [ZCode](doc/zcode-probe.md) · [Grok](doc/grok-probe.md) · [Pi / OMP](doc/pi-omp-probe.md) · [Hermes](doc/hermes-probe.md) · [OpenCode](doc/opencode-probe.md)
+
+### Claude Code with CC Switch
+
+On macOS and Windows, the plugin reads Claude Code's current own settings. With routing disabled, sign in to the official Claude account in the plugin account section. With routing enabled, refresh Claude's model list and select a routed model. Official login and logout preserve CC Switch settings.
+
+Native mappings, including Fable and the `[1m]` context suffix, retain their exact execution IDs. When a gateway does not implement model discovery, only its explicitly configured models are shown, with remote availability stated as unverified. Authentication rejection and query errors do not switch to the official account. Select again after changing routes or mappings; an existing task whose source changed requires a new task.
 
 ## 5. Installation and updates
 
