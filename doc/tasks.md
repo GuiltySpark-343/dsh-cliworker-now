@@ -1005,3 +1005,19 @@
 - [x] 在当前精选列表的独立副本运行 `validateEntries`（4490 条）、`node scripts/generate-readme.mjs`、`git diff --check` 和 `SKIP_PUBLISH_CHECKS=1 node scripts/build-site.mjs`，中英文生成及官网本地构建通过；构建使用 CommandLineTools Git。未部署精选列表官网。
 - [ ] 当前新提交的自动检查及维护者审核/合并：本次快照为 PR check IN_PROGRESS，仍未正式收录；原提交的绿灯不作为新提交已通过的证据。
 - 本轮为目录元数据及发布记录更新，没有改动插件运行时、重新打包/安装插件或调用模型。公开发布报告中的回归及两平台验收未重跑。可复核证据保存于忽略目录 `.test-data/market-submission-6795/v0.7.7/`；源插件仓库只记录本地提交，不推送。
+
+## 2026-10-12：v0.7.8 开发调整，Claude Code 与 CC Switch
+
+- [x] 修复 Claude 自身路由被继承环境误判、Fable 原生字段被拒绝、`[1m]` 模型筛选及官方登录入口被路由前置检查阻塞的问题。状态与任务使用同一私有来源快照，mapping/top-level model 纳入账号绑定；managed 来源与目录重定向继续拒绝。用户 Claude/CC Switch settings、原生账号和历史不被插件改写。
+- [x] 自定义网关未实现 `/models`（404/405）时，仅开放该路由明确配置模型，费用未知且说明远端可用性未核验；401/403、网络/无效响应、取消不回退。官方 API 与其他 CLI 不开放此配置例外。
+- [x] 用户指定当前开发版本为 v0.7.8；已同步 package.json、AGENTS.md、OpenSpec 配置和中英文说明。只有用户批准后才增加后续版本号或上传 GitHub；日常仅关联最小验收，全量验收用于获准的版本发布。公开安装示例保留已发布 v0.7.7。
+- [x] Mac 最小回归：`pnpm --config.verifyDepsBeforeRun=false exec vitest run tests/claude-own-route.test.ts` 为 39 passed；六文件 `accounts.test.ts / cli-account-binding.test.ts / first-party-models.test.ts / claude-native-oauth.test.ts / runtime-account-isolation.test.ts / account-models.test.ts` 使用 `-t 'Claude|claude|declared models|custom model declaration|failed 200|metadata requests'` 为 91 passed、187 项被标题过滤排除。共 130 个相关用例；没有跑全量测试。
+- [x] Host/Client `typecheck`、隔离 `build:preview`、严格 `spec:check`（归档前 12/12）、`git diff --check` 通过。格式检查不作为真实模型验收。
+- [x] Mac 原生只读检查：官方状态正常返回未登录、`auth login --help` 支持 `--claudeai`；当前自身路由状态正常，模型目录 GET 200，13 个目录选项含 3 个配置模型。原 settings 哈希保持不变，私有临时文件清理确认。未启动登录、退出或模型生成。
+- [x] Mac 确认无活动 Worker/账号桥进程，正常退出 Harness 后正式 build 更新原本链接；正常重启，实际插件页显示 v0.7.8、共 1 个组件且运行中。正式 Host 可执行文本与 preview 相同（排除构建路径 region 注释）；本地包 344 文件，不含私有数据。
+- [x] Windows 按原远程手册恢复连接：用户提供重启后 IPv4，新目标通过已固定旧公钥严格校验，仅增添同公钥的新地址别名及更新私有 config.host，原记录/其余字段保留，私有文件 0600。通用重连规则写入 `doc/windows-remote-testing.md`；机器地址和账户材料不入 Git。
+- [x] Windows 原生 Claude 2.1.296 合成最小检查：自身 API settings 状态 exit 0，官方 overlay 状态 exit 1/未登录，官方登录帮助 exit 0 且支持 `--claudeai`；无实际账号读取、授权、模型调用，合成目录清理确认。
+- [x] Windows 对应最小回归 39 + 91 = 130 passed、0 failed；187 项仅为标题过滤排除，选中用例无跳过。测试源码快照和两份原始 JSON 哈希核对，冻结依赖恢复后仅执行两组上述用例。本次合成账号、依赖、缓存及测试进程均清理确认。
+- [x] Windows 安装前无活动 Worker/账号终端且 Harness 已退出；原生安装器 exit 0，本地 v0.7.8 的 339 个 lib 文件及 Host/包哈希与 Mac 构建完全一致。正常启动后 5 个 Harness 进程、调试参数 0；本次原生 Claude、账号授权、测试 run、UI 任务/观察器进程均为 0。不追加 UI 全量验收。
+- 私有证据：`.test-data/claude-078/mac-minimal.json`、`mac-install.json`、`package.json`、`windows/native-probe-report.json`、`windows/minimal-report.json`、`windows/claude-own-route.json`、`windows/claude-related.json`、`windows/install-report.json`、`windows/delivery-summary.json`。本地开发包 `.test-data/claude-078/dsh-cliworker-now-0.7.8.tgz`，SHA-256 `0a6391816d4030435645b7531a5980f53619768422e3071928c2674cd497f953`。不提交凭据、私人远程配置、运行报告或用户既有素材改动；未推送、未发布 GitHub/npm。
+- [x] 本次 OpenSpec 8/8 任务按最小证据核对完成，同步三项主规格后归档至 `openspec/changes/archive/2026-10-12-fix-claude-cc-switch-routing/`；归档后严格校验 11/11，原 Windows/MiMo 活动变更仍保留 34/36 的真实账号验收边界。实现本地提交 `45f95c1`，无远程推送。
