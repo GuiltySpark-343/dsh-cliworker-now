@@ -1054,3 +1054,15 @@
 - Windows 统一排版包原生安装 348/348 文件哈希匹配，正常启动。UIA 测得项目标题与模型标签顶部差 109 屏幕像素，高级标题与路径标签顶部差也为 109；两处标题高度均 44、普通标签高度均 37，初始折叠。证据 `uniform-windows-ui-layout-final.json`；数值为当前缩放后的屏幕物理像素，并非 CSS 参数。
 - Windows 统一排版最终 UI：完整路径输入/恢复/刷新可见可操作，高级区展开前与收起后高度均 121 屏幕像素，无额外折叠留白；模型及强度菜单均 480px，与选择框一致。设置已关闭，无新增偏好写入或模型/登录调用。证据 `uniform-windows-ui-layout-final.json`、`uniform-windows-ui-states.json`、`uniform-windows-ui-menus-final.json`。远程通道继续用于用户随后反馈的 OpenCode 识别问题，相关诊断和最终清理单独记录。
 - 设置页 OpenSpec 4/4 完成；已同步两项主规格，再归档到 `2026-10-12-polish-cli-settings-autosave`。严格校验归档前 13/13、归档后 12/12。原 Windows/MiMo 活动变更继续保留 34/36 未验收边界；未增版本、未上传 GitHub，未跑全量验收。
+
+## 2026-10-12：v0.7.8 Windows OpenCode 识别回归修复
+
+- 用户补充 v0.7.7 能正常识别；Git 对比确认 `021441b`（0.7.7）无桌面归档 helper，`1b12366`（0.7.8）首次新增。不是用户安装丢失：Windows 普通 Node 已核实 npm 原生 CLI 为 PE subsystem 3，桌面另有可用独立 CLI，无手动/部署覆盖或 `.local/bin` 抢占。
+- 真实 Electron 44.0.0 / Node 24.18.1 Host 一次可逆诊断：实际选中 npm `opencode.exe`、explicit=false，却因其旁侧不存在 `resources/app.asar` 抛无 code 的 `Invalid package`。恢复原 bundle 后 SHA-256 与 `6687fe257d20fb6afe1dac9811541598bb711bf02fede56ea0551d762121991c` 一致；没有修改账号/配置。私有证据 `.test-data/opencode-diagnosis-078/actual-host-error.json`、`host-diagnostic-restored.json`；原始路径不入 Git。
+- Windows 安装 helper 改为局部懒加载物理 FS：Electron 内置 `original-fs`，普通 Node `node:fs`。不修改全局 noAsar、不吞异常字符串；继续拒绝损坏 PE、目录假文件、权限错误和显式 GUI。
+- 最小自动验收：`pnpm test tests/windows-desktop-cli-installation.test.ts tests/windows-cli-resolution.test.ts tests/native-launch.test.ts tests/windows-desktop-cli-electron-fs.test.ts` 144/144 通过，新增 Electron synthetic 专项 11/11（执行时修复已落盘，未声称单测 red；真实 red 来自上述 Host 证据）。`pnpm typecheck`、`pnpm build:preview` 通过；最终 bundle 保留局部 runtime `createRequire(import.meta.url)("original-fs")`。日志在该私有目录 `regression.json`、`typecheck.log`、`preview.log`。
+- 修复包 `opencode-electron-078-final.tgz`，v0.7.8；SHA-256 `82134a8f7f870208a8bf90b1a40c92a943f8fa2e8d7a65b9fbe9807d79f77613`，Host `d893e4e321217c2d9a38c51af075fb91698e7a7b7af34508d232472983bf103a`。没有全量验收、登录或模型生成，未升号、未推送。
+- Mac 更新前确认 22 条历史 worker、0 活动、0 账号桥，正常退出后 `pnpm build` 通过并重启。Desktop 链接仍指向本项目、Host hash 与 preview 相同，346/348 库文件字节一致，差异仅限此前已有的两个 Client 构建路径文件。正常重启后 CUA 确认 CLI Worker 面板、三个历史子 Agent 正常显示；本次未打开账号/改偏好或生成，证据 `mac-install.json`、`mac-loaded.json`。
+- Windows 正式安装 348/348 库文件 hash 匹配，实际账号区显示 Z.AI API 登录，入口错误消失，原生目录列出 5 个模型（仅展开未选择）。高级设置自动预填原 npm CLI，store 从 revision 2 无 entry 变为 revision 3 / mode:auto；关闭重开后路径、revision、文件 hash/mtime 均不变。两个模型偏好 hash/mtime 全部未改，无登录/模型生成。证据 `windows-delivery-summary.json`、`fix-store-first.json`、`fix-store-reopened.json` 及 settings 私有目录的 `opencode-fix-ui-*`。
+- 本轮诊断清单 99 文件及额外运输脚本、25 个 UI 任务已清理；正常 Desktop 进程 5、debug 0、活动任务 0。当前安装依赖引用的新 tgz 保留；更新过程发现 pnpm 会重读旧本地 tgz，已从同 hash 副本恢复旧源后成功更新，清理不再删除当前依赖引用的包。Mac 失败的独立探针未产生 fs 结果，不作为验收证据，生成 app/链接已清理。用户随后反馈设置操作弹终端窗口，另立后续调查，不将入口识别通过描述为窗口行为已验收。
+- OpenSpec 6/6 完成，已归档为 `2026-10-13-fix-electron-windows-opencode-detection` 并同步物理安装识别主规格；严格校验归档前 13/13、归档后 12/12。既有 Windows/MiMo 变更保留 34/36 未验证边界。

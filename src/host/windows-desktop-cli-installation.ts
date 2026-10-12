@@ -1,13 +1,5 @@
-import {
-  accessSync,
-  constants,
-  openSync,
-  closeSync,
-  fstatSync,
-  readSync,
-  realpathSync,
-  statSync,
-} from 'node:fs'
+import * as nodeFs from 'node:fs'
+import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { win32, type PlatformPath } from 'node:path'
 import { WindowsCliInstallationError } from './windows-cli-installation.ts'
@@ -161,7 +153,15 @@ export interface WindowsDesktopOptions {
   path?: PlatformPath
   files?: FileQueries
 }
+let physicalFiles: typeof nodeFs | undefined
+/** Installation identity is about disk files, not Electron's virtual ASAR tree. */
+function physicalFs(): typeof nodeFs {
+  return (physicalFiles ??= process.versions.electron
+    ? (createRequire(import.meta.url)('original-fs') as typeof nodeFs)
+    : nodeFs)
+}
 function ordinary(path: string): string | undefined {
+  const { statSync, accessSync, constants, realpathSync } = physicalFs()
   try {
     const info = statSync(path)
     if (!info.isFile() || !info.size) throw new Error('Invalid file')
@@ -173,6 +173,7 @@ function ordinary(path: string): string | undefined {
   }
 }
 function directory(path: string): string | undefined {
+  const { statSync, realpathSync } = physicalFs()
   try {
     return statSync(path).isDirectory() ? realpathSync(path) : undefined
   } catch (error: any) {
@@ -183,6 +184,7 @@ function directory(path: string): string | undefined {
 function pe(path: string): string | undefined {
   const canonical = ordinary(path)
   if (!canonical) return undefined
+  const { openSync, fstatSync, readSync, closeSync } = physicalFs()
   const fd = openSync(canonical, 'r')
   try {
     const info = fstatSync(fd),
@@ -421,6 +423,7 @@ export function windowsOpenCodeDesktopCli(
     // must confirm that case; a standalone console opencode.exe is unchanged.
     let legacyGui = false
     if (!marker && fs.ordinaryFile(executable)) {
+      const { openSync, readSync, closeSync } = physicalFs()
       const fd = openSync(executable, 'r')
       try {
         const head = Buffer.alloc(64),

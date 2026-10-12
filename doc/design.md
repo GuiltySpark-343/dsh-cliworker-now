@@ -619,3 +619,9 @@ Windows 官方源码安装的 distlib 入口在隔离 `HERMES_HOME` 下无法定
 - 后续截图细化：去掉思考强度末行底边，与高级设置之间只保留一条分区线；模型与思考强度菜单跟随选择框实际宽度，左右对齐。
 
 - 设置页排版统一为公共变量：分区标题 14/22/500，普通标签 14/22/400，说明 12/18；内容行上下 16px、标题行后 8px、文字组内 4px。取消相邻分区与末行留白叠加，高级路径内容采用与模型行一致的留白。独立规范见 [设置页统一设计规范](settings-ui-design.md)，AGENTS 与 README 均加入入口，后续扩展必须复用并同步维护。
+
+## 2026-10-12：v0.7.8 修复 Electron 中 Windows OpenCode 识别回归
+
+- v0.7.7（`021441b`）正常 PATH/npm 解析不检查桌面归档；v0.7.8 的 `1b12366` 新增桌面身份检查后，Electron 对不存在的 `resources/app.asar` 抛无 code 的 `Invalid package`，导致正确 npm CLI 被误报不可用。真实 Host 已捕获此异常，不能归因于用户安装或账号。
+- Windows 安装 helper 局部懒加载 Electron 内置 `original-fs`，普通 Node 沿用 `node:fs`；普通文件、权限、真实路径和 PE 检查使用相同物理 FS。不存在的可选归档正常视作不存在，真实归档按磁盘文件处理。保留显式 GUI 拒绝、损坏/权限失败、同安装独立 CLI 核验与路径优先级。
+- 不改变全局 `process.noAsar`，不吞异常字符串、不回退另一 CLI，不新增依赖或存储迁移。最小专项及 Windows Desktop 自动路径验收见 `doc/tasks.md`；版本保持 v0.7.8。

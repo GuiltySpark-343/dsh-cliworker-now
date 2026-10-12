@@ -225,6 +225,8 @@ Windows also discovers ZCode and OpenCode in custom directories through known de
 
 Windows supports the verified official Pi launcher and the native executable declared by the OpenCode npm package. The plugin parses their fixed launch commands and validates installation identity. Unrecognized or broken entries require an installation check. Other Pi versions require SDK/RPC and native menu verification before support is added.
 
+Desktop installation checks use physical files, accounting for Electron's ASAR handling. A valid OpenCode npm CLI does not require a neighboring desktop archive. No CLI reinstall or account reconfiguration is needed.
+
 Settings prioritize the selected CLI and limit background account checks to two at a time. Verified Kimi OAuth model capabilities and Claude command capabilities can be reused briefly, while credentials, expiry and remote allowance are checked again. Windows metadata and embedded account launchers hide additional console windows. Codex reports confirmed exhausted quota separately from unavailable authentication; native model capabilities alone do not establish permission to run a task.
 
 OMP, Pi, Hermes and OpenCode display their own provider and authentication method. Account logins use a concise label such as `OpenAI账号登录`; full safe identity details and other API sources remain in the hover text. API-only authentication uses a label such as `zai.cn API 登录`. Valid authentication is not reduced to a generic “configured” state; model access is checked separately.
