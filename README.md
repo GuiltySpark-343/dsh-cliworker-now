@@ -2,8 +2,6 @@
 
 # dsh-cliworker-now
 
-仓库、安装包与外部目录名称统一为 **dsh-cliworker-now**。DSH 内的插件界面保留 **CLI Worker / CLI Worker Now**；已有会话、账号和设置保持兼容。dshfind 条目迁移完成前，下方徽章仍连接原收录页。
-
 **简体中文** | [English](README.en.md)
 
 **在 DeepSeek Harness 里，给不同 CLI 一个共同的协作空间。**
@@ -20,7 +18,6 @@
 
 </div>
 
-当前版本为 **v0.7.8**。日常调整只做关联最小验收，全量验收用于获准的版本发布。
 
 **阅读导航**
 
