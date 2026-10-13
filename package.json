@@ -58,6 +58,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.host-build.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "build": "node scripts/build.mjs",
+    "prepack": "node scripts/build.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:windows:remote": "node scripts/windows-remote.mjs",
