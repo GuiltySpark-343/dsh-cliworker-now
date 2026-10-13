@@ -166,6 +166,34 @@ GitHub Release fallback:
 dsh plugin --profile desktop add https://github.com/SuperWheel/dsh-cliworker-now/releases/download/v0.7.8/dsh-cliworker-now-0.7.8.tgz
 ```
 
+**Install from GitHub source**
+
+Source builds require Node.js ≥ 22.19 and pnpm callable directly from `PATH`; this project pins pnpm 11.25.0. Run `pnpm --version` before installing to confirm the command is available. If pnpm is missing, follow the [official installation documentation](https://pnpm.io/installation) to set up that version. The installer bundled with Harness does not guarantee that pnpm is available to source builds.
+
+To build directly from GitHub:
+
+```sh
+dsh plugin --profile desktop add github:SuperWheel/dsh-cliworker-now
+```
+
+For the Web profile:
+
+```sh
+dsh plugin --profile web add github:SuperWheel/dsh-cliworker-now
+```
+
+Without `#`, the source comes from the repository's default branch. The existing `v0.7.8` tag predates this build entry point and cannot be used for this source installation. To pin the source, replace `<full-commit-SHA>` with a full commit SHA that includes the source build entry point:
+
+```sh
+dsh plugin --profile desktop add "github:SuperWheel/dsh-cliworker-now#<full-commit-SHA>"
+```
+
+This downloads build dependencies and compiles the plugin, so it usually takes longer than installing a prebuilt package. Default-branch source is separate from the frozen npm stable package. Repeating the install command does not guarantee that it follows the latest HEAD; check the resolved commit.
+
+If an installation or update reports `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` or `ERR_PNPM_IGNORED_BUILDS`, build approval is required. Find the corresponding profile's `pnpm-workspace.yaml` using the path printed by dsh. Add the exact key from the error to the existing `allowBuilds` mapping with a value of `true`, retain all other configuration and rules, and retry the same install command. If `allowBuilds` is absent, add that mapping without replacing the whole file. A different commit may require another approval using the new error's key.
+
+On Windows, source builds can also be affected by long cache or temporary paths. If dependency installation fails, retry with shorter paths or use a prebuilt installation above.
+
 For source development:
 
 ```sh
@@ -176,7 +204,7 @@ pnpm --config.verifyDepsBeforeRun=false build
 dsh plugin --profile desktop add .
 ```
 
-Source installation links the local checkout, so retain that directory. To uninstall:
+The local-directory installation above links the checkout, so retain that directory. To uninstall:
 
 ```sh
 dsh plugin --profile desktop remove dsh-cliworker-now

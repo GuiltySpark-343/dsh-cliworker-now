@@ -1137,3 +1137,20 @@
 - 用户明确选择保留 v0.7.8，Repository/Homepage 留待下一次批准发布时同步。源码及未来打包清单的 repository/bugs/homepage 已指向 `SuperWheel/dsh-cliworker-now`，但已发布 0.7.8 包保留冻结时的旧字段；GitHub 旧链接仍重定向。此要求写入 `doc/release-template.md`，不擅自升号。
 - 双语安装说明、Release 和分发规格已补充安装器等待规则及实际版本核对，不改变主安装行。v0.7.8 Release 已通过 API 精确回读；三个原资产保留。规格严格校验 14/14，通过 diff 检查；运行时代码和版本无改动，未重复全量测试。发布变更为 11/12，4.2 默认 latest 升级保留待办，不归档；npm Host 来源检查失败也保留在本记录中。
 - 市场 PR #6795 的两项检查均成功但仍 OPEN；dshfind PR #51 仍 OPEN、无检查结果，页面迁移继续待维护方处理。私有证据：`.test-data/release-078-sol61/install-078/final-acceptance-receipt.json`、`desktop-install-078/carrier-installed.json`、`release-after-npm-public.json`。
+
+
+## 2026-10-13 npm 安装夹具来源纠正
+
+- 前述两次 Host 验收失败的原因是独立夹具缺少自己的 package.json，SDK 的最近包查找向上归属到开发仓库，从而注册了仓库 Client；不是 npm 包缺少 Client。新增只有唯一 name/private/type 的夹具清单后复验通过，保留原失败记录。
+- 原生 Desktop 独立安装的 npm 0.7.8，362 个文件匹配；Host/Client 均解析到安装目录，appReady 后 appExit(0) 自然退出，未发送终止信号，端口关闭且 PID 消失，清理回执通过。账号/CLI/模型调用为 0。证据 `.test-data/release-078-sol61/desktop-install-078/verified-host/` 三份 host-graph、host-lifecycle、host-cleanup 回执。此结果不替代仍待验证的默认 @latest 年龄等待后升级。
+
+
+## 2026-10-13 GitHub 源码安装最小验收
+
+- 版本保持 0.7.8。新增开发清单 `prepack: node scripts/build.mjs`，用户明确批准后将源码入口提交 `0c68753a70098c3bed4ca36f1c2bc5350510fa56` 推送 main；本次后续说明只修改文档与规格，不改变该提交已验收的构建或运行代码。
+- `pnpm_config_verify_deps_before_run=never pnpm build:preview` 通过。开发清单没有 prepare；冻结 npm/tgz 清单仍无 scripts，SHA-256 保持 `e2eebaebcb0e3cdcd503d070428de668add7288f7eaf8756cb43a8677f4a0f51`。没有正式重建用户 Desktop，也没有重发 npm 或替换 Release 资产。
+- macOS 使用 Desktop 内置 dsh 和独立命名 profile，实际执行不带 `#` 的 GitHub 简写，解析到上述提交；首次被 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` 拒绝，仅按当次确切来源键追加独立 profile 的 allowBuilds 后重试退出 0。prepack 生成 357 个 lib 文件，原生 bundle 登记正确；Host/Client 均从安装目录加载，appReady 后自然 appExit(0)，端口关闭、PID 消失，未发送终止信号。证据 `.test-data/github-source-078/mac/final-receipt.json`。
+- Windows 使用 Desktop 内置 dsh 和独立命名 profile，实际执行固定同一完整 SHA 的 GitHub 简写。外层安装器 pnpm 11.7.0；源码构建要求 PATH 可调用固定 pnpm 11.25.0。首次构建拒绝、缺少 pnpm 命令及后续 `readStream must be readable` 均保留失败回执，不能将这些尝试计为安装通过。
+- Windows 合成对照中，相同环境和 cmd，100 字符 cwd 可正常启动，实际存在的 299 字符 cwd 则 spawn ENOENT 且管道不可读；该目录明确为模拟，不是已被安装器删除的原失败现场。仅将本轮隔离根及缓存移至较短路径、保持依赖/构建脚本和包管理器版本不变后，原生命令退出 0，prepack 完成，357 个 lib 文件及 Host/Client/协议/辅助资产齐备，bundle 原生登记成功。长路径是结合对照与复验支持的原因判断，不把合成探针写成原现场直接证据。成功与失败记录位于 `.test-data/github-source-078/windows/`。安装后的真实 Desktop profile 三项配置哈希保持不变，顶层安装器 close/exit 0 已确认；最后 SSH 超时导致额外 exports 导入探针未上传、未执行，最终全进程退出观测未完成，不能声明 Windows 完整加载或全部后代清理通过。远端隔离安装及缓存保留。
+- 双语 README 和发布模板补齐 Desktop/Web 命令、Node/pnpm 前置条件、精确构建授权、固定 commit、旧 v0.7.8 Tag 限制及 Windows 路径注意事项。主规格同步 GitHub 源码安装需求；`pnpm spec:check` 严格校验通过，相关差异检查通过。
+- 本次仅最小构建/安装验收，真实账号查询、登录和模型调用为 0。未运行全量回归、Web profile 独立实装、全部 CLI 生成或 Windows 完整 Host/UI 生命周期；用户实际 Desktop profile 与全局构建保护未修改。默认 npm @latest 年龄等待后的升级仍保持原待办。

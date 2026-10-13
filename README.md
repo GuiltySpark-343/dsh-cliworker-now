@@ -165,6 +165,34 @@ GitHub Release 备用安装：
 dsh plugin --profile desktop add https://github.com/SuperWheel/dsh-cliworker-now/releases/download/v0.7.8/dsh-cliworker-now-0.7.8.tgz
 ```
 
+**GitHub 源码安装**
+
+源码构建需要 Node.js ≥ 22.19，以及可从 `PATH` 直接调用的 pnpm；项目固定使用 pnpm 11.25.0。安装前先运行 `pnpm --version` 确认命令可用。若尚未安装 pnpm，请参考[官方安装文档](https://pnpm.io/installation)准备该版本；Harness 内置安装器不保证为源码构建提供可调用的 pnpm。
+
+需要直接从 GitHub 构建时，可使用：
+
+```sh
+dsh plugin --profile desktop add github:SuperWheel/dsh-cliworker-now
+```
+
+Web profile 使用：
+
+```sh
+dsh plugin --profile web add github:SuperWheel/dsh-cliworker-now
+```
+
+不带 `#` 时使用仓库默认分支。已有的 `v0.7.8` Tag 早于本入口，不能用作这条源码安装命令的引用。要固定源码，将 `<完整提交SHA>` 替换为包含源码构建入口的完整提交 SHA：
+
+```sh
+dsh plugin --profile desktop add "github:SuperWheel/dsh-cliworker-now#<完整提交SHA>"
+```
+
+此方式需要下载构建依赖并编译，通常比预构建包慢；默认分支源码不等同于已冻结的 npm 稳定包。重复执行安装命令不保证自动追踪最新 HEAD，请核对实际解析的提交。
+
+安装或更新若提示 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` 或 `ERR_PNPM_IGNORED_BUILDS`，需要授权构建。按 dsh 输出找到对应 profile 的 `pnpm-workspace.yaml`，把报错给出的确切键新增到已有 `allowBuilds` 中并设为 `true`；保留所有原有配置和其他规则，再重试同一安装命令。若尚无 `allowBuilds`，只新增该映射，不替换整个文件。更新到其他提交时，可能需要按新提示追加授权。
+
+Windows 源码构建还可能受缓存或临时目录路径长度影响；若在依赖安装阶段失败，可缩短相关路径后重试，或改用上面的预构建安装方式。
+
 从源码开发：
 
 ```sh
@@ -175,7 +203,7 @@ pnpm --config.verifyDepsBeforeRun=false build
 dsh plugin --profile desktop add .
 ```
 
-源码安装会链接本地目录，因此该目录需要保留。卸载使用：
+上述本地目录安装会链接源码目录，因此该目录需要保留。卸载使用：
 
 ```sh
 dsh plugin --profile desktop remove dsh-cliworker-now

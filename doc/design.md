@@ -649,3 +649,10 @@ Windows 官方源码安装的 distlib 入口在隔离 `HERMES_HOME` 下无法定
 GitHub 仓库、npm 包、Release 标题及外部目录统一使用 `dsh-cliworker-now`。用户明确要求 DSH 内的插件界面保持原名，因此页签、侧栏、设置弹窗、按钮提示及 Host 文案继续使用原有 CLI Worker / CLI Worker Now。准备中的界面改名已撤回，没有覆盖正式 Desktop。
 
 Cordis patch id `cliworker-now`、Gateway `cliworker`、工具 `cliworker_*`、私有目录与既有会话/账号全部保持。GitHub 改名保留仓库 ID 和旧地址重定向；不重建旧名仓库。当前源码仍为 0.7.8，已提交 npm 的冻结包不覆盖；未来打包的 repository、bugs 与 homepage 改为新地址。dshfind 主键迁移与下载量探测须由有维护权限的一方执行，提交 PR 不等于公开页面已更新。
+
+
+## 2026-10-13 GitHub 源码安装
+
+新增 `github:SuperWheel/dsh-cliworker-now` 安装入口，开发清单以 `prepack` 复用完整构建；Git 源码没有 lib 时由原生安装器在获准后安装开发依赖并构建。普通 `pnpm install` 不因此重建 Desktop 链接；本地 `pnpm pack` 会触发构建，必须在隔离副本或确认无活动任务后执行。
+
+源码安装需要 Node.js >=22.19，且 PATH 中可直接调用项目指定的 pnpm 11.25.0；Harness 内置安装器不保证为嵌套构建提供 pnpm 命令。安装器继续管理构建授权，按当次错误中完整来源标识向目标 profile 的 `allowBuilds` 追加规则；插件不修改用户规则、不放开所有脚本。不带引用解析默认分支，固定完整 commit 可复现来源，已有锁文件可能保留旧提交。Git 源安装与 npm/Release 冻结预构建包分开；公开打包清单仍删除 scripts，本次保持 0.7.8 和已发布资产不变。
