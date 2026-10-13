@@ -1,4 +1,4 @@
-# CLI Worker Now
+# dsh-cliworker-now
 
 ## 目标与边界
 
@@ -24,7 +24,8 @@
 - 先用 `pnpm build:preview` 构建隔离包并测试，再正式构建更新 Desktop 链接；更新前确认无活动任务。不得覆盖现有会话、密钥或不相关配置。
 - 真实 CLI 完成说明不是验收证据；必须检查事件、退出状态及实际产物。
 - 更新用户行为、协议或安装方式时同步 README 和设计文档。只报告真正执行过的测试。
-- GitHub Release 标题统一为 `cliworker-now v<版本号>`；正文沿用 v0.7.7 的章节结构，发布前按 `doc/release-template.md` 填写并核对实际验收证据。
+- 外部分发名称统一为 `dsh-cliworker-now`；DSH 内已安装插件的界面名称保留 `CLI Worker / CLI Worker Now`，不因仓库改名修改页签、标题、设置弹窗或按钮提示。
+- GitHub Release 标题统一为 `dsh-cliworker-now v<版本号>`；正文沿用 v0.7.7 的章节结构，发布前按 `doc/release-template.md` 填写并核对实际验收证据。
 - 使用 `/Library/Developer/CommandLineTools/usr/bin/git`；按阶段提交，不推送远程。
 
 ## OpenSpec 工作流

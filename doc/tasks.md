@@ -1098,3 +1098,31 @@
 - 隔离 preview、Host/Client 类型检查、Windows 新生成 Gateway 类型检查和 Host import 全通过。139 个源码文件与 preview 一致；最终构建 357 个 lib 文件，Client 仅构建位置 region 注释/映射与 preview 不同，可执行内容相同；源码与两份 account-models helper 的哈希一致。严格 OpenSpec 校验 13/13 通过。
 - Mac 正式构建前确认 Harness 已退出、22 个历史 Worker 中活动数为 0、无账号/任务 bridge。真实 Desktop 看见 Codex 7 项含 GPT-6.1-Sol/GPT-6-Astra/GPT-6-Luna，原 GPT-5.6-Luna Low 保留；Claude 自身 API 路由显示 13 项及配置候选边界说明。重复打开与手动刷新同目录不改 inode/mtime，重启后 Antigravity 重识别同值不写，Codex 6→7 项变化更新；8 个偏好文件哈希不变，缓存文件均 0600。设置分隔线、标题、折叠路径区、菜单等宽已实际渲染核验。
 - 待发布候选包共 362 个文件，公共清单 `private:false`、无生命周期脚本/开发依赖/私有资料/链接；开发清单仍 `private:true`。tgz SHA-256：`e2eebaebcb0e3cdcd503d070428de668add7288f7eaf8756cb43a8677f4a0f51`。Host：`31914eb59a1439b72e53e2416a8d266ae35516bcd08cf34d413a55b05da1f7aa`；Client：`bb57da4ca8df6416b5c65f08711f9ab9f330ece075932c6d098176b697ad6f5e`。此阶段完成自动检查和 Mac UI；Windows 最终包 UI、远端 CI 与公开分发回下载将在后续记录，不能提前视为完成。
+
+## v0.7.8 发布收尾（2026-10-13）
+
+- 用户已明确批准使用 GPT-6.1 Sol 全量验收，以及 GitHub、npm、dshmarket 提交更新；当前发布版本仍为 v0.7.8，没有增加后续版本号。
+- 最终源码提交 `220cd8896be0340eb2b980e8866d034e82e9e424`。Mac 全量 101 个文件、2198 项断言中 2190 通过、8 个平台跳过、0 失败；Windows 2179 通过、19 个平台跳过、0 失败。类型检查、隔离构建及 Windows Host 加载通过。跳过项是平台权限、shebang、文件链接及 POSIX 信号语义等，不计入通过数。
+- Mac 正式 Desktop 核验模型/强度菜单、统一样式、默认折叠高级设置、关闭重开、宿主重启及手动刷新：Codex 显示 7 个当前账号模型（含 GPT-6.1-Sol、GPT-6-Astra、GPT-6-Luna），Claude 显示 13 个自身路由候选。目录变化时更新，同内容刷新不重写；8 份项目偏好哈希保持不变，缓存权限为 0600。
+- Windows 最终公开候选包经原生安装器安装，357 个 lib 文件逐一匹配，11 个 CLI 设置页中 9 个目录就绪，Kimi 凭据过期和 Grok 账号无法确认保持明确不可选原因。Codex 7 个模型及真实强度、Claude 4 个原生配置 ID、OpenCode/ZCode 路径管理均已实机读回。同宿主重复打开复用目录；首次重新识别期间保留加载状态。
+- Windows 最终包全局窗口观察持续 602704 ms，补充保存反馈观察 90641 ms，两段均自然停止且可见终端事件 0。最终包重选原 Antigravity 模型验证自动保存反馈（此前基线对 MiMo 也作一次同值重选），没有选择其他模型或强度；两份偏好内容哈希保持不变，仅同值保存更新时间。关闭设置发生在观察结束后，不将关闭动作计作被窗口观察覆盖。
+- 实际 Windows Electron 44 / 宿主 SDK 下的合成 ConPTY 停止和自然退出（退出码 7）均通过：真实 TTY、参数字面值、stdin 往返、原生 PID、后代退出和无关进程保留均核实；没有应急杀进程，1 条已知 SDK 提示、0 条意外提示。最终活动 Worker、ready 账号 scope、账号 owner、测试任务、观察器及所属辅助进程均为 0；保留现有持久账号目录、历史和正常 Desktop。
+- GitHub CI [38333156799](https://github.com/SuperWheel/dsh-cliworker-now/actions/runs/38333156799) 对上述精确提交成功。公开 tgz 有 362 个普通文件，无符号链接、私有日志或生命周期脚本；root manifest 保持 private，公开 manifest 为可发布预构建包。SHA-256：`e2eebaebcb0e3cdcd503d070428de668add7288f7eaf8756cb43a8677f4a0f51`；Host `31914eb59a1439b72e53e2416a8d266ae35516bcd08cf34d413a55b05da1f7aa`，Client `bb57da4ca8df6416b5c65f08711f9ab9f330ece075932c6d098176b697ad6f5e`。
+- GitHub v0.7.8 Release 已公开，三项资产经匿名回下载匹配。npm 发布命令成功退出并返回 PUT 202，但截至 2026-10-13 02:41:56 UTC，公开 0.7.8 元数据仍返回 404、latest 仍为 0.7.7；未重复发布、未撤包，公开传播待完成。
+- 旧版独立安装已验证无版本安装不能保证升级、@latest 可以升级至当时公开的 0.7.7。由于 0.7.8 尚未公开，本版 npm 回下载与 0.7.7→0.7.8 升级没有执行，继续保留待办，不能声称通过。
+- 市场沿用 [PR #6795](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6795)，最新提交 `68a970fcfaef364663a13f510e594373b291c3ac` 同步新仓库名、条目名与 v0.7.8 固定 tarball；已推送并读回远端，状态 OPEN，市场审核状态单独记录，不声称官网已经上架。
+- 真实账号登录及模型生成均未执行。Claude 本机辅助目录的授权独立 GET 返回成功原始空数组；配置候选只表示用户路由配置，不能声称已通过生成。Kimi/Grok 账号受阻不计为目录就绪；平台层、合成验收与真实第三方生成严格分开。
+- 本地私有证据保存在 `.test-data/release-078-sol61/`：`mac-final-after-platform-fixtures.json`、`mac-final-ui-verification.json`、`windows/final-delivery-summary.json`、`windows/final-platform-skips.json`、`github-ci.json`、`publish-assets/package-verification.json` 及公开安装下载报告。凭据、机器连接信息和原始运行记录未入 Git。
+- Release 标题按用户新增要求改为 `dsh-cliworker-now v0.7.8`，正文沿用 v0.7.7 的 `## 版本`、简介、`### 更新`、`### 安装或更新`、`### 验证` 层级；通过 GitHub API 读回精确核对。规范和可复制 Markdown 模板保存至 `doc/release-template.md`，并加入 `AGENTS.md` 的交付约定，提交 `f24f5f3`。
+- 主规格已按最终实现同步，严格校验通过；npm 公开下载/升级仍未完成，因此发布变更保持活动，不提前归档。
+
+## 2026-10-13 外部分发改名与安装界面保留
+
+- 用户要求仓库及外部插件名称统一为 `dsh-cliworker-now`，随后明确 DSH 中已安装插件的界面名称全部不改。最终只保留分发文档、打包元数据、GitHub/Release 和目录提交修改；准备中的全部运行时、界面及关联测试改动已逐字节恢复至本次改名前 HEAD，正式 Desktop 未被覆盖。
+- GitHub 仓库已改为 `SuperWheel/dsh-cliworker-now`，repo ID 保持 `1407409202`、Stars 保持 4，本地 origin 已同步；5 个 Release 标题均为 `dsh-cliworker-now v<版本号>`。旧仓库 API 自动指向新名，旧新 v0.7.8 tgz 下载均为 HTTP 200、16395067 字节、同一 `e2eeba…f51` SHA-256。完整哈希见前述发布记录。
+- npm 包原本已名为 `dsh-cliworker-now`。当前 package、未来公开包生成器的 repository/bugs/homepage 指向新仓库，开发 private 标志仍为 true；没有覆盖已冻结包、修改版本或改变账号/会话路径。Release 模板按新外部名称更新，安装界面原名要求写入 AGENTS.md。
+- 市场沿用 PR #6795，新文件为 `data/plugins/SuperWheel__dsh-cliworker-now.yml`，只有一个本插件条目；条目/PR 名称、仓库与包链接均回读匹配。全目录 schema 4415 条、双语生成和站点构建通过，远端审核保持 OPEN，不声称已上架。
+- dshfind 原条目安装探测停留 0.6.5；下载采集需站点维护权限。只读快照 npm 官方 462、npmmirror 25（2026-10-10 至 2026-10-13），按目录 npm 渠道为 487，GitHub 全部 Release 资产 29 单独记录；这些不是独立用户数，也没有写死进页面。
+- 已提交 [dshfind PR #51](https://github.com/hikariming/dshfind/pull/51)，提交 `bd643d647c3f51ab86938bc3c983c1b9ee0f880f`，仅修改三文件：本插件旧新名映射、经核验的历史 npm 回链兼容和回归；44 项辅助函数测试通过。没有改变其他别名策略、全站下载门槛或工作流；没有 D1 写入/部署权限，因此主键迁移与公开页面刷新仍待维护方完成，保留未勾选任务。维护步骤见 `doc/dshfind-sync.md`。
+- 名称预览曾执行 318 项关联检查及 typecheck，但用户澄清后对应实现已撤回，不将这些当作当前新增功能。最终运行时/测试零 diff，139 个源码文件与重新生成的隔离 preview 全部一致，冻结包哈希不变；浏览器复查恢复 CLI Worker NOW。此次外部分发修改未重复全量或真实模型调用。
+- 私有证据：`.test-data/dshfind-078/` 中 repository-rename、redirect-verification、release-names-after、ui-preserved-final、dshfind-pr-receipt，以及市场 canonical-market-update-receipt；均未作为运行数据提交 Git。

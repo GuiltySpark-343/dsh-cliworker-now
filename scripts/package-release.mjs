@@ -215,9 +215,9 @@ const manifest = Object.fromEntries(
 )
 Object.assign(manifest, {
   private: false,
-  repository: { type: 'git', url: 'git+https://github.com/SuperWheel/cliworker-now.git' },
-  bugs: { url: 'https://github.com/SuperWheel/cliworker-now/issues' },
-  homepage: 'https://github.com/SuperWheel/cliworker-now#readme',
+  repository: { type: 'git', url: 'git+https://github.com/SuperWheel/dsh-cliworker-now.git' },
+  bugs: { url: 'https://github.com/SuperWheel/dsh-cliworker-now/issues' },
+  homepage: 'https://github.com/SuperWheel/dsh-cliworker-now#readme',
   publishConfig: { access: 'public', registry: 'https://registry.npmjs.org/' },
 })
 

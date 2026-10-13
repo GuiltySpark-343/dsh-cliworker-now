@@ -1,8 +1,8 @@
 # GitHub Release 正文模板
 
-沿用 [v0.7.7 Release](https://github.com/SuperWheel/cliworker-now/releases/tag/v0.7.7) 的正文结构。此文件是项目发布文档，供后续版本复用。
+沿用 [v0.7.7 Release](https://github.com/SuperWheel/dsh-cliworker-now/releases/tag/v0.7.7) 的正文结构。此文件是项目发布文档，供后续版本复用。
 
-- Release 标题统一为 `cliworker-now vX.Y.Z`，Tag 为 `vX.Y.Z`；将 `X.Y.Z` 替换为本次版本号。
+- Release 标题统一为 `dsh-cliworker-now vX.Y.Z`，Tag 为 `vX.Y.Z`；将 `X.Y.Z` 替换为本次版本号。
 - 正文依次为 `## vX.Y.Z`、一段简介、`### 更新`、`### 安装或更新`、`### 验证`。更新与验证使用一层项目符号，不嵌套。
 - 简介说明本次解决的问题；更新项按最终交付行为撰写，不照搬历史版本内容或放入内部实施过程。
 - 推荐命令保持单行，使用已验证的 `@latest`；发布时核对 npm `latest` 指向本版。tgz 备用链接固定到本次版本，不另加第二个安装代码块。
@@ -11,7 +11,7 @@
 
 ## 可复制正文
 
-Release 标题：`cliworker-now vX.Y.Z`
+Release 标题：`dsh-cliworker-now vX.Y.Z`
 
 ````markdown
 ## vX.Y.Z
@@ -34,13 +34,13 @@ dsh plugin --profile desktop add dsh-cliworker-now@latest
 
 每次执行此命令，都会安装或更新到 npm 的 `latest` 标签指向的版本；启动 Harness 本身不会自动更新插件。完成后重新打开 Harness。无需克隆或构建项目。
 
-也可使用本版[预构建 tgz](https://github.com/SuperWheel/cliworker-now/releases/download/vX.Y.Z/dsh-cliworker-now-X.Y.Z.tgz) 作为安装来源。无需克隆或构建项目。
+也可使用本版[预构建 tgz](https://github.com/SuperWheel/dsh-cliworker-now/releases/download/vX.Y.Z/dsh-cliworker-now-X.Y.Z.tgz) 作为安装来源。无需克隆或构建项目。
 
 ### 验证
 
 - macOS 完整回归：<通过数> 通过、<跳过数> 跳过、<失败数> 失败；<本次实际执行的类型检查、隔离构建、正式构建和规格校验结果>。
 - Windows 完整回归：<通过数> 通过、<跳过数> 跳过、<失败数> 失败；<平台专属跳过原因及对应验证范围>。
-- [GitHub CI](https://github.com/SuperWheel/cliworker-now/actions/runs/<run-id>)：<本次检查结果与实际覆盖范围；仅在 CI 提供测试统计时填写数字>。
+- [GitHub CI](https://github.com/SuperWheel/dsh-cliworker-now/actions/runs/<run-id>)：<本次检查结果与实际覆盖范围；仅在 CI 提供测试统计时填写数字>。
 - macOS / Windows 实际 Desktop：<本次实际核验的安装版本、设置交互、账号状态或进程生命周期结果>。
 - 独立 profile 的固定 npm 版本安装：<安装版本、Host 加载结果及文件核对结果>；`@latest` 从 <旧版本> 升级至 vX.Y.Z：<实际核对结果>。
 - GitHub Release 与 npm 公开安装包：<远端下载核对结果>；SHA-256：`<本次公开包的 64 位哈希>`。包不包含账号凭据、私人连接配置或运行日志。

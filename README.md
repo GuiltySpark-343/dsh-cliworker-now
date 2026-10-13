@@ -1,6 +1,8 @@
 <div align="center">
 
-# CLI Worker Now
+# dsh-cliworker-now
+
+仓库、安装包与外部目录名称统一为 **dsh-cliworker-now**。DSH 内的插件界面保留 **CLI Worker / CLI Worker Now**；已有会话、账号和设置保持兼容。dshfind 条目迁移完成前，下方徽章仍连接原收录页。
 
 **简体中文** | [English](README.en.md)
 
@@ -8,13 +10,13 @@
 
 选择 CLI、模型和角色，派出有名字的智能体；在侧栏查看过程、接收结果，并继续同一个任务。
 
-[![Release](https://img.shields.io/github/v/release/SuperWheel/cliworker-now?color=4176e6)](https://github.com/SuperWheel/cliworker-now/releases/latest)
+[![Release](https://img.shields.io/github/v/release/SuperWheel/dsh-cliworker-now?color=4176e6)](https://github.com/SuperWheel/dsh-cliworker-now/releases/latest)
 [![Harness](https://img.shields.io/badge/DeepSeek_Harness-0.2.0--rc.2-555)](https://github.com/deepseek-ai/deepseek-harness)
 [![Platform](https://img.shields.io/badge/Platforms-macOS%20%7C%20Windows-555)](#4-环境与-cli-支持)
 [![License](https://img.shields.io/badge/License-MIT-555)](LICENSE)
 [![dshfind](https://dshfind.com/api/badge/SuperWheel/cliworker-now?lang=zh)](https://dshfind.com/zh/plugins/SuperWheel/cliworker-now?ref=badge)
 
-[下载安装包](https://github.com/SuperWheel/cliworker-now/releases/latest) · [安装方法](#5-安装与更新) · [开始使用](#6-使用方法) · [反馈问题](https://github.com/SuperWheel/cliworker-now/issues)
+[下载安装包](https://github.com/SuperWheel/dsh-cliworker-now/releases/latest) · [安装方法](#5-安装与更新) · [开始使用](#6-使用方法) · [反馈问题](https://github.com/SuperWheel/dsh-cliworker-now/issues)
 
 </div>
 
@@ -26,7 +28,7 @@
 
 ## 1. 项目定位
 
-CLI Worker Now 是 **DeepSeek Harness 的独立多 CLI 智能体插件**。它把分散在终端中的外部 AI CLI，接入 Harness 的主对话和右侧栏：主对话负责派遣与接收结果，侧栏负责展示各个智能体的任务、对话和状态。
+dsh-cliworker-now 是 **DeepSeek Harness 的独立多 CLI 智能体插件**。它把分散在终端中的外部 AI CLI，接入 Harness 的主对话和右侧栏：主对话负责派遣与接收结果，侧栏负责展示各个智能体的任务、对话和状态。
 
 适合已经使用多个 AI CLI，希望集中管理任务、反复调用同一位助手的人。你仍然使用各 CLI 自己的账号、模型与原生会话，插件负责把这些工作组织起来。
 
@@ -51,7 +53,7 @@ CLI Worker Now 是 **DeepSeek Harness 的独立多 CLI 智能体插件**。它�
 
 ## 3. 功能与界面效果
 
-以下效果图均直接拍摄于 **DeepSeek Harness Desktop 0.2.0-rc.2 + CLI Worker Now v0.6.5**。为公开展示新建了独立演示会话，使用 Antigravity 的 `gemini-3.8-flash / low` 真实执行一条欢迎语任务。
+以下效果图均直接拍摄于 **DeepSeek Harness Desktop 0.2.0-rc.2 + CLI Worker Now v0.6.5（历史名称）**。为公开展示新建了独立演示会话，使用 Antigravity 的 `gemini-3.8-flash / low` 真实执行一条欢迎语任务。
 
 当前版本使用用户选定的[天蓝平切 Logo](doc/assets/project-icon/official-v4/README.md)：入口使用原彩色图，标题随浅色／深色主题显示相同轮廓的黑／白版。下面的历史截图仍为 v0.6.5。
 
@@ -59,7 +61,7 @@ CLI Worker Now 是 **DeepSeek Harness 的独立多 CLI 智能体插件**。它�
 
 按 CLI 分组查看智能体，筛选进行中、已完成和异常任务。进入某个智能体后，可以查看独立对话、公开执行记录和用量，在本轮结束后继续交流。
 
-![Harness 主对话与 CLI Worker 任务总览：真实欢迎语演示](doc/assets/readme/overview.jpg)
+![Harness 主对话与 dsh-cliworker-now 任务总览：真实欢迎语演示](doc/assets/readme/overview.jpg)
 
 点击右侧任务卡片，进入这位智能体的独立对话。主对话和子对话各自保留记录。
 
@@ -161,14 +163,14 @@ dsh plugin --profile web add dsh-cliworker-now@latest
 GitHub Release 备用安装：
 
 ```sh
-dsh plugin --profile desktop add https://github.com/SuperWheel/cliworker-now/releases/download/v0.7.8/dsh-cliworker-now-0.7.8.tgz
+dsh plugin --profile desktop add https://github.com/SuperWheel/dsh-cliworker-now/releases/download/v0.7.8/dsh-cliworker-now-0.7.8.tgz
 ```
 
 从源码开发：
 
 ```sh
-git clone https://github.com/SuperWheel/cliworker-now.git
-cd cliworker-now
+git clone https://github.com/SuperWheel/dsh-cliworker-now.git
+cd dsh-cliworker-now
 pnpm install --frozen-lockfile
 pnpm --config.verifyDepsBeforeRun=false build
 dsh plugin --profile desktop add .
@@ -368,7 +370,7 @@ pnpm --config.verify-deps-before-run=false build:preview
 pnpm --config.verify-deps-before-run=false smoke:extended --help
 ```
 
-v0.6.15 通过类型检查、1112 项本机回归及真实 Windows 运行层检查；Windows CI 的源码与日志可从 [验证工作流](https://github.com/SuperWheel/cliworker-now/actions/workflows/windows.yml) 查看。各 CLI 的真实验收范围请看第 4 节和 [实际验证记录](doc/tasks.md)。
+v0.6.15 通过类型检查、1112 项本机回归及真实 Windows 运行层检查；Windows CI 的源码与日志可从 [验证工作流](https://github.com/SuperWheel/dsh-cliworker-now/actions/workflows/windows.yml) 查看。各 CLI 的真实验收范围请看第 4 节和 [实际验证记录](doc/tasks.md)。
 
 开发变更使用 **OpenSpec** 管理方案、增量规格与任务；按变更逐步补齐规格，保留现有设计和验收历史。依赖已固定在项目中，安装后可运行：
 
@@ -387,6 +389,6 @@ Codex 中选择 `openspec-propose` 技能准备方案，再用 `openspec-apply-c
 - [历史版本与详细配置](doc/version-notes.md)：逐版本变更、适配器配置及限制。
 - [角色预设](doc/role-presets.md)：默认智能体的职责与边界。
 - [效果图来源与隐私处理](doc/assets/readme/README.md)：原生截图来源与隐私说明。
-- [提交 Issue](https://github.com/SuperWheel/cliworker-now/issues)：请附 Harness / 插件 / CLI 版本、复现步骤与已脱敏日志；不要上传账号令牌或私人项目内容。
+- [提交 Issue](https://github.com/SuperWheel/dsh-cliworker-now/issues)：请附 Harness / 插件 / CLI 版本、复现步骤与已脱敏日志；不要上传账号令牌或私人项目内容。
 
 项目采用 [MIT License](LICENSE)，是独立社区插件。DeepSeek Harness 及各 CLI 的名称、图标和商标归各自权利人所有，不表示官方关联或背书。

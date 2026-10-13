@@ -2,18 +2,20 @@
 
 <div align="center">
 
-# CLI Worker Now
+# dsh-cliworker-now
+
+The repository, installation package and external listings use **dsh-cliworker-now**. The installed DSH interface keeps **CLI Worker / CLI Worker Now**, including existing sessions, accounts and preferences.
 
 **A shared workspace for your AI CLIs inside DeepSeek Harness.**
 
 Choose a CLI, model and role, dispatch a named agent, follow its work in the sidebar, and continue the same task.
 
-[![Release](https://img.shields.io/github/v/release/SuperWheel/cliworker-now?color=4176e6)](https://github.com/SuperWheel/cliworker-now/releases/latest)
+[![Release](https://img.shields.io/github/v/release/SuperWheel/dsh-cliworker-now?color=4176e6)](https://github.com/SuperWheel/dsh-cliworker-now/releases/latest)
 [![Harness](https://img.shields.io/badge/DeepSeek_Harness-0.2.0--rc.2-555)](https://github.com/deepseek-ai/deepseek-harness)
 [![Platform](https://img.shields.io/badge/Harness-macOS%20%7C%20Windows-555)](#4-requirements-and-cli-support)
 [![License](https://img.shields.io/badge/License-MIT-555)](LICENSE)
 
-[Download](https://github.com/SuperWheel/cliworker-now/releases/latest) · [Install](#5-installation-and-updates) · [Get started](#6-using-cli-worker-now) · [Report an issue](https://github.com/SuperWheel/cliworker-now/issues)
+[Download](https://github.com/SuperWheel/dsh-cliworker-now/releases/latest) · [Install](#5-installation-and-updates) · [Get started](#6-using-dsh-cliworker-now) · [Report an issue](https://github.com/SuperWheel/dsh-cliworker-now/issues)
 
 </div>
 
@@ -21,11 +23,11 @@ The current version is **v0.7.8**. Routine changes use focused verification; ful
 
 **On this page**
 
-[1. Overview](#1-overview) · [2. Features](#2-features) · [3. Screenshots](#3-features-in-the-interface) · [4. Support](#4-requirements-and-cli-support) · [5. Installation](#5-installation-and-updates) · [6. Usage](#6-using-cli-worker-now) · [7. Permissions and FAQ](#7-permissions-data-and-faq) · [8. Development](#8-development-and-verification) · [9. Documentation](#9-documentation-feedback-and-license)
+[1. Overview](#1-overview) · [2. Features](#2-features) · [3. Screenshots](#3-features-in-the-interface) · [4. Support](#4-requirements-and-cli-support) · [5. Installation](#5-installation-and-updates) · [6. Usage](#6-using-dsh-cliworker-now) · [7. Permissions and FAQ](#7-permissions-data-and-faq) · [8. Development](#8-development-and-verification) · [9. Documentation](#9-documentation-feedback-and-license)
 
 ## 1. Overview
 
-CLI Worker Now is an **independent multi-CLI agent plugin for DeepSeek Harness**. It connects external AI CLIs to the main conversation and right sidebar: the main conversation dispatches work and receives results, while the sidebar holds each agent's tasks, conversation and status.
+dsh-cliworker-now is an **independent multi-CLI agent plugin for DeepSeek Harness**. It connects external AI CLIs to the main conversation and right sidebar: the main conversation dispatches work and receives results, while the sidebar holds each agent's tasks, conversation and status.
 
 It is designed for people who already use several AI CLIs and want to manage their work in one place. Each CLI keeps its own account, supported models and native sessions.
 
@@ -50,7 +52,7 @@ These features improve task organization and continuity. The model's quality and
 
 ## 3. Features in the interface
 
-The screenshots below were captured in **DeepSeek Harness Desktop 0.2.0-rc.2 with CLI Worker Now v0.6.5**. A separate public demo conversation used Antigravity's `gemini-3.8-flash / low` for a real greeting task.
+The screenshots below were captured in **DeepSeek Harness Desktop 0.2.0-rc.2 with CLI Worker Now v0.6.5 (the historical name)**. A separate public demo conversation used Antigravity's `gemini-3.8-flash / low` for a real greeting task.
 
 The current version uses the selected [sky-blue split logo](doc/assets/project-icon/official-v4/README.md). The entry icon is blue; titles use the same silhouette in black or white according to the theme. The screenshots remain historical v0.6.5 examples.
 
@@ -58,7 +60,7 @@ The current version uses the selected [sky-blue split logo](doc/assets/project-i
 
 Browse agents grouped by CLI and filter running, completed or failed tasks. Open an agent to inspect its independent conversation, public execution events and usage, then continue after the turn finishes.
 
-![Harness main conversation and CLI Worker task overview from the real greeting demo](doc/assets/readme/overview.jpg)
+![Harness main conversation and dsh-cliworker-now task overview from the real greeting demo](doc/assets/readme/overview.jpg)
 
 Select a task card in the right sidebar to enter that agent's conversation. The main conversation and child conversation keep their own records.
 
@@ -159,14 +161,14 @@ Finish active tasks and fully quit Harness before installation or updates, then 
 GitHub Release fallback:
 
 ```sh
-dsh plugin --profile desktop add https://github.com/SuperWheel/cliworker-now/releases/download/v0.7.8/dsh-cliworker-now-0.7.8.tgz
+dsh plugin --profile desktop add https://github.com/SuperWheel/dsh-cliworker-now/releases/download/v0.7.8/dsh-cliworker-now-0.7.8.tgz
 ```
 
 For source development:
 
 ```sh
-git clone https://github.com/SuperWheel/cliworker-now.git
-cd cliworker-now
+git clone https://github.com/SuperWheel/dsh-cliworker-now.git
+cd dsh-cliworker-now
 pnpm install --frozen-lockfile
 pnpm --config.verifyDepsBeforeRun=false build
 dsh plugin --profile desktop add .
@@ -182,7 +184,7 @@ Uninstalling retains local accounts, history and preferences. Each release inclu
 
 </details>
 
-## 6. Using CLI Worker Now
+## 6. Using dsh-cliworker-now
 
 ### 6.1 Dispatch your first agent
 
@@ -362,7 +364,7 @@ Live CLI acceptance is separate and uses the selected account's model allowance:
 pnpm --config.verify-deps-before-run=false smoke:extended --help
 ```
 
-v0.6.15 passed type checking, 1,112 local regression tests and actual Windows runtime checks. See the [Windows workflow](https://github.com/SuperWheel/cliworker-now/actions/workflows/windows.yml). Runtime checks do not establish live model access; historical model verification is listed in section 4 and [verification records](doc/tasks.md).
+v0.6.15 passed type checking, 1,112 local regression tests and actual Windows runtime checks. See the [Windows workflow](https://github.com/SuperWheel/dsh-cliworker-now/actions/workflows/windows.yml). Runtime checks do not establish live model access; historical model verification is listed in section 4 and [verification records](doc/tasks.md).
 
 Development changes use **OpenSpec** proposals, delta specifications and tasks. Specifications are expanded as their areas change, while design decisions and acceptance history are retained. The project pins its OpenSpec dependency:
 
@@ -381,6 +383,6 @@ In Codex, use `openspec-propose` to prepare a change, `openspec-apply-change` to
 - [Version history and configuration](doc/version-notes.md): releases, adapter settings and limitations.
 - [Role presets](doc/role-presets.md): built-in roles and their boundaries.
 - [Screenshot sources and privacy](doc/assets/readme/README.md): the origin of the public screenshots.
-- [Report an issue](https://github.com/SuperWheel/cliworker-now/issues): include Harness / plugin / CLI versions, reproduction steps and redacted logs. Keep account tokens and private project content out of reports.
+- [Report an issue](https://github.com/SuperWheel/dsh-cliworker-now/issues): include Harness / plugin / CLI versions, reproduction steps and redacted logs. Keep account tokens and private project content out of reports.
 
 This independent community plugin uses the [MIT License](LICENSE). DeepSeek Harness and CLI names, icons and trademarks belong to their respective owners; no official affiliation or endorsement is implied.

@@ -1,4 +1,4 @@
-# CLI Worker Now — 设计与版本演进
+# dsh-cliworker-now — 设计与版本演进
 
 ## 1. 基线与范围
 
@@ -643,3 +643,9 @@ Windows 官方源码安装的 distlib 入口在隔离 `HERMES_HOME` 下无法定
 - 缓存只加速设置展示，派遣与保存仍经过新鲜的账号和目录授权。缓存无秘密，文件内容受 schema、大小、CLI 身份及一向账号摘要约束，拒绝目录别名、链接和读取竞态；失败、取消、身份改变及旧请求不能发布新缓存，也不能以旧磁盘目录掩盖失败。POSIX 目录 0700、文件 0600，Windows 沿用自身文件权限。
 - 全量 Windows 验收额外发现隐藏启动控制管道保留了无读取用途的句柄，以及 Node SQLite 超长路径限制：前者只保留写入方向并继续由 SDK Job 管理进程范围，后者为 Windows 快照和请求目录使用扩展长度路径。Hermes、OpenCode、Pi 原生私有文件读取核对路径与已打开句柄身份，拒绝 Windows 下仅依赖 O_NOFOLLOW 时漏掉的链接。
 - 具体自动测试、Desktop 观察、分发哈希及未验收账号/模型边界以本次任务记录为准。真实账号登录、路由模型生成不因目录可见或模拟回归通过而被表述为已完成。
+
+## 2026-10-13 统一外部分发名称
+
+GitHub 仓库、npm 包、Release 标题及外部目录统一使用 `dsh-cliworker-now`。用户明确要求 DSH 内的插件界面保持原名，因此页签、侧栏、设置弹窗、按钮提示及 Host 文案继续使用原有 CLI Worker / CLI Worker Now。准备中的界面改名已撤回，没有覆盖正式 Desktop。
+
+Cordis patch id `cliworker-now`、Gateway `cliworker`、工具 `cliworker_*`、私有目录与既有会话/账号全部保持。GitHub 改名保留仓库 ID 和旧地址重定向；不重建旧名仓库。当前源码仍为 0.7.8，已提交 npm 的冻结包不覆盖；未来打包的 repository、bugs 与 homepage 改为新地址。dshfind 主键迁移与下载量探测须由有维护权限的一方执行，提交 PR 不等于公开页面已更新。
