@@ -17,7 +17,7 @@ import { join, resolve } from 'node:path'
 // network, browser or model. The stub models the reviewed native callback order
 // and reentrant lock contract, and makes forbidden broader entry points fail.
 const harness = String.raw`
-import contextlib, json, os, pathlib, runpy, sys, types
+import contextlib, json, os, pathlib, runpy, stat, sys, types
 home=pathlib.Path(sys.argv[2]); options=json.loads((home/'options.json').read_text())
 events=[]; depths={'auth':0,'shared':0}
 def event(value): events.append(value)
@@ -59,7 +59,7 @@ def refresh(src,*,timeout_seconds,force_refresh,on_state_update):
  fresh=json.loads((home/'fresh.json').read_text()); on_state_update(fresh,'post_refresh_access_token')
  if options.get('after_callback'): raise ValueError('SYNTHETIC_SECRET_LATE_ERROR')
  if options.get('cancel_after_callback'):
-  import signal; os.kill(os.getpid(),signal.SIGTERM)
+  import signal; signal.raise_signal(signal.SIGTERM)
  select(fresh); return fresh
 auth._provider_state_transaction=transaction; auth._auth_file_path=lambda:home/'auth.json'
 auth._nous_shared_store_path=shared_path; auth._nous_shared_store_lock=lambda timeout_seconds=15:lock('shared')
@@ -86,6 +86,13 @@ try:
   def lease(environment):
    assert environment==venv; event('lease'); return lambda:event('release')
   runtime.lease_generation=lease; sys.modules['hermes_cli.runtime_state']=runtime
+  # Native Windows install locking is mocked just like the native lease above.
+  # No installed Hermes modules or Windows account state enter this fixture.
+  pm=types.ModuleType('pm'); filesystem=types.ModuleType('pm.filesystem')
+  def lock_fd(fd,wait):
+   assert wait is False and stat.S_ISREG(os.fstat(fd).st_mode); return True
+  filesystem.lock_fd=lock_fd; pm.filesystem=filesystem
+  sys.modules['pm']=pm; sys.modules['pm.filesystem']=filesystem
   loader=types.ModuleType('hermes_cli.env_loader')
   def dotenv(**kwargs):
    assert kwargs=={'hermes_home':home,'project_env':None,'load_external_secrets':False}; event('own-dotenv')
@@ -104,6 +111,9 @@ const now = Math.floor(Date.now() / 1000)
 const portal = 'https://portal.nousresearch.com'
 const inference = 'https://inference-api.nousresearch.com/v1'
 const helper = resolve('src/host/hermes-nous-refresh.py')
+// Windows's python3 App Execution Alias may exist without an interpreter.
+// Use the platform's real Python command, and fail explicitly if it cannot run.
+const python = process.env.CWN_TEST_PYTHON ?? (process.platform === 'win32' ? 'python.exe' : 'python3')
 const token = (exp: number, subject = 'synthetic-subject', client?: string) =>
   `e30.${Buffer.from(JSON.stringify({ sub: subject, org_id: 'synthetic-org', iss: 'synthetic-issuer', exp, scope: 'inference:invoke', ...(client ? { client_id: client } : {}) })).toString('base64url')}.synthetic`
 const digest = (subject = 'synthetic-subject', client = '') =>
@@ -170,7 +180,7 @@ function fixture() {
   writeFileSync(join(home, 'runner.py'), harness)
   function run(options: Record<string, unknown> = {}, expected = digest(), env: Record<string, string> = {}) {
     write('options.json', options)
-    const result = spawnSync('python3', [join(home, 'runner.py'), helper, home, expected], {
+    const result = spawnSync(python, [join(home, 'runner.py'), helper, home, expected], {
       encoding: 'utf8',
       timeout: 10_000,
       env: {
@@ -182,6 +192,8 @@ function fixture() {
         ...env,
       },
     })
+    if (result.error) throw new Error(`Synthetic Python runner could not start: ${result.error.code}`)
+    if (result.status === 9009) throw new Error('Synthetic Python runner resolved an inactive Windows App Execution Alias')
     return {
       ...result,
       receipt: result.status === 0 ? JSON.parse(result.stdout) : null,

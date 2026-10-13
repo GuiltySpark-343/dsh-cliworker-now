@@ -541,6 +541,13 @@ export async function discoverFirstPartySources(
         )
       continue
     }
+    // CC Switch's Claude discovery endpoint lists Stack entries, not its role mappings.
+    // A successful empty auxiliary list must not erase explicit local proxy choices.
+    // Filtering denied entries to an empty list does not establish catalogEmpty.
+    if (source.claudeRoute === 'proxy' && source.claudeConfiguredModels && scope.catalogEmpty) {
+      for (const { choice } of source.nativeModels) models.set(choice.id, { ...choice, cost: 'unknown' })
+      continue
+    }
     const nativeModels = source.nativeFullModelIds
       ? scope.models
           .filter(

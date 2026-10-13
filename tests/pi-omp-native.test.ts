@@ -131,7 +131,7 @@ it('merges Pi native accounts, custom providers and cached models by provider wi
   })
   expect(await readdir(f.worker)).not.toContain('sessions')
   for (const name of await readdir(f.worker))
-    expect((await stat(join(f.worker, name))).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect((await stat(join(f.worker, name))).mode & 0o777).toBe(0o600)
 })
 it('does not let an empty plugin auth file obscure a globally configured Pi account', async () => {
   const f = await fixture('pi')
@@ -167,7 +167,7 @@ it.each(['pi', 'omp'] as const)(
       expect(JSON.stringify(result)).not.toContain('SYNTHETIC_SECRET_FROM_OUTSIDE')
       await expect(snapshotPiOmpNative(cli, f.worker, f.options)).rejects.toThrow('无法安全读取')
       expect(await readFile(outside, 'utf8')).toBe('SYNTHETIC_SECRET_FROM_OUTSIDE')
-      expect((await stat(outside)).mode & 0o777).toBe(0o644)
+      if (process.platform !== 'win32') expect((await stat(outside)).mode & 0o777).toBe(0o644)
     }
   },
 )

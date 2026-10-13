@@ -8,10 +8,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { preparePiOmpAccountTerminal } from '../src/host/pi-omp-accounts.ts'
 import { listPiOmpAccountSources, inspectPiOmpNativeAccount } from '../src/host/pi-omp-native.ts'
-import {
-  prepareHermesAccount,
-  listHermesAccountSources,
-} from '../src/host/hermes-accounts.ts'
+import { prepareHermesAccount, listHermesAccountSources } from '../src/host/hermes-accounts.ts'
 import { DEFAULT_CONFIG } from '../src/host/process.ts'
 
 // All accounts and secrets in this suite are explicit synthetic temporary fixtures.
@@ -152,8 +149,15 @@ db.close();process.stdout.write(JSON.stringify({wal}));`
     db.close()
     expect(await readFile(join(f.native, 'config.yml'), 'utf8')).toBe(config)
     expect(await readFile(join(f.plugin, 'agent.db'))).toEqual(other)
-    expect((await listPiOmpAccountSources('omp', f.input.stateDirectory, signal(), { nativeHome: f.root })).map(x => x.id)).toEqual(['plugin'])
-    expect((await inspectPiOmpNativeAccount('omp', f.input.stateDirectory, signal(), { nativeHome: f.root })).state).toBe('authenticated')
+    expect(
+      (await listPiOmpAccountSources('omp', f.input.stateDirectory, signal(), { nativeHome: f.root })).map(
+        (x) => x.id,
+      ),
+    ).toEqual(['plugin'])
+    expect(
+      (await inspectPiOmpNativeAccount('omp', f.input.stateDirectory, signal(), { nativeHome: f.root }))
+        .state,
+    ).toBe('authenticated')
   } finally {
     await launch.cleanup()
   }
@@ -171,27 +175,40 @@ it('Pi native logout can update its selected source and current reads never rest
   const code = `const fs=require('node:fs');fs.mkdirSync(${JSON.stringify(auth + '.lock')});fs.writeFileSync(${JSON.stringify(auth)},'{}');fs.rmdirSync(${JSON.stringify(auth + '.lock')});`
   try {
     await exec(process.execPath, ['-e', code], { cwd: launch.cwd, timeout: 5000 })
-    expect((await listPiOmpAccountSources('pi', f.input.stateDirectory, signal(), { nativeHome: f.root })).map(x => x.id)).toEqual(['plugin'])
+    expect(
+      (await listPiOmpAccountSources('pi', f.input.stateDirectory, signal(), { nativeHome: f.root })).map(
+        (x) => x.id,
+      ),
+    ).toEqual(['plugin'])
     expect(await readFile(join(f.plugin, 'auth.json'), 'utf8')).toBe(other)
     await rm(auth)
-    expect((await listPiOmpAccountSources('pi', f.input.stateDirectory, signal(), { nativeHome: f.root })).map(x => x.id)).toEqual(['plugin'])
+    expect(
+      (await listPiOmpAccountSources('pi', f.input.stateDirectory, signal(), { nativeHome: f.root })).map(
+        (x) => x.id,
+      ),
+    ).toEqual(['plugin'])
   } finally {
     await launch.cleanup()
   }
   expect(existsSync(auth)).toBe(false)
 })
 
-it.skipIf(process.platform !== 'win32')('OMP Windows refuses native broker sources without rewriting their configuration', async () => {
-  const f = await fixture('omp')
-  saveOmp(f.native)
-  const config = 'auth:\n  broker:\n    url: https://synthetic.invalid\n'
-  await writeFile(join(f.native, 'config.yml'), config)
-  const before = await readFile(join(f.native, 'agent.db'))
-  await expect(preparePiOmpAccountTerminal({ ...f.input, source: 'native' })).rejects.toThrow('停用账号代理')
-  expect(await readFile(join(f.native, 'config.yml'), 'utf8')).toBe(config)
-  expect(await readFile(join(f.native, 'agent.db'))).toEqual(before)
-  expect(await readdir(join(f.input.stateDirectory, 'account-runtime'))).toEqual([])
-})
+it.skipIf(process.platform !== 'win32')(
+  'OMP Windows refuses native broker sources without rewriting their configuration',
+  async () => {
+    const f = await fixture('omp')
+    saveOmp(f.native)
+    const config = 'auth:\n  broker:\n    url: https://synthetic.invalid\n'
+    await writeFile(join(f.native, 'config.yml'), config)
+    const before = await readFile(join(f.native, 'agent.db'))
+    await expect(preparePiOmpAccountTerminal({ ...f.input, source: 'native' })).rejects.toThrow(
+      '停用账号代理',
+    )
+    expect(await readFile(join(f.native, 'config.yml'), 'utf8')).toBe(config)
+    expect(await readFile(join(f.native, 'agent.db'))).toEqual(before)
+    expect(await readdir(join(f.input.stateDirectory, 'account-runtime'))).toEqual([])
+  },
+)
 
 it('Hermes logout retains the current global source and never creates a plugin marker', async () => {
   const f = await fixture('pi'),
@@ -202,11 +219,18 @@ it('Hermes logout retains the current global source and never creates a plugin m
   const config = { ...DEFAULT_CONFIG, stateDirectory: f.input.stateDirectory, hermesHome: home }
   expect(await listHermesAccountSources(config, signal())).toEqual([{ id: 'native', label: 'CLI 全局账号' }])
   await expect(
-    prepareHermesAccount('logout', '/synthetic/hermes', f.input.project, config, signal(), 'plugin'),
+    prepareHermesAccount(
+      'logout',
+      process.platform === 'win32' ? process.execPath : '/synthetic/hermes',
+      f.input.project,
+      config,
+      signal(),
+      'plugin',
+    ),
   ).rejects.toThrow('来源已变化')
   const launch = await prepareHermesAccount(
     'logout',
-    '/synthetic/hermes',
+    process.platform === 'win32' ? process.execPath : '/synthetic/hermes',
     f.input.project,
     config,
     signal(),

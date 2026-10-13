@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, realpath, writeFile, lstat, open, rename, rm, chmod } from 'node:fs/promises'
 import { constants, existsSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve, toNamespacedPath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EFFORTS, type ModelChoice, type TaskMode } from '../shared/types.ts'
 import { ProcessCleanupUnconfirmedError } from './process.ts'
@@ -93,7 +93,7 @@ async function contextFor(
   })
   const request = async (extra: Record<string, unknown> = {}) => {
     const leaseNonce = randomUUID()
-    const requestDirectory = await mkdtemp(join(isolated, 'request-'))
+    const requestDirectory = await mkdtemp(toNamespacedPath(join(isolated, 'request-')))
     const requestPath = join(requestDirectory, 'request.json')
     const temporary = join(requestDirectory, `.request-${randomUUID()}.tmp`)
     try {

@@ -149,7 +149,9 @@ export function projectHermesIdentity(raw: unknown): AccountIdentity | undefined
   }
   if (renewable)
     return {
-      state: 'configured', verification: 'local', authMethod: 'oauth',
+      state: 'configured',
+      verification: 'local',
+      authMethod: 'oauth',
       summary: 'Hermes 登录已保存，等待自动续期',
     }
   if (expired)
@@ -175,9 +177,22 @@ async function environmentLogins(path: string, signal: AbortSignal, auth: unknow
   let file: Awaited<ReturnType<typeof open>> | undefined
   const buffer = Buffer.alloc(64 * 1024 + 1)
   try {
+    const inspected = await lstat(path)
+    if (!inspected.isFile() || inspected.isSymbolicLink() || inspected.nlink !== 1)
+      throw new Error('Unsafe Hermes environment')
     file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     const info = await file.stat()
-    if (!info.isFile() || info.nlink !== 1 || info.size > 64 * 1024)
+    const openedPath = await lstat(path)
+    if (
+      openedPath.isSymbolicLink() ||
+      openedPath.dev !== info.dev ||
+      openedPath.ino !== info.ino ||
+      inspected.dev !== info.dev ||
+      inspected.ino !== info.ino ||
+      !info.isFile() ||
+      info.nlink !== 1 ||
+      info.size > 64 * 1024
+    )
       throw new Error('Unsafe Hermes environment')
     let length = 0
     while (length < buffer.length) {
@@ -186,7 +201,18 @@ async function environmentLogins(path: string, signal: AbortSignal, auth: unknow
       if (!bytesRead) break
       length += bytesRead
     }
-    if (length > 64 * 1024) throw new Error('Oversized Hermes environment')
+    const after = await file.stat()
+    const currentPath = await lstat(path)
+    if (
+      length !== info.size ||
+      after.size !== info.size ||
+      after.mtimeMs !== info.mtimeMs ||
+      after.nlink !== 1 ||
+      currentPath.isSymbolicLink() ||
+      currentPath.dev !== info.dev ||
+      currentPath.ino !== info.ino
+    )
+      throw new Error('Hermes environment changed during inspection')
     // Default generated config.yaml and commented .env templates do not prove an account exists.
     // Only explicit provider API-key assignments count; values never leave this local boolean check.
     const env = parseHermesOwnEnvironment(buffer.subarray(0, length).toString('utf8'))
@@ -226,12 +252,23 @@ export async function readHermesAccount(
     const info = await lstat(home)
     if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Unsafe Hermes home')
     try {
-      file = await open(
-        join(home, 'auth.json'),
-        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-      )
+      const path = join(home, 'auth.json')
+      const inspected = await lstat(path)
+      if (!inspected.isFile() || inspected.isSymbolicLink() || inspected.nlink !== 1)
+        throw new Error('Unsafe Hermes auth file')
+      file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
       const info = await file.stat()
-      if (!info.isFile() || info.nlink !== 1 || info.size > 64 * 1024)
+      const openedPath = await lstat(path)
+      if (
+        openedPath.isSymbolicLink() ||
+        openedPath.dev !== info.dev ||
+        openedPath.ino !== info.ino ||
+        inspected.dev !== info.dev ||
+        inspected.ino !== info.ino ||
+        !info.isFile() ||
+        info.nlink !== 1 ||
+        info.size > 64 * 1024
+      )
         throw new Error('Unsafe Hermes auth file')
       let length = 0
       while (length < buffer.length) {
@@ -240,7 +277,18 @@ export async function readHermesAccount(
         if (!result.bytesRead) break
         length += result.bytesRead
       }
-      if (length > 64 * 1024) throw new Error('Oversized Hermes auth file')
+      const after = await file.stat()
+      const currentPath = await lstat(path)
+      if (
+        length !== info.size ||
+        after.size !== info.size ||
+        after.mtimeMs !== info.mtimeMs ||
+        after.nlink !== 1 ||
+        currentPath.isSymbolicLink() ||
+        currentPath.dev !== info.dev ||
+        currentPath.ino !== info.ino
+      )
+        throw new Error('Hermes auth changed during inspection')
       auth = JSON.parse(buffer.subarray(0, length).toString('utf8'))
       identity = projectHermesIdentity(auth)
       signal.throwIfAborted()
@@ -351,7 +399,11 @@ export async function prepareHermesAccount(
     signal.throwIfAborted()
     const temporary = privateDirectory(join(state, 'tmp'))
     const command = await hermesNativeCommand(executable, [action === 'login' ? 'model' : 'auth'], signal)
-    const argv = [process.execPath, fileURLToPath(new URL('./private-launch.mjs', import.meta.url)), ...command]
+    const argv = [
+      process.execPath,
+      fileURLToPath(new URL('./private-launch.mjs', import.meta.url)),
+      ...command,
+    ]
     return {
       argv,
       cwd: state,

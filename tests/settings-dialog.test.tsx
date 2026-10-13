@@ -124,6 +124,7 @@ async function setup(
   initialCli: CliId = 'antigravity',
 ) {
   const catalogForCli = vi.fn(async (_session, cli: CliId) => catalog(cli))
+  const refreshCatalogForCli = vi.fn(async (_session, cli: CliId) => catalog(cli))
   const accountStatus = vi.fn(async (_session, cli: CliId) => status(cli))
   const configure = vi.fn().mockResolvedValue(remote({}))
   const paths = new Map<CliId, { cli: CliId; path: string; source: string; available: boolean }>()
@@ -153,6 +154,7 @@ async function setup(
   const api = {
     cliworker: {
       catalogForCli,
+      refreshCatalogForCli,
       accountStatus,
       configure,
       cliSettings,
@@ -206,6 +208,7 @@ async function setup(
     configure,
     accountStatus,
     catalogForCli,
+    refreshCatalogForCli,
     cliSettings,
     setCliEnabled,
     cliExecutablePath,
@@ -955,7 +958,7 @@ it.each(['antigravity', 'mimo'] as const)(
     })
     await t.click(`${CLI_LABELS[cli]} 设置`)
     expect(t.button('默认模型').props.disabled).toBe(false)
-    t.catalogForCli.mockReturnValueOnce(read.promise)
+    t.refreshCatalogForCli.mockReturnValueOnce(read.promise)
     await t.click('刷新模型')
     expect(t.button(`${CLI_LABELS[cli]} 设置`).findAllByProps({ 'data-loading': true })).toHaveLength(0)
     expect(visibleText(accountSummary(t.r))).toContain('已登录')
@@ -982,15 +985,16 @@ it('waits for a refreshed account before reading its new model scope and ignores
   const catalogForCli = vi
     .fn()
     .mockResolvedValueOnce(catalog('antigravity', 'original-model'))
-    .mockReturnValueOnce(oldModels.promise)
     .mockReturnValueOnce(freshModels.promise)
+  const refreshCatalogForCli = vi.fn().mockReturnValueOnce(oldModels.promise)
   const accountStatus = accountFixture({ state: 'authenticated', verification: 'cli' })
-  const t = await setup({ catalogForCli, accountStatus })
+  const t = await setup({ catalogForCli, refreshCatalogForCli, accountStatus })
   await t.click('刷新模型')
   accountStatus.mockReturnValueOnce(account.promise)
   await t.click('刷新状态')
-  expect(catalogForCli).toHaveBeenCalledTimes(2)
-  expect(catalogForCli.mock.calls[1]![2].aborted).toBe(true)
+  expect(catalogForCli).toHaveBeenCalledTimes(1)
+  expect(refreshCatalogForCli).toHaveBeenCalledTimes(1)
+  expect(refreshCatalogForCli.mock.calls[0]![2].aborted).toBe(true)
   expect(t.button('默认模型').props.disabled).toBe(true)
   expect(visibleText(accountSummary(t.r))).toContain('已登录')
   expect(
@@ -1001,7 +1005,7 @@ it('waits for a refreshed account before reading its new model scope and ignores
   await act(async () =>
     account.resolve(status('antigravity', { state: 'configured', verification: 'local' })),
   )
-  expect(catalogForCli).toHaveBeenCalledTimes(3)
+  expect(catalogForCli).toHaveBeenCalledTimes(2)
   expect(t.button('默认模型').props.disabled).toBe(true)
   expect(visibleText(accountSummary(t.r))).toContain('已配置')
   expect(
@@ -1152,12 +1156,11 @@ it('dismisses an open model menu when its CLI is disabled and does not reopen it
 })
 
 it('keeps an unknown Antigravity account grey across catalog failure and retry', async () => {
-  const catalogForCli = vi
+  const refreshCatalogForCli = vi
     .fn()
-    .mockResolvedValueOnce(catalog('antigravity'))
     .mockRejectedValueOnce(new Error('模拟目录连接失败'))
     .mockResolvedValueOnce(catalog('antigravity'))
-  const t = await setup({ catalogForCli })
+  const t = await setup({ refreshCatalogForCli })
   const dot = () =>
     t.button('Antigravity 设置').findByProps({ className: 'cwn-connection-dot' }).props['data-state']
   expect(dot()).toBe('unknown')
@@ -1291,6 +1294,9 @@ it('keeps account indicators unchanged after retrying a failed catalog without r
   expect(dots()).toEqual(['unverified', 'unverified'])
   await t.click('刷新模型')
   expect(dots()).toEqual(['unverified', 'unverified'])
+  expect(t.refreshCatalogForCli).toHaveBeenCalledTimes(1)
+  expect(read).toHaveBeenCalledTimes(1)
+  expect(t.button('默认模型').props.disabled).toBe(false)
   expect(visibleText(accountSummary(t.r))).toContain('已配置')
   expect(terminal.started).not.toHaveBeenCalled()
 })
@@ -1558,7 +1564,7 @@ it('preserves provider logins through a failed model refresh and removes them wh
   const t = await setup({ accountStatus })
   const label = 'OpenAI账号登录'
   const models = deferred()
-  t.catalogForCli.mockReturnValueOnce(models.promise)
+  t.refreshCatalogForCli.mockReturnValueOnce(models.promise)
   await t.click('刷新模型')
   expect(visibleText(accountSummary(t.r))).toContain(label)
   expect(t.button('默认模型').props.disabled).toBe(true)

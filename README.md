@@ -18,7 +18,7 @@
 
 </div>
 
-当前开发版本为 **v0.7.8（未发布）**；下方安装命令仍指向已发布的 v0.7.7。日常调整只做关联最小验收，全量验收用于获准的版本发布；未经用户批准不增加版本号或上传 GitHub。
+当前版本为 **v0.7.8**。日常调整只做关联最小验收，全量验收用于获准的版本发布。
 
 **阅读导航**
 
@@ -75,6 +75,8 @@ CLI Worker Now 是 **DeepSeek Harness 的独立多 CLI 智能体插件**。它�
 
 每个 CLI 可以单独开启或关闭，分别管理账号、项目默认模型与思考强度。选择模型或思考强度后自动保存项目默认值，打开设置或刷新列表不会改写偏好；保存失败会显示原因，可重新选择重试。支持的 CLI 可直接打开原生账号终端；登录状态与账号来源按各 CLI 的实际能力显示。
 
+每次启动 Harness 后，首次打开某个 CLI 的设置会重新识别并保存模型与思考强度的可选列表；本次运行再次打开时自动填入已核验列表。重启后重新识别，只有内容变化才更新缓存。已选默认值仍有效时保留，失效则提示重新选择；也可点击刷新模型主动重查。
+
 macOS 与 Windows 共用同一账号终端，支持选择文字复制及 Cmd+V／Ctrl+V 粘贴；右键在有选区时复制、无选区时粘贴，输入位置使用闪烁块状光标。登录时直接打开原生授权网页；Windows ZCode 的完整登录网址也可在终端点击或选择复制到浏览器。
 
 ![Harness 中的 CLI 连接设置：选取无个人账号标识的 OMP 页面](doc/assets/readme/cli-settings.jpg)
@@ -121,7 +123,7 @@ MiMo 短时间重复加载模型能力时复用有界内存缓存，减少 Windo
 
 设置页的账号状态请求最多两个并发，包含当前选中的 CLI。首次打开优先当前项，切换时只调整待排顺序；模型目录另行查询，因此这不是全部子进程的数量上限。关闭或禁用会取消对应读取，底层进程清理仍由 Host 管理。
 
-Kimi 已核验的 managed OAuth 模型能力和 Claude 的命令参数能力也可短时复用；每次目录查询仍核对当前凭据、有效期和远端权限，不缓存远端额度。Windows 后台查询及嵌入式账号终端的启动器隐藏额外控制台窗口。
+Kimi 已核验的 managed OAuth 模型能力和 Claude 的命令参数能力也可短时复用；每次实际重新识别目录时仍核对当前凭据、有效期和远端权限，不缓存远端额度。Windows 后台查询及嵌入式账号终端的启动器隐藏额外控制台窗口。
 
 Windows 的设置首次加载、刷新与模型／强度自动保存继续执行必要的账号和目录校验。已核验的 Codex npm 0.162.1 启动脚本在后台直接使用同安装的原生 CLI，避免脚本内部再次启动程序时弹出终端；保留原安装路径、包管理器环境和进程清理。其他脚本版本保留原启动方式，具体窗口验证范围见 [实际验证记录](doc/tasks.md)。
 
@@ -142,7 +144,7 @@ macOS 与 Windows 均读取 Claude Code 自身的当前配置。关闭 CC Switch
 ### 5.1 一行安装
 
 ```sh
-dsh plugin --profile desktop add dsh-cliworker-now@0.7.7
+dsh plugin --profile desktop add dsh-cliworker-now@latest
 ```
 
 <details>
@@ -151,15 +153,15 @@ dsh plugin --profile desktop add dsh-cliworker-now@0.7.7
 使用 Web profile 时：
 
 ```sh
-dsh plugin --profile web add dsh-cliworker-now@0.7.7
+dsh plugin --profile web add dsh-cliworker-now@latest
 ```
 
-安装或更新前先结束活动任务并完整退出 Harness，完成后重新打开。npm 包已预构建，无需手动解压或编译。也可以在插件页“添加插件”中输入 `dsh-cliworker-now@0.7.7`。
+安装或更新前先结束活动任务并完整退出 Harness，完成后重新打开。 每次执行带 `@latest` 的命令，都会安装或更新到 npm 的 latest 标签指向的版本；启动 Harness 本身不会自动更新插件。npm 包已预构建，无需手动解压或编译。也可以在插件页“添加插件”中输入 `dsh-cliworker-now@latest`。
 
 GitHub Release 备用安装：
 
 ```sh
-dsh plugin --profile desktop add https://github.com/SuperWheel/cliworker-now/releases/download/v0.7.7/dsh-cliworker-now-0.7.7.tgz
+dsh plugin --profile desktop add https://github.com/SuperWheel/cliworker-now/releases/download/v0.7.8/dsh-cliworker-now-0.7.8.tgz
 ```
 
 从源码开发：
@@ -213,7 +215,7 @@ dsh plugin --profile desktop remove dsh-cliworker-now
 
 明确调用 CLI 时，当前请求会携带对应 CLI 的派遣指引：直接调用 `cliworker_start` 打开选型，模型、强度和角色由插件收集，选型完成后才启动任务。每次工具调用必须显式传入 `cli`（Antigravity 也一样）；漏传会返回参数错误，不会采用上次调用或默认 CLI。主模型无需预先提问角色或确认启动；通用提问工具保持不变。
 
-全部 11 个 CLI 只使用自身原生登录，或在该 CLI 自己的配置／私有 `.env` 中单独设置的 API Key。模型与强度只展示“本 CLI 支持”与“当前自身账号可用范围”的交集；公共目录、旧缓存、固定别名和匿名免费模型不能单独成为可选依据。无法确认时显示空列表及简短原因。账号范围使用只读模型查询，不通过生成请求试探权限。
+全部 11 个 CLI 只使用自身原生登录，或在该 CLI 自己的配置／私有 `.env` 中单独设置的 API Key。模型与强度按“本 CLI 支持”与“当前自身账号可用范围”筛选；Claude 自身显式网关配置按第 4 节的专门规则展示候选，并说明远端可用性未核验。公共目录、旧缓存、固定别名和匿名免费模型不能单独成为可选依据；未满足上述证据条件时显示空列表及简短原因。账号范围使用只读模型查询，不通过生成请求试探权限。
 
 设置、模型菜单和任务卡片只显示模型名称，删除服务商、组织路径前缀及括号附注；同一原生模型去重，不同原生模型同名时仍保留独立选项，保存和执行使用完整路由 ID。新选择优先有明确证据且可用的免费额度，缺省零成本和价格未知不当免费。有效的既有选择保持不变，首次使用仍须由你选型，免费路由失败也不会自动转为付费请求。
 

@@ -56,8 +56,8 @@ function fixture() {
   }
   writeFileSync(join(home, 'config.yaml'), JSON.stringify(config))
   const raw = auth()
-  const executable = join(home, 'synthetic-hermes')
-  writeFileSync(executable, '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+  const executable = join(home, 'synthetic-hermes.cjs')
+  writeFileSync(executable, '#!/usr/bin/env node\nprocess.exit(0)\n', { mode: 0o700 })
   writeFileSync(join(home, 'auth.json'), JSON.stringify(raw))
   return {
     home,

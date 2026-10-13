@@ -35,6 +35,7 @@ describe('Windows remote developer safety and evidence boundaries (synthetic fix
     expect(await readConfig(file, root)).toEqual(config)
     expect(strictSshArgs(config)).toEqual(expect.arrayContaining(['-F', '/dev/null', 'BatchMode=yes', 'StrictHostKeyChecking=yes', 'IdentitiesOnly=yes', 'PasswordAuthentication=no', 'KbdInteractiveAuthentication=no']))
     await expect(readConfig(join(root, 'package.json'), root)).rejects.toThrow('Git ignored')
+    await expect(readConfig(join(root, '.test-data', 'windows-remote-other', 'config.json'), root)).rejects.toThrow('Git ignored')
     await writeFile(file, JSON.stringify({ ...config, host: '-oProxyCommand=unsafe' }))
     await expect(readConfig(file, root)).rejects.toThrow('host')
     await writeFile(file, JSON.stringify({ ...config, user: 'name;unsafe' }))

@@ -1,3 +1,5 @@
+import { readCliAccountBinding } from './cli-account-binding.ts'
+import { SettingsCatalogCache } from './settings-catalog-cache.ts'
 import { resolveModel } from '../shared/models.ts'
 import { visibleModelChoices } from '../shared/model-presentation.ts'
 import { Context } from '@deepseek-ai/cordis'
@@ -188,6 +190,7 @@ export class CliWorkerService extends TypertRemoteService {
   private selectionBindings = new WeakMap<Preference, string>()
   private selectionProjects = new WeakMap<Preference, string>()
   private displayedBindings = new Map<string, string>()
+  private settingsCatalogs?: SettingsCatalogCache
   private disposed = new AbortController()
 
   /** @param ctx - Harness services. @param config - Validated deployment options. */
@@ -915,6 +918,7 @@ export class CliWorkerService extends TypertRemoteService {
       if (operation === 'manual') store.setManual(id, path)
       else if (operation === 'auto') store.reset(id)
       this.displayedBindings?.clear()
+      this.settingsCatalogs?.invalidate(id)
       this.runtime.changed()
       return JSON.stringify(await this.probeExecutablePath(id, control))
     } catch (error) {
@@ -992,6 +996,7 @@ export class CliWorkerService extends TypertRemoteService {
         )
         this.accountParents.set(parent.id, dispose)
       }
+      this.settingsCatalogs?.invalidate(id)
       return JSON.stringify(
         await this.accounts.start(parent.id, id, operation, this.project(parent), signal, source, provider),
       )
@@ -1059,18 +1064,39 @@ export class CliWorkerService extends TypertRemoteService {
   /** @param parentSessionId - Parent session identity. @param cli - Selected CLI. @param signal - Caller lifetime. @returns CLI catalog and saved project preference. */
   @Remote('catalogForCli')
   async catalogForCli(parentSessionId: string, cli: string, signal: AbortSignal): Promise<string> {
+    return this.settingsCatalog(parentSessionId, cli, signal, false)
+  }
+  /** @param parentSessionId - Parent session identity. @param cli - Selected CLI. @param signal - Caller lifetime. @returns Fresh model catalog and saved project preference. */
+  @Remote('refreshCatalogForCli')
+  async refreshCatalogForCli(parentSessionId: string, cli: string, signal: AbortSignal): Promise<string> {
+    return this.settingsCatalog(parentSessionId, cli, signal, true)
+  }
+  private async settingsCatalog(
+    parentSessionId: string,
+    cli: string,
+    signal: AbortSignal,
+    refresh: boolean,
+  ): Promise<string> {
     try {
       const id = validate.enum(CLI_IDS).parse(cli)
       const project = this.project(await this.parent(parentSessionId))
+      const control = AbortSignal.any([signal, this.disposed.signal])
       this.runtime.assertCliEnabled(id)
-      const { catalog, binding } = await this.queryCatalog(id, this.backend, this.options, project, signal)
+      this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
+      const { catalog, binding } = await this.settingsCatalogs.get({
+        cli: id,
+        project,
+        signal: control,
+        refresh,
+        binding: () => readCliAccountBinding(id, this.backend, this.options, project, control),
+        discover: () => this.queryCatalog(id, this.backend, this.options, project, control),
+      })
+      control.throwIfAborted()
       ;(this.displayedBindings ??= new Map()).set(JSON.stringify([parentSessionId, id]), binding)
       this.runtime.assertCliEnabled(id)
-      return JSON.stringify({
-        ...catalog,
-        preference: this.runtime.storage.preference(project, id),
-      })
+      return JSON.stringify({ ...catalog, preference: this.runtime.storage.preference(project, id) })
     } catch (error) {
+      if (error instanceof ProcessCleanupUnconfirmedError) this.runtime.blockOnCleanup(error)
       throw failure(error)
     }
   }

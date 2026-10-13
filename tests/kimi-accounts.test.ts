@@ -65,11 +65,11 @@ it('isolates account working directories and project MCP without changing native
     join(f.home, 'plugin-state'),
     new AbortController().signal,
   )
-  expect((await lstat(prepared.cwd)).mode & 0o777).toBe(0o700)
+  if (process.platform !== 'win32') expect((await lstat(prepared.cwd)).mode & 0o777).toBe(0o700)
   expect((await lstat(join(prepared.cwd, '.git'))).isDirectory()).toBe(true)
   for (const path of [join(prepared.cwd, '.mcp.json'), join(prepared.cwd, '.kimi-code/mcp.json')]) {
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ mcpServers: {} })
-    expect((await lstat(path)).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect((await lstat(path)).mode & 0o777).toBe(0o600)
   }
   expect(await readdir(prepared.cwd)).toEqual(['.git', '.kimi-code', '.mcp.json'])
   expect(await readFile(join(f.home, '.mcp.json'), 'utf8')).toBe(projectMcp)

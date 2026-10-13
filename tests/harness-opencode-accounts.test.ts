@@ -9,6 +9,7 @@ import {
   statSync,
   symlinkSync,
   writeFileSync,
+  renameSync,
 } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -20,6 +21,28 @@ import {
 } from '../src/host/harness-opencode-accounts.ts'
 import { discoverOpenCode, openCodeAuthDirectory, prepareOpenCode } from '../src/host/opencode-adapter.ts'
 import { extendedLaunch, extendedCatalog } from '../src/host/extended-adapters.ts'
+
+const nativeReadRace = vi.hoisted(() => ({
+  beforeOpen: undefined as undefined | ((path: unknown) => void),
+  afterRead: undefined as undefined | ((path: unknown) => void),
+}))
+vi.mock('node:fs/promises', async (load) => {
+  const original = await load<typeof import('node:fs/promises')>()
+  return {
+    ...original,
+    open: async (...args: Parameters<typeof original.open>) => {
+    nativeReadRace.beforeOpen?.(args[0])
+    const file = await original.open(...args)
+    const read = file.read.bind(file)
+    file.read = (async (...readArgs: unknown[]) => {
+      const result = await (read as Function)(...readArgs)
+      nativeReadRace.afterRead?.(args[0])
+      return result
+    }) as typeof file.read
+    return file
+    },
+  }
+})
 
 // Every native source and network response in this suite is synthetic.
 vi.mock('../src/host/pi-omp-native.ts', async (load) => {
@@ -78,7 +101,11 @@ function fixture() {
 const signal = () => new AbortController().signal
 const catalog =
   'fixture/model\n' + JSON.stringify({ id: 'model', providerID: 'fixture', variants: {} }) + '\n'
-afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })))
+afterEach(() => {
+  nativeReadRace.beforeOpen = undefined
+  nativeReadRace.afterRead = undefined
+  roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true }))
+})
 
 describe('Managed API/OpenCode accounts (explicit synthetic fixtures)', () => {
   it('keeps account management in its own plugin store without copying a global native OAuth login', async () => {
@@ -185,6 +212,38 @@ describe('Managed API/OpenCode accounts (explicit synthetic fixtures)', () => {
     expect(state.state).toBe('unavailable')
     expect(JSON.stringify(state)).not.toContain('synthetic-secret')
   })
+  it('rejects regular auth replacement between path inspection and handle open', async () => {
+    const config = fixture()
+    const directory = join(openCodeAuthDirectory(config.stateDirectory), 'opencode')
+    mkdirSync(directory, { recursive: true })
+    const auth = join(directory, 'auth.json'), replacement = join(directory, 'replacement.json')
+    writeFileSync(auth, '{}')
+    writeFileSync(replacement, '{"provider":{"type":"api","key":"synthetic-race-secret"}}')
+    nativeReadRace.beforeOpen = (path) => {
+      if (path !== auth) return
+      nativeReadRace.beforeOpen = undefined
+      renameSync(replacement, auth)
+    }
+    const state = await readOpenCodeAccount(config, signal())
+    expect(state.state).toBe('unavailable')
+    expect(JSON.stringify(state)).not.toContain('synthetic-race-secret')
+  })
+  it('rejects an auth path replaced while its original handle is being read', async () => {
+    const config = fixture()
+    const directory = join(openCodeAuthDirectory(config.stateDirectory), 'opencode')
+    mkdirSync(directory, { recursive: true })
+    const auth = join(directory, 'auth.json'), replacement = join(directory, 'replacement.json')
+    writeFileSync(auth, '{"provider":{"type":"api","key":"synthetic-original-secret"}}')
+    writeFileSync(replacement, '{}')
+    nativeReadRace.afterRead = (path) => {
+      if (path !== auth) return
+      nativeReadRace.afterRead = undefined
+      renameSync(replacement, auth)
+    }
+    const state = await readOpenCodeAccount(config, signal())
+    expect(state.state).toBe('unavailable')
+    expect(JSON.stringify(state)).not.toContain('synthetic-original-secret')
+  })
   it('keeps unsupported metadata unknown but reports expired non-refreshable OAuth separately', async () => {
     const config = fixture(),
       path = join(openCodeAuthDirectory(config.stateDirectory), 'opencode')
@@ -243,7 +302,7 @@ describe('Managed API/OpenCode accounts (explicit synthetic fixtures)', () => {
       expect(env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe('1')
     }
     expect(new Set([login.env.OPENCODE_DB, worker.env.OPENCODE_DB, catalogEnv!.OPENCODE_DB]).size).toBe(3)
-    expect(statSync(auth).mode & 0o777).toBe(0o700)
+    if (process.platform !== 'win32') expect(statSync(auth).mode & 0o777).toBe(0o700)
     expect(JSON.parse(login.env.OPENCODE_PERMISSION!)).toEqual({ '*': 'deny' })
     const nativeConfig = JSON.parse(login.env.OPENCODE_CONFIG_CONTENT!)
     expect(nativeConfig).not.toHaveProperty('model')

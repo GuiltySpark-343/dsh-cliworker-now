@@ -26,7 +26,7 @@ import { DEFAULT_CONFIG, type ProcessBackend, type RuntimeConfig } from '../src/
 import type { CliId } from '../src/shared/types.ts'
 import type { AccountIdentitySource } from '../src/host/account-identity.ts'
 import * as zcodeAccounts from '../src/host/zcode-grok-accounts.ts'
-import { WindowsCliInstallationError, WindowsCliNotFoundError } from '../src/host/windows-cli-installation.ts'
+import { CODEX_APPX_QUERY, WindowsCliInstallationError, WindowsCliNotFoundError } from '../src/host/windows-cli-installation.ts'
 const claudeSettings = vi.hoisted(() => ({ managed: {} as Record<string, unknown> }))
 // Synthetic managed settings only; account tests never read this machine's policy.
 vi.mock('../src/host/first-party-models.ts', async (load) => {
@@ -106,6 +106,9 @@ function deferred<T>() {
 function fixture(overrides: Partial<RuntimeConfig> = {}) {
   const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'cwn-account-test-')))
   roots.push(cwd)
+  // Synthetic discovery must never select a real Windows npm/desktop installation.
+  vi.stubEnv('APPDATA', join(cwd, 'AppData', 'Roaming'))
+  vi.stubEnv('LOCALAPPDATA', join(cwd, 'AppData', 'Local'))
   vi.stubEnv('MIMOCODE_HOME', join(cwd, 'mimo'))
   vi.stubEnv('KIMI_CODE_HOME', join(cwd, 'kimi'))
   vi.stubEnv('CLAUDE_CONFIG_DIR', join(cwd, 'claude'))
@@ -666,12 +669,32 @@ describe('account status safety (synthetic CLI output)', () => {
   it('keeps absent default installations grey but reports explicit executable and read errors', async () => {
     const missing = Object.assign(new Error('synthetic SECRET'), { code: 'ENOENT' })
     const absent = fixture()
+    // Windows falls back to an Appx lookup after missing PATH; the synthetic
+    // lookup must report no package, rather than malformed empty metadata.
+    absent.status('null')
     vi.mocked(absent.backend.resolveExecutable).mockRejectedValue(missing)
     expect(await absent.manager.status('codex', absent.cwd, absent.signal)).toMatchObject({
       state: 'unconfigured',
       installed: false,
       actions: [],
     })
+    if (process.platform === 'win32') {
+      expect(absent.backend.spawn).toHaveBeenCalledOnce()
+      const lookup = vi.mocked(absent.backend.spawn).mock.calls[0][0]
+      expect(lookup.argv[0]).toMatch(/[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i)
+      expect(lookup.argv.slice(1)).toEqual([
+        '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand',
+        Buffer.from(CODEX_APPX_QUERY, 'utf16le').toString('base64'),
+      ])
+      expect(lookup.stdio).toEqual({ stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' })
+      expect(absent.statusProcesses[0].terminate).toHaveBeenCalledOnce()
+      expect(absent.statusProcesses[0].waitForExit).toHaveBeenCalledOnce()
+    } else {
+      expect(absent.backend.spawn).not.toHaveBeenCalled()
+    }
+    expect(absent.backend.spawnTerminal).not.toHaveBeenCalled()
+    // A read error must not start even another metadata query on either platform.
+    vi.mocked(absent.backend.spawn).mockClear()
     const custom = fixture({ codexExecutable: '/synthetic/missing-codex' })
     vi.mocked(custom.backend.resolveExecutable).mockRejectedValue(missing)
     const failed = await custom.manager.status('codex', custom.cwd, custom.signal)
@@ -690,6 +713,8 @@ describe('account status safety (synthetic CLI output)', () => {
     })
     expect(absent.backend.spawn).not.toHaveBeenCalled()
     expect(custom.backend.spawn).not.toHaveBeenCalled()
+    expect(absent.backend.spawnTerminal).not.toHaveBeenCalled()
+    expect(custom.backend.spawnTerminal).not.toHaveBeenCalled()
   })
 
   it('distinguishes fresh absence, malformed responses and explicit authentication rejection', async () => {

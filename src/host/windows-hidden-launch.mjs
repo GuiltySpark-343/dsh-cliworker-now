@@ -8,7 +8,9 @@ import { forwardNativeStdio, spawnNativeProcess } from './native-spawn.mjs'
 const marker = process.env.DSH_SUBPROCESS_CONTROL
 delete process.env.DSH_SUBPROCESS_CONTROL
 if (marker !== 'pipe') throw new Error('Windows background control channel is unavailable')
-const control = new Socket({ fd: 7, readable: true, writable: true, allowHalfOpen: true })
+// Receipts are write-only. Reading this inherited Windows pipe keeps a read
+// operation alive after the receipt flush and prevents the relay from exiting.
+const control = new Socket({ fd: 7, readable: false, writable: true, allowHalfOpen: true })
 let child, sent = false
 function receipt(value) {
   if (sent) return

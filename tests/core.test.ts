@@ -154,7 +154,7 @@ describe('private durable storage', () => {
     storage.setPreference(project, pref)
     expect(storage.preference(project)).toEqual(pref)
     expect(storage.preference(project + 'other')).toBeUndefined()
-    expect(statSync(storage.directory).mode & 0o777).toBe(0o700)
+    if (process.platform !== 'win32') expect(statSync(storage.directory).mode & 0o777).toBe(0o700)
   })
   it('refuses a second live host and marks unfinished work interrupted on restart', () => {
     const { root, project } = paths()
@@ -168,7 +168,7 @@ describe('private durable storage', () => {
     cleanups.push(() => restored.close())
     expect(restored.workers.get(worker.id)?.status).toBe('interrupted')
     expect(restored.history(worker.id).at(-1)?.state).toBe('interrupted')
-    expect(statSync(join(directory, `${worker.id}.worker.json`)).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect(statSync(join(directory, `${worker.id}.worker.json`)).mode & 0o777).toBe(0o600)
     restored.close()
     const reopened = new WorkerStorage(directory)
     cleanups.push(() => reopened.close())

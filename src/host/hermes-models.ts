@@ -41,9 +41,23 @@ async function read(path: string, signal?: AbortSignal): Promise<string | undefi
   signal?.throwIfAborted()
   let handle
   try {
+    const inspected = await lstat(path)
+    if (!inspected.isFile() || inspected.isSymbolicLink() || inspected.nlink !== 1)
+      throw new Error('Unsafe metadata')
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     const info = await handle.stat()
-    if (!info.isFile() || info.nlink !== 1 || info.size > 1024 * 1024) throw new Error('Unsafe metadata')
+    const openedPath = await lstat(path)
+    if (
+      openedPath.isSymbolicLink() ||
+      openedPath.dev !== info.dev ||
+      openedPath.ino !== info.ino ||
+      inspected.dev !== info.dev ||
+      inspected.ino !== info.ino ||
+      !info.isFile() ||
+      info.nlink !== 1 ||
+      info.size > 1024 * 1024
+    )
+      throw new Error('Unsafe metadata')
     const buffer = Buffer.alloc(info.size + 1)
     try {
       let length = 0
@@ -53,7 +67,18 @@ async function read(path: string, signal?: AbortSignal): Promise<string | undefi
         if (!bytesRead) break
         length += bytesRead
       }
-      if (length > info.size) throw new Error('Metadata changed')
+      const after = await handle.stat()
+      const currentPath = await lstat(path)
+      if (
+        length !== info.size ||
+        after.size !== info.size ||
+        after.mtimeMs !== info.mtimeMs ||
+        after.nlink !== 1 ||
+        currentPath.isSymbolicLink() ||
+        currentPath.dev !== info.dev ||
+        currentPath.ino !== info.ino
+      )
+        throw new Error('Metadata changed')
       return buffer.subarray(0, length).toString('utf8')
     } finally {
       buffer.fill(0)

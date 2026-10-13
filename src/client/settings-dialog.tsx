@@ -563,6 +563,7 @@ function CliSettings({
   const [saveError, setSaveError] = useState('')
   const [saved, setSaved] = useState(false)
   const [modelRevision, refreshModels] = useState(0)
+  const forceCatalogRefresh = useRef(false)
   const [model, setModel] = useState('')
   const [effort, setEffort] = useState<Preference['effort']>('default')
   const [action, setAction] = useState<AccountAction>()
@@ -611,8 +612,14 @@ function CliSettings({
     const controller = new AbortController()
     void (async () => {
       try {
+        const force = forceCatalogRefresh.current
+        forceCatalogRefresh.current = false
         const next: Catalog = JSON.parse(
-          value(await api.cliworker.catalogForCli(sessionId, cli, controller.signal)),
+          value(
+            await (force
+              ? api.cliworker.refreshCatalogForCli(sessionId, cli, controller.signal)
+              : api.cliworker.catalogForCli(sessionId, cli, controller.signal)),
+          ),
         )
         if (next.cli !== cli) throw new Error('收到不匹配的 CLI 模型目录，请重试')
         if (controller.signal.aborted) return
@@ -936,7 +943,10 @@ function CliSettings({
                 className="cwn-refresh"
                 aria-label="刷新模型"
                 disabled={inactive || modelLoading || saving || pathChanging}
-                onClick={() => refreshModels((n) => n + 1)}
+                onClick={() => {
+                  forceCatalogRefresh.current = true
+                  refreshModels((n) => n + 1)
+                }}
               >
                 <IconRefreshOutlineRegular size={16} />
               </Button>
@@ -979,7 +989,7 @@ function CliSettings({
             />
           </label>
           <p className="cwn-settings-notice cwn-settings-hint" role="status">
-            {modelError || ''}
+            {modelError || (cli === 'claude' && catalog?.notice?.includes('路由') ? catalog.notice : '')}
           </p>
           {(saving || saved || saveError) && (
             <div className="cwn-settings-save">

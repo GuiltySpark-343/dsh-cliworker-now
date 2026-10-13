@@ -1,7 +1,7 @@
 import { constants } from 'node:fs'
 import { lstat, open, mkdir, writeFile, rename, rm, mkdtemp, realpath, readlink } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, join, resolve, sep, parse, relative } from 'node:path'
+import { dirname, join, resolve, sep, parse, relative, toNamespacedPath } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { parse as parseYaml } from 'yaml'
@@ -267,7 +267,9 @@ async function source(cli: PiOmpCli, path: string, scratch?: string): Promise<Na
       if (wal) await writeFile(`${copy}-wal`, wal, { flag: 'wx', mode: 0o600 })
       let db: DatabaseSync | undefined
       try {
-        db = new DatabaseSync(copy)
+        // Node fs accepts long Windows paths; SQLite needs the explicit native
+        // namespace for the same bounded private snapshot path.
+        db = new DatabaseSync(toNamespacedPath(copy))
         if ((db.prepare('PRAGMA quick_check').get() as any)?.quick_check !== 'ok')
           throw new Error('Invalid native account database')
         const tables = new Set(
@@ -676,7 +678,7 @@ export async function snapshotPiOmpNative(
           ] as const) {
             const temporary = join(target, `.native-${randomUUID()}.db`)
             await writeFile(temporary, '', { flag: 'wx', mode: 0o600 })
-            const db = new DatabaseSync(temporary)
+            const db = new DatabaseSync(toNamespacedPath(temporary))
             try {
               db.exec(schema)
               for (const row of rows)

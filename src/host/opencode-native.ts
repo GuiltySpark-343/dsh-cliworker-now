@@ -210,8 +210,19 @@ async function readDocument(
     options.signal?.throwIfAborted()
     const parent = await lstat(dirname(path))
     if (!parent.isDirectory() || parent.isSymbolicLink()) throw new Error('Unsafe native account directory')
+    // Windows has no O_NOFOLLOW: inspect the path as well as the opened handle.
+    const inspected = await lstat(path)
+    if (!inspected.isFile() || inspected.isSymbolicLink() || inspected.nlink !== 1)
+      throw new Error('Unsafe native account file')
     file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     const before = await file.stat()
+    const openedPath = await lstat(path)
+    if (
+      !openedPath.isFile() || openedPath.isSymbolicLink() || openedPath.nlink !== 1 ||
+      openedPath.dev !== before.dev || openedPath.ino !== before.ino ||
+      inspected.dev !== before.dev || inspected.ino !== before.ino
+    )
+      throw new Error('Native account path changed during open')
     if (!before.isFile() || before.nlink !== 1 || before.size >= bytes.length)
       throw new Error('Unsafe native account file')
     let length = 0
@@ -222,6 +233,12 @@ async function readDocument(
       length += part.bytesRead
     }
     const after = await file.stat()
+    const afterPath = await lstat(path)
+    if (
+      !afterPath.isFile() || afterPath.isSymbolicLink() || afterPath.nlink !== 1 || after.nlink !== 1 ||
+      afterPath.dev !== before.dev || afterPath.ino !== before.ino
+    )
+      throw new Error('Native account path changed during read')
     if (length >= bytes.length || before.size !== after.size || before.mtimeMs !== after.mtimeMs)
       throw new Error('Native account changed during read')
     const value: unknown = comments

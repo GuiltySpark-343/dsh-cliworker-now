@@ -385,7 +385,8 @@ it('keeps a missing CLI session unable to send while removing its input notice a
   expect(t.text()).toContain('answer-a')
   expect(t.input().props.disabled).toBe(true)
   expect(
-    t.r.root.findAllByType('button').find((button) => button.props['aria-label'] === '继续对话')!.props.disabled,
+    t.r.root.findAllByType('button').find((button) => button.props['aria-label'] === '继续对话')!.props
+      .disabled,
   ).toBe(true)
   await act(async () =>
     t.input().props.onKeyDown({
@@ -476,7 +477,9 @@ it('preserves the overview filters and each draft across back navigation', async
   expect(list()).toHaveLength(0)
   expect(t.text()).not.toContain('没有匹配的任务')
   expect(t.text()).not.toContain('清除筛选')
-  await act(async () => t.r.root.findByProps({ 'aria-label': '筛选子 Agent' }).props.onChange({ target: { value: '' } }))
+  await act(async () =>
+    t.r.root.findByProps({ 'aria-label': '筛选子 Agent' }).props.onChange({ target: { value: '' } }),
+  )
   await t.click('全部')
   expect(list()).toHaveLength(2)
   await t.select('a')
@@ -487,32 +490,40 @@ it.each([
   ['进行中', 'running'],
   ['已完成', 'completed'],
   ['异常', 'failed'],
-] as const)('keeps %s filtering and search usable without summary or reset text', async (label, selectedStatus) => {
-  const history: Worker[] = (['running', 'completed', 'failed'] as const).map((status, index) => ({
-    ...workers[0]!, id: `status-${index}`, status, title: `Task ${status}`,
-  }))
-  const t = await setup(false, undefined, history)
-  const cards = () => t.r.root.findAll((node) => node.type === 'button' && node.props['data-open-worker-id'])
-  const search = async (value: string) => act(async () =>
-    t.r.root.findByProps({ 'aria-label': '筛选子 Agent' }).props.onChange({ target: { value } }),
-  )
-  await t.click(label)
-  expect(cards().map((card) => card.props['data-open-worker-id'])).toEqual([
-    history.find((worker) => worker.status === selectedStatus)!.id,
-  ])
-  expect(t.text()).not.toContain('个匹配任务')
-  expect(t.text()).not.toContain('清除筛选')
-  await search('no matching task')
-  expect(cards()).toHaveLength(0)
-  expect(t.text()).not.toContain('没有匹配的任务')
-  expect(t.text()).not.toContain('清除筛选')
-  await search('')
-  expect(cards()).toHaveLength(1)
-  await t.click('全部')
-  expect(cards()).toHaveLength(3)
-  expect(t.followup).not.toHaveBeenCalled()
-  expect(t.api.cliworker.restartWorker).not.toHaveBeenCalled()
-})
+] as const)(
+  'keeps %s filtering and search usable without summary or reset text',
+  async (label, selectedStatus) => {
+    const history: Worker[] = (['running', 'completed', 'failed'] as const).map((status, index) => ({
+      ...workers[0]!,
+      id: `status-${index}`,
+      status,
+      title: `Task ${status}`,
+    }))
+    const t = await setup(false, undefined, history)
+    const cards = () =>
+      t.r.root.findAll((node) => node.type === 'button' && node.props['data-open-worker-id'])
+    const search = async (value: string) =>
+      act(async () =>
+        t.r.root.findByProps({ 'aria-label': '筛选子 Agent' }).props.onChange({ target: { value } }),
+      )
+    await t.click(label)
+    expect(cards().map((card) => card.props['data-open-worker-id'])).toEqual([
+      history.find((worker) => worker.status === selectedStatus)!.id,
+    ])
+    expect(t.text()).not.toContain('个匹配任务')
+    expect(t.text()).not.toContain('清除筛选')
+    await search('no matching task')
+    expect(cards()).toHaveLength(0)
+    expect(t.text()).not.toContain('没有匹配的任务')
+    expect(t.text()).not.toContain('清除筛选')
+    await search('')
+    expect(cards()).toHaveLength(1)
+    await t.click('全部')
+    expect(cards()).toHaveLength(3)
+    expect(t.followup).not.toHaveBeenCalled()
+    expect(t.api.cliworker.restartWorker).not.toHaveBeenCalled()
+  },
+)
 it('keeps search and status controls outside the card scroller and restores its reading position', async () => {
   const t = await setup(false)
   const scroller = t.r.root.findByProps({ className: 'cwn-overview-list' })
@@ -669,18 +680,23 @@ it('selects defaults per CLI and limits effort choices to the selected model', a
   Object.assign(f.api.cliworker, { catalogForCli, configure })
   await f.click('默认设置')
   await f.click('Codex 设置')
+  expect(configure).not.toHaveBeenCalled()
   await f.click('默认模型')
   await f.click('model-b')
   expect(f.text()).toContain('High')
+  expect(configure).toHaveBeenCalledTimes(1)
+  expect(JSON.parse(configure.mock.calls[0]![1])).toEqual({
+    cli: 'codex',
+    model: 'model-b',
+    effort: 'high',
+  })
   await f.click('Kimi 设置')
   expect(f.text()).toContain('默认')
-  expect(f.r.root.findAllByType('button').find((b) => b.children.includes('保存默认值'))?.props.type).toBe(
-    'submit',
-  )
-  await act(async () =>
-    f.r.root.findByProps({ className: 'cwn-settings-form' }).props.onSubmit({ preventDefault() {} }),
-  )
-  expect(JSON.parse(configure.mock.calls[0]![1])).toEqual({
+  expect(configure).toHaveBeenCalledTimes(1)
+  await f.click('默认模型')
+  await f.click('kimi-model')
+  expect(configure).toHaveBeenCalledTimes(2)
+  expect(JSON.parse(configure.mock.calls[1]![1])).toEqual({
     cli: 'kimi',
     model: 'kimi-model',
     effort: 'default',
@@ -688,7 +704,9 @@ it('selects defaults per CLI and limits effort choices to the selected model', a
 })
 it('failed CLI discovery clears the previous catalog and prevents saving it to another CLI', async () => {
   const f = await setup()
+  const configure = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
   Object.assign(f.api.cliworker, {
+    configure,
     catalogForCli: vi
       .fn()
       .mockResolvedValueOnce({
@@ -701,11 +719,12 @@ it('failed CLI discovery clears the previous catalog and prevents saving it to a
   await f.click('MiMo 设置')
   expect(f.text()).toContain('CLI missing')
   expect(
-    f.r.root.findAllByType('button').find((b) => b.children.includes('保存默认值'))?.props.disabled,
-  ).toBe(true)
-  expect(
     f.r.root.findAllByType('button').find((b) => b.props['aria-label'] === '默认模型')?.props.disabled,
   ).toBe(true)
+  expect(
+    f.r.root.findAllByType('button').find((b) => b.props['aria-label'] === '默认思考强度')?.props.disabled,
+  ).toBe(true)
+  expect(configure).not.toHaveBeenCalled()
 })
 
 it('uses the selected CLI name in assistant messages and shows the reported model alias target', async () => {
@@ -1461,4 +1480,29 @@ it('cancels a pending management request when its panel unmounts', async () => {
   await act(async () => {
     await waiting.promise
   })
+})
+
+it('settings refresh explicitly queries a fresh directory and keeps a still-valid saved default', async () => {
+  const f = await setup()
+  const response = {
+    ok: true,
+    value: JSON.stringify({
+      cli: 'antigravity',
+      models: [{ id: 'saved-model', label: 'saved-model', efforts: ['low', 'high'] }],
+      preference: { cli: 'antigravity', model: 'saved-model', effort: 'high' },
+    }),
+  }
+  const catalogForCli = vi.fn().mockResolvedValue(response)
+  const refreshCatalogForCli = vi.fn().mockResolvedValue(response)
+  const configure = vi.fn()
+  Object.assign(f.api.cliworker, { catalogForCli, refreshCatalogForCli, configure })
+  await f.click('默认设置')
+  expect(f.text()).toContain('saved-model')
+  expect(f.text()).toContain('High')
+  expect(catalogForCli).toHaveBeenCalledTimes(1)
+  await f.click('刷新模型')
+  expect(refreshCatalogForCli).toHaveBeenCalledTimes(1)
+  expect(catalogForCli).toHaveBeenCalledTimes(1)
+  expect(f.text()).toContain('High')
+  expect(configure).not.toHaveBeenCalled()
 })

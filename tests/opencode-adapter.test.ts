@@ -109,8 +109,8 @@ describe('OpenCode native adapter (explicitly synthetic fixtures)', () => {
       permission: { '*': 'ask', edit: 'deny', bash: 'deny' },
     })
     expect(prepared.env).not.toHaveProperty('ZHIPU_API_KEY')
-    expect(statSync(root).mode & 0o077).toBe(0)
-    expect(statSync(prepared.env.OPENCODE_CONFIG!).mode & 0o077).toBe(0)
+    if (process.platform !== 'win32') expect(statSync(root).mode & 0o077).toBe(0)
+    if (process.platform !== 'win32') expect(statSync(prepared.env.OPENCODE_CONFIG!).mode & 0o077).toBe(0)
     expect(
       JSON.parse(readFileSync(prepared.env.OPENCODE_CONFIG!, 'utf8')).provider.fixture.models,
     ).toHaveProperty('model')
@@ -197,7 +197,7 @@ describe('OpenCode native adapter (explicitly synthetic fixtures)', () => {
     expect(
       JSON.parse(readFileSync(prepared.env.OPENCODE_CONFIG!, 'utf8')).provider.fixture.models,
     ).toHaveProperty('model')
-    expect(statSync(config).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect(statSync(config).mode & 0o777).toBe(0o600)
   })
   it('queries native catalogue without a prompt and never guesses variants', async () => {
     const calls: unknown[] = [],
@@ -508,7 +508,7 @@ describe('OpenCode native adapter (explicitly synthetic fixtures)', () => {
     writeFileSync(secret, 'SYNTHETIC-FILE-KEY', { mode: 0o600 })
     writeFileSync(
       join(account.nativeHome, '.config/opencode/opencode.json'),
-      `{"provider":{"fixture":{"options":{"apiKey":"{file:${secret}}","baseURL":"https://example.test"},"models":{"model":{}}}}, // trailing comment\n}`,
+      `{"provider":{"fixture":{"options":{"apiKey":${JSON.stringify(`{file:${secret}}`)},"baseURL":"https://example.test"},"models":{"model":{}}}}, // trailing comment\n}`,
     )
     const profile = await readOpenCodeProfile(account.authDirectory, { nativeHome: account.nativeHome })
     expect(profile.auth.fixture).toMatchObject({ type: 'api', key: 'SYNTHETIC-FILE-KEY' })

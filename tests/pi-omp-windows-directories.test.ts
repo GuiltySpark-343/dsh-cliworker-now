@@ -62,6 +62,22 @@ function metadata() {
 }
 
 describe('Pi/OMP Windows catalog and worker directory preparation', () => {
+  it('prepares an OMP SQLite snapshot beyond the Windows legacy path limit', async () => {
+    const f = await fixture()
+    const state = join(f.root, 'synthetic-long-state-'.repeat(5), 'nested-state-'.repeat(5))
+    const capture = metadata()
+    const options = { nativeHome: f.root, accountRoot: state }
+    await discoverPiOmp('omp', 'synthetic-cli', capture, state, options)
+    const prepared = await preparePiOmp({
+      cli: 'omp', executable: 'synthetic-cli', project: f.project, stateDirectory: state,
+      preference: { model: 'synthetic/model', effort: 'low' },
+      mode: 'plan', prompt: 'Synthetic long-path task', ...options,
+    }, capture)
+    const request = JSON.parse(await readFile(prepared.argv.at(-1)!, 'utf8'))
+    expect(request.confirmedCatalog).toEqual(choices)
+    expect(capture).toHaveBeenCalledTimes(4)
+    await prepared.cleanup()
+  })
   it.each(['pi', 'omp'] as const)(
     '%s reaches both metadata phases and preserves native efforts',
     async (cli) => {

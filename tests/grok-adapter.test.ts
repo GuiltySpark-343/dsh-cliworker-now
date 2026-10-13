@@ -12,7 +12,7 @@ import {
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { discoverGrok, GrokProtocol, prepareGrok } from '../src/host/grok-adapter.ts'
 import type { EventInput } from '../src/host/protocol.ts'
 const directories: string[] = []
@@ -60,10 +60,10 @@ describe('Grok adapter (synthetic fixtures; real execution not subscription-vali
     expect(prepared.argv).not.toContain('bypassPermissions')
     expect(prepared.argv).not.toContain('--sandbox')
     expect(prepared.argv).toContain('--no-subagents')
-    expect(prepared.env.GROK_HOME!.startsWith(realpathSync(stateDirectory) + '/')).toBe(true)
+    expect(prepared.env.GROK_HOME!.startsWith(realpathSync(stateDirectory) + sep)).toBe(true)
     const path = join(prepared.env.GROK_HOME!, 'config.toml')
-    expect(statSync(path).mode & 0o077).toBe(0)
-    expect(statSync(prepared.env.GROK_HOME!).mode & 0o077).toBe(0)
+    if (process.platform !== 'win32') expect(statSync(path).mode & 0o077).toBe(0)
+    if (process.platform !== 'win32') expect(statSync(prepared.env.GROK_HOME!).mode & 0o077).toBe(0)
     expect(readFileSync(path, 'utf8')).toContain('load_envrc = false')
     const editing = await prepareGrok({ ...input, mode: 'accept-edits' })
     expect(editing.env.GROK_HOME).toBe(prepared.env.GROK_HOME)
@@ -207,6 +207,7 @@ it('replaces old worker auth references from the own Grok source and removes the
     stateDirectory = directory(),
     project = directory()
   vi.stubEnv('HOME', native)
+  vi.stubEnv('USERPROFILE', native)
   mkdirSync(join(native, '.grok'))
   const auth = join(native, '.grok/auth.json')
   writeFileSync(auth, 'SYNTHETIC_OWN_GROK', { mode: 0o600 })
@@ -220,13 +221,21 @@ it('replaces old worker auth references from the own Grok source and removes the
   }
   const first = await prepareGrok(input),
     target = join(first.env.GROK_HOME!, 'auth.json')
-  expect(readFileSync(target, 'utf8')).toBe('SYNTHETIC_OWN_GROK')
-  rmSync(target)
+  const nativeAuth = process.platform === 'win32' ? auth : target
+  expect(first.env.GROK_AUTH_PATH).toBe(nativeAuth)
+  expect(readFileSync(nativeAuth, 'utf8')).toBe('SYNTHETIC_OWN_GROK')
+  // Windows uses GROK_AUTH_PATH directly; POSIX uses a derived symlink. Neither
+  // may resurrect an old worker credential after the native source logs out.
+  if (process.platform === 'win32') expect(existsSync(target)).toBe(false)
+  else rmSync(target)
   writeFileSync(target, 'SYNTHETIC_OLD_WORKER', { mode: 0o600 })
-  await prepareGrok({ ...input, conversationId: 'synthetic-session' })
-  expect(readFileSync(target, 'utf8')).toBe('SYNTHETIC_OWN_GROK')
+  const resumed = await prepareGrok({ ...input, conversationId: 'synthetic-session' })
+  expect(resumed.env.GROK_AUTH_PATH).toBe(nativeAuth)
+  expect(readFileSync(nativeAuth, 'utf8')).toBe('SYNTHETIC_OWN_GROK')
+  if (process.platform === 'win32') expect(existsSync(target)).toBe(false)
   expect(readFileSync(auth, 'utf8')).toBe('SYNTHETIC_OWN_GROK')
   rmSync(auth)
   await prepareGrok({ ...input, conversationId: 'synthetic-session' })
   expect(existsSync(target)).toBe(false)
+  expect(existsSync(nativeAuth)).toBe(false)
 })

@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { chmod, mkdir, lstat, readFile, writeFile, cp, readdir, open, rm } from 'node:fs/promises'
-import { resolve, join, relative, dirname } from 'node:path'
+import { resolve, join, relative, dirname, isAbsolute, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { OWNER, MARKER, WINDOWS_TESTS, sha256, validateRemoteRoot, createSnapshot, validateSnapshot, validateArchiveEntries, strictSshArgs, encodedPowerShell, assertNoLinksWithin } from './windows-remote-common.mjs'
 
@@ -14,7 +14,8 @@ const privateRoot = join(projectRoot, '.test-data', 'windows-remote')
 export async function readConfig(path, root = projectRoot) {
   const absolute = resolve(root, path)
   const privateDirectory = join(root, '.test-data', 'windows-remote')
-  if (!absolute.startsWith(`${privateDirectory}/`) || relative(privateDirectory, absolute).includes('..')) throw new Error('Config must be inside .test-data/windows-remote (Git ignored)')
+  const withinPrivate = relative(privateDirectory, absolute)
+  if (!withinPrivate || isAbsolute(withinPrivate) || withinPrivate === '..' || withinPrivate.startsWith(`..${sep}`)) throw new Error('Config must be inside .test-data/windows-remote (Git ignored)')
   for (let current = absolute; current !== root; current = dirname(current)) {
     if ((await lstat(current)).isSymbolicLink()) throw new Error(`Config path may not contain symlinks: ${current}`)
   }
@@ -24,7 +25,7 @@ export async function readConfig(path, root = projectRoot) {
   if (typeof config.user !== 'string' || !/^[A-Za-z\d_][A-Za-z\d_.-]*$/.test(config.user)) throw new Error('An explicit SSH user is required')
   validateRemoteRoot(config.remoteRoot)
   for (const key of ['identity', 'knownHosts']) {
-    if (typeof config[key] !== 'string' || !config[key].startsWith('/') || /[\r\n\0]/.test(config[key])) throw new Error(`${key} must be an absolute local file path`)
+    if (typeof config[key] !== 'string' || !isAbsolute(config[key]) || /[\r\n\0]/.test(config[key])) throw new Error(`${key} must be an absolute local file path`)
     const info = await lstat(config[key])
     if (!info.isFile() || info.isSymbolicLink()) throw new Error(`${key} must be a regular local file`)
     if (key === 'identity' && process.platform !== 'win32' && (info.mode & 0o077)) throw new Error('SSH private key permissions must be 0600 or stricter')

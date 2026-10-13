@@ -182,7 +182,7 @@ describe('profile-wide CLI enablement', () => {
     const returned = storage.cliSettings()
     returned.enabled.antigravity = false
     expect(storage.cliSettings().enabled.antigravity).toBe(true)
-    expect(statSync(join(storage.directory, 'cli-settings.json')).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect(statSync(join(storage.directory, 'cli-settings.json')).mode & 0o777).toBe(0o600)
     storage.close()
     const restored = new WorkerStorage(storage.directory)
     cleanups.push(() => restored.close())

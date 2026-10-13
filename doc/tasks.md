@@ -1084,3 +1084,17 @@
 - 最终实机窗口验收：`agy-final-observer.json` 覆盖 16:47:53.166–16:51:54.552 UTC（241386 ms），全部新增 Console／CASCADIA／WindowsTerminal 窗口事件为 0，未按父链过滤遗漏系统激活的终端。四次 AGY 查询均无同名自派生，四份日志均明确 updater disabled。AGY 首读就绪，原模型与 Low 同值重选真实触发自动保存并成功（无错误）；刷新在 7 秒快照时仍等待，随后模型菜单可用并完成保存，不把中间快照当作完成。Codex 页面／刷新正常，未创建新的 Codex 偏好；原 AGY／MiMo 偏好内容哈希保持一致。未发起模型生成或登录。
 - 其他入口核对：任务初次／恢复／续聊共用普通 launch；账号状态、目录、安装发现和自有 Node/Bun/Python/PowerShell 引导器已有后台隐藏设置。AGY Windows 账号身份只读固定 PowerShell，不启动 AGY；用户显式账号终端保持交互。先前同包 Codex 修复观察覆盖 11 个 CLI 页，未捕获第三种后台窗口；部分 CLI 的认证／目录未就绪仅记录原状态，不宣称所有账号与模型端到端通过。未知 Codex wrapper 版本及第三方任意内部派生未获得普遍窗口保证。
 - 收尾核对：Windows 仍为正常 Desktop 启动，正式 Host 哈希匹配最终包、无诊断参数；0 活动 worker、0 账号 owner、0 查询 helper、0 observer task／launcher。只清理本轮登记的临时脚本／诊断任务，保留当前依赖引用的安装包、用户终端及历史数据。完整私有汇总 `.test-data/settings-console-078/windows-delivery-summary.json`；本次增量规格同步、严格校验及归档，本地阶段提交，无 GitHub 推送或版本增加。旧登录／MiMo change 的 34/36 与真实模型缺口保持可见。
+
+## 2026-10-13：v0.7.8 获准发布验收与模型目录修复
+
+- 用户授权调用 GPT-6.1 Sol 执行全量验收及 GitHub、npm、dshmarket 提交。本次保持 v0.7.8；三个 Sol 验收分工分别核对 Mac、Windows 及安装/模型来源，不以子 Agent 自述替代日志和实机结果。
+- 隔离 HOME/DSH_HOME 与临时 profile 的真实安装验证：首次无版本名得到当时 latest 0.7.7，但已装 `^0.7.6` 或固定 `0.7.6` 后使用无版本名均保持旧版；`@latest` 能升级并重复执行。双语 README 因此统一使用 `dsh plugin --profile desktop add dsh-cliworker-now@latest`，明确命令触发升级、宿主启动不自动升级。原始输出与版本/lock/config 核对保留于 `.test-data/release-078-sol61/install-command/`。
+- Windows Claude：经用户明确授权向当前本机 CC Switch 执行一次只读模型 GET，确认 HTTP 200 且原始数组为空。修复保留原生配置角色模型，标签与执行 ID 分离；只适用于自身 loopback 原始空目录，filtered-empty、远端空目录、401/403/网络失败均有拒绝回归。未执行模型生成、登录或账号切换。
+- Codex：确认旧固定目录查询版本漏掉 GPT-6 模型，改从 app-server 握手获取当前 CLI 版本，再按自身账号返回的 ID 和思考强度补充原生陈旧缓存。正式界面检查又发现新加入的 NUX 过滤误删 GPT-6.1-Sol；官方只读元数据显示它可见、支持 API、最低版本满足，NUX 是推荐提示。删除错误过滤并保留明确 deny/hide 规则，重新冻结与全量验收，没有将中间通过结果当作最终结果。
+- 新设置缓存覆盖首次识别、重复打开、重启同内容不写、内容变化更新、项目隔离、手动刷新、账号/路径变化、取消及并发、错误不回退、恶意文件/目录链接和有效默认值保留。设置页手动刷新改为独立 Gateway 方法，旧测试夹具同步，229 项关联测试通过。
+- 首次 Windows 全量实际出现 132 项失败，已保留失败报告并逐项分解。修复控制管道自然退出、OMP SQLite/请求目录超长路径、Hermes/OpenCode/Pi 文件链接与竞态检查；跨平台夹具使用原生路径与 Windows Python，POSIX mode/SIGTERM 专属断言按平台限定，未用整套跳过掩盖业务失败。7 文件针对性 Windows 复验 173 通过、2 POSIX 跳过。
+- 中间 Mac 全量曾有 4 项设置刷新夹具失败和 3 个未处理模拟拒绝；修复后 `final-freeze-2` 为 2190 通过、8 跳过，但真实 UI 检查发现上述 NUX 缺陷，因此最终结论以后续 `final-freeze-3` 与 Windows 最终记录为准。所有中间失败证据保留，不覆盖。
+- 最终同一运行时代码：Mac 完整 101 文件，2190 通过、8 平台跳过、0 失败；Windows 完整 101 文件，2179 通过、19 平台跳过、0 失败。最终 3 个跨平台夹具分别核验无 Appx 安装的只读查询、Grok 原生 GROK_AUTH_PATH 以及 Hermes 合成终端提供者；没有新增整套跳过。最终 JSON 位于 `.test-data/release-078-sol61/mac-final-after-platform-fixtures.json` 和 `windows/final-full-tests.json`。
+- 隔离 preview、Host/Client 类型检查、Windows 新生成 Gateway 类型检查和 Host import 全通过。139 个源码文件与 preview 一致；最终构建 357 个 lib 文件，Client 仅构建位置 region 注释/映射与 preview 不同，可执行内容相同；源码与两份 account-models helper 的哈希一致。严格 OpenSpec 校验 13/13 通过。
+- Mac 正式构建前确认 Harness 已退出、22 个历史 Worker 中活动数为 0、无账号/任务 bridge。真实 Desktop 看见 Codex 7 项含 GPT-6.1-Sol/GPT-6-Astra/GPT-6-Luna，原 GPT-5.6-Luna Low 保留；Claude 自身 API 路由显示 13 项及配置候选边界说明。重复打开与手动刷新同目录不改 inode/mtime，重启后 Antigravity 重识别同值不写，Codex 6→7 项变化更新；8 个偏好文件哈希不变，缓存文件均 0600。设置分隔线、标题、折叠路径区、菜单等宽已实际渲染核验。
+- 待发布候选包共 362 个文件，公共清单 `private:false`、无生命周期脚本/开发依赖/私有资料/链接；开发清单仍 `private:true`。tgz SHA-256：`e2eebaebcb0e3cdcd503d070428de668add7288f7eaf8756cb43a8677f4a0f51`。Host：`31914eb59a1439b72e53e2416a8d266ae35516bcd08cf34d413a55b05da1f7aa`；Client：`bb57da4ca8df6416b5c65f08711f9ab9f330ece075932c6d098176b697ad6f5e`。此阶段完成自动检查和 Mac UI；Windows 最终包 UI、远端 CI 与公开分发回下载将在后续记录，不能提前视为完成。

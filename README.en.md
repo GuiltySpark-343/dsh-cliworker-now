@@ -17,7 +17,7 @@ Choose a CLI, model and role, dispatch a named agent, follow its work in the sid
 
 </div>
 
-The current development version is **v0.7.8 (unreleased)**. Installation commands below still target the published v0.7.7. Routine changes use focused verification; full acceptance runs during an approved release. Version increases and GitHub uploads require user approval.
+The current version is **v0.7.8**. Routine changes use focused verification; full acceptance runs during an approved release.
 
 **On this page**
 
@@ -74,6 +74,8 @@ The settings dialog manages role cards by name and summary. Seven writing roles 
 
 Enable each CLI separately and manage its account, project default model and reasoning effort. Selecting a model or effort saves the project defaults automatically; opening settings or refreshing the list does not change them. Save failures remain visible and can be retried by selecting again. Supported CLIs can open their native account terminal. Authentication information follows the CLI's actual account source.
 
+After each Harness start, opening a CLI settings page for the first time discovers and saves its model and effort choices. Later opens reuse the verified list. The next start refreshes the list and rewrites the cache only when it changes. Valid saved defaults remain selected; unavailable defaults require a new choice. Refresh Models forces a new check.
+
 ![CLI connection settings in Harness, using an OMP page without personal account identifiers](doc/assets/readme/cli-settings.jpg)
 
 ### 3.4 Light and dark themes
@@ -119,7 +121,7 @@ MiMo reuses a bounded, short-lived in-memory cache of native capabilities to red
 
 The settings dialog allows at most two concurrent account-status requests, including the selected CLI. The selected item goes first when settings opens; switching only reprioritizes queued requests. Model catalogs are queried separately, so this is not a limit on all subprocesses. Closing or disabling cancels the relevant reads; Host remains responsible for process cleanup.
 
-Verified Kimi managed OAuth model capabilities and Claude command-parameter capabilities can also be reused briefly. Each catalog query still checks current credentials, expiry and remote access; remote quota is not cached. Windows launchers hide extra console windows for background queries and embedded account terminals.
+Verified Kimi managed OAuth model capabilities and Claude command-parameter capabilities can also be reused briefly. Each actual catalog rediscovery still checks current credentials, expiry and remote access; remote quota is not cached. Windows launchers hide extra console windows for background queries and embedded account terminals.
 
 Initial settings loading, refreshes and automatic model/effort saves retain their account and catalog checks. For the verified Codex npm 0.162.1 launcher, Windows background calls use the native CLI from the same installation, avoiding an extra terminal created inside the JavaScript launcher. The saved installation path, package-manager environment and process cleanup are preserved. Other launcher revisions keep their existing behavior; see the [verification log](doc/tasks.md) for the observed window coverage.
 
@@ -140,7 +142,7 @@ Native mappings, including Fable and the `[1m]` context suffix, retain their exa
 ### 5.1 One-line install
 
 ```sh
-dsh plugin --profile desktop add dsh-cliworker-now@0.7.7
+dsh plugin --profile desktop add dsh-cliworker-now@latest
 ```
 
 <details>
@@ -149,15 +151,15 @@ dsh plugin --profile desktop add dsh-cliworker-now@0.7.7
 For the Web profile:
 
 ```sh
-dsh plugin --profile web add dsh-cliworker-now@0.7.7
+dsh plugin --profile web add dsh-cliworker-now@latest
 ```
 
-Finish active tasks and fully quit Harness before installation or updates, then reopen it. The npm package is prebuilt and needs no manual extraction or compilation. You can also enter `dsh-cliworker-now@0.7.7` in the plugin manager's Add Plugin dialog.
+Finish active tasks and fully quit Harness before installation or updates, then reopen it. Each run of the `@latest` command installs or updates to the version currently tagged latest on npm. Starting Harness does not automatically update the plugin. The npm package is prebuilt and needs no manual extraction or compilation. You can also enter `dsh-cliworker-now@latest` in the plugin manager's Add Plugin dialog.
 
 GitHub Release fallback:
 
 ```sh
-dsh plugin --profile desktop add https://github.com/SuperWheel/cliworker-now/releases/download/v0.7.7/dsh-cliworker-now-0.7.7.tgz
+dsh plugin --profile desktop add https://github.com/SuperWheel/cliworker-now/releases/download/v0.7.8/dsh-cliworker-now-0.7.8.tgz
 ```
 
 For source development:
@@ -211,7 +213,7 @@ Later invocations in the same main conversation use its confirmed setup, includi
 
 Each explicit CLI request includes routing guidance in that same model request: call `cliworker_start` to open setup. The plugin collects model, effort and role before launching, so the main model needs no preliminary role or launch questions. Every call must explicitly include `cli`, including Antigravity. A missing selector returns a parameter error instead of using a previous or default CLI. The ordinary question tool remains unchanged.
 
-All 11 CLIs use only their own native login or an API key configured in that CLI's own settings or private `.env`. Selectable models and reasoning efforts are the intersection of CLI capabilities and the current account's available scope. A public catalog, old cache, fixed alias or anonymous free model alone does not establish availability. If access cannot be confirmed, the list stays empty with a short reason. Permission discovery uses read-only metadata, rather than generation requests.
+All 11 CLIs use only their own native login or an API key configured in that CLI's own settings or private `.env`. Models and reasoning efforts are filtered by CLI capabilities and the current account's available scope. Claude's explicit own gateway configuration follows the separate rules in section 4, showing configured candidates with remote availability stated as unverified. A public catalog, old cache, fixed alias or anonymous free model alone does not establish availability. Choices that do not meet these evidence requirements stay unavailable, with a short reason. Permission discovery uses read-only metadata, rather than generation requests.
 
 Model menus show readable names without provider or organization path prefixes or parenthesized notes, and deduplicate the same native model. Distinct models with the same short name remain separate options. Saved choices and execution retain the full route ID. For a new choice, models with confirmed available free allowance appear first; missing prices and default zero-cost metadata are not treated as proof of free access. Existing valid choices remain, and a failed free route never silently becomes a paid request.
 

@@ -18,6 +18,7 @@ const unavailable = (model) =>
   model.disabled === true ||
   model.upgrade_required === true ||
   model.visibility === 'hidden' ||
+  model.visibility === 'hide' ||
   model.visibility === 'none'
 const numericRate = (value) =>
   typeof value === 'number'
@@ -60,6 +61,7 @@ function normalize(payload, oauth, token) {
   if (!list) return undefined
   const result = new Map()
   for (const model of list) {
+    // Availability NUX is informational text, not an account denial.
     if (!object(model) || unavailable(model)) continue
     const id = model.slug ?? model.id
     if (
@@ -70,6 +72,14 @@ function normalize(payload, oauth, token) {
     )
       continue
     const name = model.display_name ?? model.name
+    const reasoningEfforts =
+      oauth && Array.isArray(model.supported_reasoning_levels)
+        ? [...new Set(model.supported_reasoning_levels.flatMap((level) =>
+            object(level) && typeof level.effort === 'string' && /^[a-z]+$/.test(level.effort)
+              ? [level.effort]
+              : [],
+          ))]
+        : []
     result.set(id, {
       id,
       ...(typeof name === 'string' &&
@@ -80,6 +90,7 @@ function normalize(payload, oauth, token) {
         ? { name }
         : {}),
       cost: costFor(model, oauth),
+      ...(reasoningEfforts.length ? { reasoningEfforts } : {}),
     })
   }
   return [...result.values()]
@@ -131,6 +142,15 @@ export async function probeAccountModels(input, options = {}) {
   if (oauth && (typeof credential.expires !== 'number' || credential.expires <= Date.now() + 30000))
     return denied('authentication')
   const codex = oauth && ['openai', 'openai-codex'].includes(input.provider)
+  if (
+    input.codexClientVersion !== undefined &&
+    (typeof input.codexClientVersion !== 'string' || input.codexClientVersion.length > 64 ||
+      !/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(input.codexClientVersion))
+  )
+    return unknown()
+  // Other native client integrations retain their existing compatibility query.
+  // discoverCodexModels always requires and supplies its own handshake version.
+  const codexVersion = input.codexClientVersion ?? '0.144.1'
   // xAI/other subscription catalogs do not expose a verified per-account scope
   // contract here. Do not turn an OAuth login into their whole public catalog.
   if (oauth && !codex) return unknown()
@@ -162,12 +182,12 @@ export async function probeAccountModels(input, options = {}) {
       }
       if (typeof accountId === 'string' && accountId) headers['chatgpt-account-id'] = accountId
       headers['OpenAI-Beta'] = 'responses=experimental'
-      headers.originator = 'pi'
-      headers.version = '0.144.1'
+      headers.originator = input.codexClientVersion ? 'cli_worker_models' : 'pi'
+      headers.version = codexVersion
     }
     const fetcher = options.fetch ?? globalThis.fetch
     const request = async (path) => {
-      const target = `${base}${path}${codex && path !== '/wham/usage' ? '?client_version=0.144.1' : ''}`
+      const target = `${base}${path}${codex && path !== '/wham/usage' ? `?client_version=${encodeURIComponent(codexVersion)}` : ''}`
       const response = await fetcher(target, { method: 'GET', headers, signal, redirect: 'error' })
       if (!response.ok) {
         await response.body?.cancel()
@@ -239,7 +259,12 @@ export async function probeAccountModels(input, options = {}) {
       ) {
         for (const model of models) if (model.cost === 'free') model.cost = 'unknown'
       }
-      return { state: 'supported', source: 'account-models', models }
+      return {
+        state: 'supported',
+        source: 'account-models',
+        models,
+        ...(!codex && entries(envelope)?.length === 0 ? { catalogEmpty: true } : {}),
+      }
     }
     if (!oauth && [404, 405].includes(modelResponse?.status)) {
       // Declaring a custom model is not an account entitlement proof.

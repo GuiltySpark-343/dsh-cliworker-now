@@ -23,7 +23,7 @@ const entry = (model: string, extra: Record<string, unknown> = {}) => ({
 })
 function fixture(
   pages: unknown[][],
-  options: { stall?: boolean; cleanup?: boolean; repeated?: boolean } = {},
+  options: { stall?: boolean; cleanup?: boolean; repeated?: boolean; userAgent?: string } = {},
 ) {
   const stdout = new PassThrough(),
     stderr = new PassThrough(),
@@ -41,7 +41,7 @@ function fixture(
         callback()
         if (options.stall) return
         if (message.method === 'initialize')
-          stdout.write(JSON.stringify({ id: message.id, result: {} }) + '\n')
+          stdout.write(JSON.stringify({ id: message.id, result: { userAgent: options.userAgent ?? 'cli_worker_models/0.162.1 (synthetic)' } }) + '\n')
         if (message.method === 'model/list') {
           stdout.write(
             JSON.stringify({
@@ -129,6 +129,34 @@ describe('Codex native capability intersection', () => {
       }),
       expect.anything(),
     )
+  })
+  it('uses the actual server version and current remote capabilities when the native catalog is stale', async () => {
+    const f = fixture([[entry('gpt-5.6-sol')]])
+    vi.mocked(readCodexOwnAccountSource).mockResolvedValue({
+      provider: 'openai-codex', credential: { type: 'oauth', access: 'synthetic-token' },
+      nativeRouteConfirmed: true, baseUrl: 'https://chatgpt.com/backend-api',
+    } as any)
+    vi.mocked(probeAccountModels).mockResolvedValue({
+      state: 'supported', source: 'account-models', models: [
+        { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', cost: 'paid', reasoningEfforts: ['low', 'high', 'max', 'invented'] },
+        { id: 'remote-id-without-capabilities', cost: 'unknown' },
+      ],
+    })
+    expect(await discoverCodexModels(f.backend, DEFAULT_CONFIG, '/synthetic/codex', '/synthetic', new AbortController().signal))
+      .toEqual([{ id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', efforts: ['low', 'high', 'max'], cost: 'paid' }])
+    expect(probeAccountModels).toHaveBeenCalledWith(expect.objectContaining({ codexClientVersion: '0.162.1' }), expect.anything())
+    expect(f.messages.some((message) => /thread|turn/.test(message.method))).toBe(false)
+  })
+  it('does not guess a Codex query version when the native handshake is unsupported', async () => {
+    const f = fixture([[entry('cached')]], { userAgent: 'unsupported-server' })
+    vi.mocked(readCodexOwnAccountSource).mockResolvedValue({
+      provider: 'openai-codex', credential: { type: 'oauth', access: 'synthetic-token' },
+      nativeRouteConfirmed: true, baseUrl: 'https://chatgpt.com/backend-api',
+    } as any)
+    await expect(discoverCodexModels(f.backend, DEFAULT_CONFIG, '/synthetic/codex', '/synthetic', new AbortController().signal))
+      .rejects.toThrow('版本无法确认')
+    expect(probeAccountModels).not.toHaveBeenCalled()
+    expect(f.child.waitForExit).toHaveBeenCalledOnce()
   })
   it('unknown/denied account scope never exposes native or cached choices', async () => {
     const f = fixture([[entry('public')]])

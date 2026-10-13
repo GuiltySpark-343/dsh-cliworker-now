@@ -2,7 +2,7 @@ import { constants } from 'node:fs'
 import { lstat, open, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, join, toNamespacedPath } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { inspectPiInstallation } from './pi-installation.mjs'
@@ -138,7 +138,7 @@ export async function assertPiOmpRefreshSources(root, expected) {
     let current
     if (receipt.cli === 'pi') current = (await refreshJson(entry.path, false))[entry.provider]
     else {
-      const db = new DatabaseSync(entry.path, { readOnly: true })
+      const db = new DatabaseSync(toNamespacedPath(entry.path), { readOnly: true })
       try {
         current = rowCredential(
           db
@@ -173,7 +173,7 @@ async function refreshedEntries(root, receipt) {
       if (refreshFingerprint(data[entry.provider]) !== entry.hash) throw unsafe()
     for (const entry of receipt.entries) result.push([entry, data[entry.provider]])
   } else {
-    const db = new DatabaseSync(join(root, 'agent/agent.db'), { readOnly: true })
+    const db = new DatabaseSync(toNamespacedPath(join(root, 'agent/agent.db')), { readOnly: true })
     try {
       const rows = db
         .prepare('SELECT rowid AS id,provider,credential_type,data,disabled_cause FROM auth_credentials')

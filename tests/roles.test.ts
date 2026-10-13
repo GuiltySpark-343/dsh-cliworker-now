@@ -96,8 +96,8 @@ describe('editable role library', () => {
       '用户修改后的角色提示词',
     )
     expect(reopened.rolePresets().some((preset) => preset.id === deleted)).toBe(false)
-    expect(statSync(join(root, 'state', 'role-presets.json')).mode & 0o777).toBe(0o600)
-    expect(statSync(join(root, 'state')).mode & 0o777).toBe(0o700)
+    if (process.platform !== 'win32') expect(statSync(join(root, 'state', 'role-presets.json')).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect(statSync(join(root, 'state')).mode & 0o777).toBe(0o700)
     const detached = reopened.rolePresets()
     detached[0]!.prompt = 'must not mutate stored role'
     expect(reopened.rolePresets()[0]!.prompt).toBe('用户修改后的角色提示词')

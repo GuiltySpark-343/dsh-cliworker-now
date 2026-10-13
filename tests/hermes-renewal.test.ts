@@ -31,6 +31,17 @@ vi.mock('../src/host/hermes-installation.ts', async (load) => ({
     ...args,
   ]),
 }))
+vi.mock('../src/host/windows-account-terminal.ts', async (load) => ({
+  ...(await load<typeof import('../src/host/windows-account-terminal.ts')>()),
+  // This suite tests AccountManager's Hermes reservations with a synthetic PTY,
+  // not the Windows Job/ConPTY handshake. The native platform owner requires
+  // control receipts and streams absent from this renewal-only backend; its
+  // lifecycle is covered independently by windows-account-terminal.test.ts.
+  spawnAccountTerminal: (
+    backend: ProcessBackend,
+    spec: Parameters<NonNullable<ProcessBackend['spawnTerminal']>>[0],
+  ) => backend.spawnTerminal!(spec),
+}))
 
 // All account/token/HTTP/process data below are synthetic. No native CLI or network runs.
 const roots: string[] = []
@@ -57,8 +68,8 @@ function deferred<T = void>() {
 function fixture(ttl = -60) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'hermes-renewal-synthetic-')))
   roots.push(home)
-  const executable = join(home, 'hermes')
-  writeFileSync(executable, '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+  const executable = join(home, 'hermes.cjs')
+  writeFileSync(executable, '#!/usr/bin/env node\nprocess.exit(0)\n', { mode: 0o700 })
   const config = {
     auth: { adopt_external_logins: false },
     model: { provider: 'nous', default: 'synthetic/free', base_url: NOUS_INFERENCE },
@@ -400,6 +411,7 @@ describe('shared native Hermes Nous renewal', () => {
     gate.resolve()
     cleanup.resolve(true)
     const terminal = await opening
+    expect(spawnTerminal).toHaveBeenCalledTimes(1)
     await expect(query).rejects.toMatchObject({ state: 'busy' })
     const selected = effectiveHermesHome(f.runtime)
     expect(selected).not.toBe(f.home)

@@ -190,7 +190,7 @@ describe('first-party model scopes', () => {
     await writeFile(join(root, 'data/auth.json'), JSON.stringify({ own: { type: 'api', key: 'own-key' } }))
     const capture = vi.fn(async (argv: string[]) =>
       argv.includes('paths')
-        ? `data       ${root}/data\nconfig     ${root}/config\n`
+        ? `data       ${join(root, 'data')}\nconfig     ${join(root, 'config')}\n`
         : argv.includes('config')
           ? '{}'
           : `own/native-model\n${JSON.stringify(mimo(), null, 2)}\n`,
@@ -270,7 +270,7 @@ async function mimoFixture() {
   vi.stubEnv('HOME', root)
   const capture = vi.fn(async (argv: string[], _env?: Record<string, string>) =>
     argv.includes('paths')
-      ? `data ${root}/data\nconfig ${root}/config\n`
+      ? `data ${join(root, 'data')}\nconfig ${join(root, 'config')}\n`
       : argv.includes('config')
         ? '{}'
         : `own/native-model\n${JSON.stringify(mimo())}\n`,
@@ -371,7 +371,7 @@ describe('MiMo configuration is checked before any native process can expand ref
     )
     f.capture.mockImplementation(async (argv) =>
       argv.includes('paths')
-        ? `data ${f.root}/data\nconfig ${f.root}/config\n`
+        ? `data ${join(f.root, 'data')}\nconfig ${join(f.root, 'config')}\n`
         : argv.includes('config')
           ? JSON.stringify({ provider: { own: { options: { apiKey: ownKey } } } })
           : `own/native-model\n${JSON.stringify(mimo())}\n`,
@@ -438,7 +438,7 @@ describe('MiMo configuration is checked before any native process can expand ref
     const f = await mimoFixture()
     f.capture.mockImplementationOnce(async () => {
       await writeFile(join(f.root, 'config/mimocode.json'), '{"model":"{file:/synthetic/foreign}"}')
-      return `data ${f.root}/data\nconfig ${f.root}/config\n`
+      return `data ${join(f.root, 'data')}\nconfig ${join(f.root, 'config')}\n`
     })
     await expect(f.read()).rejects.toThrow('配置含外部引用')
     expect(f.capture).toHaveBeenCalledOnce()

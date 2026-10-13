@@ -103,6 +103,42 @@ it('does not silently switch to native when a reachable proxy rejects authentica
   expect(fetch).toHaveBeenCalledOnce()
   expect(route.kind).toBe('proxy')
 })
+it('keeps configured proxy role IDs when CC Switch has no published Stack models', async () => {
+  const roleModels = {
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5',
+    ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5',
+    ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-5',
+    ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-5',
+  }
+  await write({ env: { ...proxy.env, ...roleModels,
+    ...Object.fromEntries(Object.keys(roleModels).map((key) => [`${key}_NAME`, 'glm-5.3-flash'])),
+  } })
+  const route = await readClaudeOwnRoute(project, control(), { available: async () => true })
+  const fetch = vi.fn(async (_url: unknown, init: any) => {
+    expect(init.headers['anthropic-version']).toBe('2023-06-01')
+    return new Response(JSON.stringify({ data: [], has_more: false }))
+  })
+  const models = await discoverFirstPartySources([route.source!], control(), { fetch })
+  expect(models.map((model) => model.id).sort()).toEqual(Object.values(roleModels).sort())
+  expect(models.every((model) => model.label === 'glm-5.3-flash' && model.efforts?.join() === 'default')).toBe(true)
+  expect(models.some((model) => model.id === 'glm-5.3-flash')).toBe(false)
+})
+it('does not restore proxy choices when an actual catalog denies all candidates', async () => {
+  await write(proxy)
+  const route = await readClaudeOwnRoute(project, control(), { available: async () => true })
+  const models = await discoverFirstPartySources([route.source!], control(), {
+    fetch: async () => new Response(JSON.stringify({ data: [{ id: 'synthetic-proxy-model', allowed: false }] })),
+  })
+  expect(models).toEqual([])
+})
+it('does not extend a remote gateway from a successful empty catalog', async () => {
+  await write({ env: { ...proxy.env, ANTHROPIC_BASE_URL: 'https://gateway.example.test' } })
+  const route = await readClaudeOwnRoute(project, control())
+  const models = await discoverFirstPartySources([route.source!], control(), {
+    fetch: async () => new Response(JSON.stringify({ data: [] })),
+  })
+  expect(models).toEqual([])
+})
 it('does not silently switch to native for unavailable proxy model metadata', async () => {
   await write(proxy)
   const route = await readClaudeOwnRoute(project, control(), { available: async () => true })

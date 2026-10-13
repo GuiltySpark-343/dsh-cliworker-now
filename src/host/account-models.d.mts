@@ -5,12 +5,16 @@ export interface AccountModelScope {
   denialReason?: 'authentication' | 'quota'
   /** Endpoint explicitly returned 404/405; never inferred from network or parse errors. */
   catalogUnavailable?: boolean
-  models: { id: string; name?: string; cost: 'free' | 'paid' | 'unknown' }[]
+  /** Successful metadata response contained an explicitly empty raw model array. */
+  catalogEmpty?: boolean
+  models: { id: string; name?: string; cost: 'free' | 'paid' | 'unknown'; reasoningEfforts?: string[] }[]
 }
 export interface AccountModelInput {
   provider: string
   credential: { type: 'api' | 'oauth'; key?: string; access?: string; expires?: number; accountId?: string }
   baseUrl?: string
+  /** Installed Codex app-server version from its initialize handshake, never a guessed model version. */
+  codexClientVersion?: string
   apiType?: string
   /** Mirror a native route that explicitly sends both Anthropic auth headers. */
   anthropicAuth?: 'api-key-and-bearer' | 'bearer'

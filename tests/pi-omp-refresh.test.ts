@@ -155,8 +155,8 @@ describe.each(['pi', 'omp'] as const)('%s own-source OAuth refresh (synthetic)',
     const next = await f.snapshot()
     expect(next.directory).toBe(a.directory)
     expect(next.receipt.entries[0].hash).toBe(refreshFingerprint(refreshed))
-    expect((await stat(a.leaseDirectory!)).mode & 0o777).toBe(0o700)
-    expect((await stat(join(a.leaseDirectory!, 'receipt.json'))).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect((await stat(a.leaseDirectory!)).mode & 0o777).toBe(0o700)
+    if (process.platform !== 'win32') expect((await stat(join(a.leaseDirectory!, 'receipt.json'))).mode & 0o777).toBe(0o600)
   })
 
   it.each(['logout', 'delete-file', 'switch-account', 'new-source-token'] as const)(
@@ -421,6 +421,7 @@ it(
   async () => {
     const f = await fixture('pi')
     vi.stubEnv('HOME', f.root)
+    if (process.platform === 'win32') vi.stubEnv('USERPROFILE', f.root)
     const phases: string[] = []
     const launch = await extendedLaunch(
       'pi',

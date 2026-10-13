@@ -13,7 +13,13 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { discoverZCode, parseZCodeBuiltin, prepareZCode, ZCodeProtocol, zcodeEnvironment } from '../src/host/zcode-adapter.ts'
+import {
+  discoverZCode,
+  parseZCodeBuiltin,
+  prepareZCode,
+  ZCodeProtocol,
+  zcodeEnvironment,
+} from '../src/host/zcode-adapter.ts'
 import type { EventInput } from '../src/host/protocol.ts'
 
 const directories: string[] = []
@@ -128,7 +134,7 @@ describe('ZCode adapter (explicitly synthetic fixtures)', () => {
     const launch = await prepareZCode({ ...input, conversationId: 'sess_original', authDirectory: auth })
     expect(launch.argv[1]).toContain('zcode-resume.mjs')
     const request = JSON.parse(readFileSync(launch.argv[2], 'utf8'))
-    expect(statSync(launch.argv[2]).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect(statSync(launch.argv[2]).mode & 0o777).toBe(0o600)
     expect(request.selection).toEqual({
       providerId: route,
       modelId: 'GLM-5.3-Flash',
@@ -173,8 +179,9 @@ describe('ZCode adapter (explicitly synthetic fixtures)', () => {
         .defaultModelSelection,
     ).toEqual({ providerId: route, modelId: 'GLM-5.3-Flash', options: { reasoningLevel: 'low' } })
     for (const path of [state, join(state, 'logs'), join(state, 'storage'), join(state, 'tmp')])
-      expect(statSync(path).mode & 0o777).toBe(0o700)
-    expect(statSync(launch.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE).mode & 0o777).toBe(0o600)
+      if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o700)
+    if (process.platform !== 'win32')
+      expect(statSync(launch.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE).mode & 0o777).toBe(0o600)
     const edit = await prepareZCode({
       ...input,
       mode: 'accept-edits',
@@ -196,9 +203,9 @@ describe('ZCode adapter (explicitly synthetic fixtures)', () => {
     symlinkSync(outside, join(state, 'personal.json'))
     await prepareZCode(input)
     expect(readFileSync(outside, 'utf8')).toBe('untouched')
-    expect(statSync(outside).mode & 0o777).toBe(0o644)
+    if (process.platform !== 'win32') expect(statSync(outside).mode & 0o777).toBe(0o644)
     expect(lstatSync(join(state, 'personal.json')).isSymbolicLink()).toBe(false)
-    expect(statSync(join(state, 'personal.json')).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect(statSync(join(state, 'personal.json')).mode & 0o777).toBe(0o600)
   })
   it.each(['state', 'storage', 'logs', 'tmp'])(
     'rejects a planted %s directory link before writing there',
@@ -209,7 +216,7 @@ describe('ZCode adapter (explicitly synthetic fixtures)', () => {
       if (target !== 'state') mkdirSync(state)
       symlinkSync(outside, target === 'state' ? state : join(state, target))
       await expect(prepareZCode(input)).rejects.toThrow('must not be a symlink')
-      expect(statSync(outside).mode & 0o777).toBe(0o755)
+      if (process.platform !== 'win32') expect(statSync(outside).mode & 0o777).toBe(0o755)
       expect(existsSync(join(outside, 'personal.json'))).toBe(false)
     },
   )
@@ -362,7 +369,8 @@ describe('ZCode adapter (explicitly synthetic fixtures)', () => {
     expect(copy.config.modelConfigRules.manualProviderModelRules).toEqual(
       plugin.config.modelConfigRules.manualProviderModelRules,
     )
-    expect(statSync(launch.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32')
+      expect(statSync(launch.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE).mode & 0o777).toBe(0o600)
     expect(JSON.stringify(launch)).not.toContain('SYNTHETIC_SECRET')
     expect([readFileSync(globalPath, 'utf8'), readFileSync(pluginPath, 'utf8')]).toEqual(before)
   })

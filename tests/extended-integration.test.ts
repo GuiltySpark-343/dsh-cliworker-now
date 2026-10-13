@@ -226,8 +226,8 @@ describe('extended worker boundaries (simulated protocol)', () => {
       symlinkSync(outside, join(state, 'link'))
       const before = statSync(outside).mode
       sealPrivateTree(state)
-      expect(statSync(join(state, 'copied')).mode & 0o777).toBe(0o600)
-      expect(statSync(state).mode & 0o777).toBe(0o700)
+      if (process.platform !== 'win32') expect(statSync(join(state, 'copied')).mode & 0o777).toBe(0o600)
+      if (process.platform !== 'win32') expect(statSync(state).mode & 0o777).toBe(0o700)
       expect(statSync(outside).mode).toBe(before)
     } finally {
       rmSync(root, { recursive: true, force: true })
@@ -256,11 +256,11 @@ describe('extended worker boundaries (simulated protocol)', () => {
       symlinkSync(outside, rootLink)
       sealPrivateTree(rootLink)
       sealPrivateTree(state)
-      expect(statSync(state).mode & 0o7777).toBe(0o700)
-      expect(statSync(nested).mode & 0o7777).toBe(0o700)
-      expect(statSync(native).mode & 0o7777).toBe(0o600)
-      expect(statSync(outside).mode & 0o7777).toBe(0o755)
-      expect(statSync(sentinel).mode & 0o7777).toBe(0o644)
+      if (process.platform !== 'win32') expect(statSync(state).mode & 0o7777).toBe(0o700)
+      if (process.platform !== 'win32') expect(statSync(nested).mode & 0o7777).toBe(0o700)
+      if (process.platform !== 'win32') expect(statSync(native).mode & 0o7777).toBe(0o600)
+      if (process.platform !== 'win32') expect(statSync(outside).mode & 0o7777).toBe(0o755)
+      if (process.platform !== 'win32') expect(statSync(sentinel).mode & 0o7777).toBe(0o644)
       expect(readFileSync(sentinel, 'utf8')).toBe('external')
     } finally {
       rmSync(root, { recursive: true, force: true })
@@ -303,7 +303,7 @@ describe('extended worker boundaries (simulated protocol)', () => {
         symlinkSync(outside, victim)
       }
       expect(() => sealPrivateTree(state)).toThrow()
-      expect(statSync(outside).mode & 0o7777).toBe(0o644)
+      if (process.platform !== 'win32') expect(statSync(outside).mode & 0o7777).toBe(0o644)
       expect(readFileSync(outside, 'utf8')).toBe('external')
     } finally {
       rmSync(root, { recursive: true, force: true })
@@ -369,7 +369,7 @@ describe('extended worker boundaries (simulated protocol)', () => {
         linkSync(outside, join(state, 'hard-link'))
         await expect(launch.cleanup()).rejects.toThrow('hard-linked')
         expect(existsSync(temporary!)).toBe(false)
-        expect(statSync(outside).mode & 0o7777).toBe(0o644)
+        if (process.platform !== 'win32') expect(statSync(outside).mode & 0o7777).toBe(0o644)
       } finally {
         if (temporary) rmSync(temporary, { recursive: true, force: true })
         rmSync(root, { recursive: true, force: true })
@@ -398,7 +398,7 @@ describe('extended worker boundaries (simulated protocol)', () => {
           chmodSync(native, 0o644)
           if (roots.length === 2) release()
           await concurrent
-          expect(statSync(native).mode & 0o777).toBe(0o644)
+          if (process.platform !== 'win32') expect(statSync(native).mode & 0o777).toBe(0o644)
           return (
             'fixture/model\n' +
             JSON.stringify({
@@ -441,8 +441,8 @@ describe('extended worker boundaries (simulated protocol)', () => {
         await expect(
           extendedCatalog('opencode', '/synthetic/opencode', capture, root, DEFAULT_CONFIG),
         ).rejects.toThrow('quiescence')
-        expect(statSync(native!).mode & 0o777).toBe(0o644)
-        expect(statSync(dirname(native!)).mode & 0o777).toBe(0o700)
+        if (process.platform !== 'win32') expect(statSync(native!).mode & 0o777).toBe(0o644)
+        if (process.platform !== 'win32') expect(statSync(dirname(native!)).mode & 0o777).toBe(0o700)
       } finally {
         rmSync(root, { recursive: true, force: true })
       }

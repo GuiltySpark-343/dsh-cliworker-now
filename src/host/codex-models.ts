@@ -31,6 +31,7 @@ export async function readCodexNativeModels(
   executable: string,
   cwd: string,
   signal: AbortSignal,
+  options: { onServerVersion?: (version: string) => void } = {},
 ): Promise<ModelChoice[]> {
   signal.throwIfAborted()
   const control = AbortSignal.any([signal, AbortSignal.timeout(15_000)])
@@ -82,6 +83,11 @@ export async function readCodexNativeModels(
         if (!record(response) || response.id !== expected) continue
         if (response.error || !record(response.result)) throw new Error('Codex 模型查询失败，请刷新')
         if (expected === 1) {
+          const userAgent = response.result.userAgent
+          const version = typeof userAgent === 'string'
+            ? /^cli_worker_models\/(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)(?:\s|$)/.exec(userAgent)?.[1]
+            : undefined
+          if (version && version.length <= 64) options.onServerVersion?.(version)
           expected = 2
           await write({ method: 'initialized', params: {} })
           await write({ id: expected, method: 'model/list', params: { includeHidden: false, limit: 100 } })
@@ -154,12 +160,24 @@ export async function discoverCodexModels(
   // Resolve the native source before opening the server, then reread after its normal OAuth refresh.
   const before = await readCodexOwnAccountSource(cwd, signal)
   if (!before.nativeRouteConfirmed) return []
-  const native = await readCodexNativeModels(backend, config, executable, cwd, signal)
+  let codexClientVersion: string | undefined
+  const native = await readCodexNativeModels(backend, config, executable, cwd, signal, {
+    onServerVersion: (version) => {
+      codexClientVersion = version
+    },
+  })
   signal.throwIfAborted()
   const source = await readCodexOwnAccountSource(cwd, signal)
   if (!source.nativeRouteConfirmed) return []
+  if (source.provider === 'openai-codex' && !codexClientVersion)
+    throw new Error('Codex 版本无法确认，请升级 CLI 后刷新')
   const scope = await probeAccountModels(
-    { provider: source.provider, baseUrl: source.baseUrl, credential: source.credential },
+    {
+      provider: source.provider,
+      baseUrl: source.baseUrl,
+      credential: source.credential,
+      ...(codexClientVersion ? { codexClientVersion } : {}),
+    },
     { signal },
   )
   signal.throwIfAborted()
@@ -168,5 +186,19 @@ export async function discoverCodexModels(
   if (scope.state === 'denied' && scope.denialReason === 'authentication')
     throw new Error('Codex 当前账号认证不可用或访问被拒绝，请检查登录后刷新')
   if (scope.state !== 'supported') return []
-  return native.filter((model) => scope.models.some((allowed) => allowed.id === model.id))
+  // Current account metadata can lead the app-server's bundled/cache catalog.
+  // Add a remote ID only with reasoning capabilities from that same response.
+  return scope.models.flatMap((allowed) => {
+    if (!validId(allowed.id)) return []
+    const current = native.find((model) => model.id === allowed.id)
+    const remoteEfforts = EFFORTS.filter((effort) => allowed.reasoningEfforts?.includes(effort))
+    if (remoteEfforts.length)
+      return [{
+        id: allowed.id,
+        label: allowed.name ?? current?.label ?? allowed.id,
+        efforts: remoteEfforts,
+        cost: allowed.cost,
+      }]
+    return current ? [current] : []
+  })
 }

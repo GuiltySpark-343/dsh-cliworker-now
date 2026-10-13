@@ -17,6 +17,7 @@ afterEach(async () => {
 async function fixture(cli: 'kimi' | 'claude') {
   const root = await mkdtemp(join(tmpdir(), 'cwn-capability-cache-'))
   roots.push(root)
+  vi.stubEnv('DSH_HOME', join(root, 'dsh-home'))
   const project = join(root, 'project'),
     home = join(root, 'home'),
     executable = join(root, `synthetic-${cli}`)

@@ -237,7 +237,7 @@ describe('Hermes adapter (synthetic fixtures; no inference)', () => {
     expect(result.env.HERMES_YOLO_MODE).toBe('0')
     expect(result.env.HERMES_SAFE_MODE).toBe('1')
     expect(Object.keys(result.env).some((key) => /API_KEY|CREDENTIAL|DSH_/.test(key))).toBe(false)
-    expect(statSync(result.env.TMPDIR!).mode & 0o077).toBe(0)
+    if (process.platform !== 'win32') expect(statSync(result.env.TMPDIR!).mode & 0o077).toBe(0)
     expect(readFileSync(join(hermesHome, 'config.yaml'), 'utf8')).toBe(before)
     const defaults = await prepareHermes({
       ...input,

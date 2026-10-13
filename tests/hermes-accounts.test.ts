@@ -23,6 +23,7 @@ import { effectiveHermesHome } from '../src/host/hermes-account-context.ts'
 import { verifyHermesExecutable } from '../src/host/hermes-installation.ts'
 
 const roots: string[] = []
+const accountExecutable = process.platform === 'win32' ? process.execPath : '/fixture/hermes'
 const signal = () => new AbortController().signal
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'cliworker-hermes-account-')))
@@ -56,14 +57,19 @@ const oauth = (email = 'fixture@example.test') => ({
 afterEach(() => roots.splice(0).forEach((path) => rmSync(path, { recursive: true, force: true })))
 
 describe('Hermes native accounts (explicit synthetic fixtures)', () => {
-  it('rejects a broken fixed exec shim without running any launcher', async () => {
-    const { root } = fixture(),
-      shim = join(root, 'hermes')
-    writeFileSync(shim, `#!/bin/sh\nexec ${join(root, 'missing-install/bin/hermes')} "$@"\n`, { mode: 0o700 })
-    await expect(verifyHermesExecutable(shim, signal())).rejects.toThrow('启动入口不可用')
-    writeFileSync(shim, '#!/bin/sh\nexec /bin/sh "$@"\n', { mode: 0o700 })
-    await expect(verifyHermesExecutable(shim, signal())).resolves.toBeUndefined()
-  })
+  it.skipIf(process.platform === 'win32')(
+    'rejects a broken fixed exec shim without running any launcher',
+    async () => {
+      const { root } = fixture(),
+        shim = join(root, 'hermes')
+      writeFileSync(shim, `#!/bin/sh\nexec ${join(root, 'missing-install/bin/hermes')} "$@"\n`, {
+        mode: 0o700,
+      })
+      await expect(verifyHermesExecutable(shim, signal())).rejects.toThrow('启动入口不可用')
+      writeFileSync(shim, '#!/bin/sh\nexec /bin/sh "$@"\n', { mode: 0o700 })
+      await expect(verifyHermesExecutable(shim, signal())).resolves.toBeUndefined()
+    },
+  )
   it('does not treat a file or configuration as a logged-in account', async () => {
     const { config } = fixture()
     expect((await readHermesAccount(config, signal())).state).toBe('unconfigured')
@@ -171,14 +177,14 @@ describe('Hermes native accounts (explicit synthetic fixtures)', () => {
   it('launches only native login and credential menus in disposable private working directories', async () => {
     const { config, project } = fixture()
     save(config.hermesHome, 'config.yaml', 'auth:\n  adopt_external_logins: false\n')
-    const login = await prepareHermesAccount('login', '/fixture/hermes', project, config, signal())
-    const manage = await prepareHermesAccount('manage', '/fixture/hermes', project, config, signal())
-    expect(login.argv.slice(-2)).toEqual(['/fixture/hermes', 'model'])
-    expect(manage.argv.slice(-2)).toEqual(['/fixture/hermes', 'auth'])
+    const login = await prepareHermesAccount('login', accountExecutable, project, config, signal())
+    const manage = await prepareHermesAccount('manage', accountExecutable, project, config, signal())
+    expect(login.argv.slice(-2)).toEqual([accountExecutable, 'model'])
+    expect(manage.argv.slice(-2)).toEqual([accountExecutable, 'auth'])
     expect(login.argv).not.toContain('chat')
     expect(login.argv.join(' ')).toContain('private-launch.mjs')
     expect(login.argv[0]).toBe(process.execPath)
-    expect(login.argv[2]).toBe('/fixture/hermes')
+    expect(login.argv[2]).toBe(accountExecutable)
     expect(login.argv.join(' ')).not.toMatch(/sandbox-exec|\(deny |\(allow /)
     expect(login.argv).not.toContain(project)
     expect(login.cwd).not.toBe(manage.cwd)
@@ -190,7 +196,7 @@ describe('Hermes native accounts (explicit synthetic fixtures)', () => {
     expect(login.env).not.toHaveProperty('HOME')
     expect(Object.keys(login.env).some((key) => /API_KEY|TOKEN/.test(key))).toBe(false)
     for (const path of [login.cwd, login.env.TMPDIR!, login.env.HERMES_HOME!])
-      expect(statSync(path).mode & 0o777).toBe(0o700)
+      if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o700)
     save(login.env.HERMES_HOME!, 'auth.json', oauth())
     await login.cleanup()
     await login.cleanup()
@@ -210,7 +216,7 @@ describe('Hermes native accounts (explicit synthetic fixtures)', () => {
     })
     const before = readFileSync(join(config.hermesHome, 'auth.json'), 'utf8')
     expect(effectiveHermesHome(config)).toBe(config.hermesHome)
-    const login = await prepareHermesAccount('login', '/fixture/hermes', project, config, signal())
+    const login = await prepareHermesAccount('login', accountExecutable, project, config, signal())
     try {
       const own = login.env.HERMES_HOME!
       expect(own).not.toBe(config.hermesHome)
@@ -232,26 +238,26 @@ describe('Hermes native accounts (explicit synthetic fixtures)', () => {
 
   it('fails closed for tampered selection markers instead of falling back to global accounts', async () => {
     const { config, project } = fixture()
-    const login = await prepareHermesAccount('login', '/fixture/hermes', project, config, signal())
+    const login = await prepareHermesAccount('login', accountExecutable, project, config, signal())
     await login.cleanup()
     const marker = join(config.stateDirectory, 'accounts/hermes-source.json')
-    expect(statSync(marker).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect(statSync(marker).mode & 0o777).toBe(0o600)
     writeFileSync(marker, '{"source":"global"}')
     expect((await readHermesAccount(config, signal())).state).toBe('unavailable')
     await expect(
-      prepareHermesAccount('manage', '/fixture/hermes', project, config, signal()),
+      prepareHermesAccount('manage', accountExecutable, project, config, signal()),
     ).rejects.toThrow('来源记录')
   })
 
   it('rejects empty logout sources and cancellation before creating state', async () => {
     const { config, project } = fixture()
     await expect(
-      prepareHermesAccount('logout', '/fixture/hermes', project, config, signal()),
+      prepareHermesAccount('logout', accountExecutable, project, config, signal()),
     ).rejects.toThrow('账号来源已变化')
     const abort = new AbortController()
     abort.abort(new Error('cancelled'))
     await expect(
-      prepareHermesAccount('login', '/fixture/hermes', project, config, abort.signal),
+      prepareHermesAccount('login', accountExecutable, project, config, abort.signal),
     ).rejects.toThrow('cancelled')
     expect(existsSync(config.hermesHome)).toBe(false)
     expect(existsSync(config.stateDirectory)).toBe(false)
@@ -260,7 +266,7 @@ describe('Hermes native accounts (explicit synthetic fixtures)', () => {
   it('rejects user home and root as writable native account storage', async () => {
     const { config, project } = fixture()
     await expect(
-      prepareHermesAccount('login', '/fixture/hermes', project, { ...config, hermesHome: '/' }, signal()),
+      prepareHermesAccount('login', accountExecutable, project, { ...config, hermesHome: '/' }, signal()),
     ).rejects.toThrow('Unsafe Hermes home')
   })
 })

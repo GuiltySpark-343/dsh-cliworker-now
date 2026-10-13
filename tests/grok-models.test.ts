@@ -80,7 +80,7 @@ describe('Grok own Build models (synthetic metadata only)', () => {
         if (argv.includes('--version')) return 'grok 1.0.0 (3cd0d0cbcebe)'
         calls.push('native')
         expect(phase).toBe('native-candidates')
-        expect(env?.GROK_AUTH_PATH).toContain('/catalog/home/auth.json')
+        expect(env?.GROK_AUTH_PATH).toContain(join('catalog', 'home', 'auth.json'))
         expect(env?.XAI_API_KEY).toBe('')
         return JSON.stringify(native)
       },

@@ -73,11 +73,11 @@ it.each(['pi', 'omp'] as const)('%s ignores Host credentials in account terminal
   expect(launch.argv).not.toContain('/login')
   expect(launch.argv).not.toContain('auth-broker')
   for (const directory of [launch.cwd, launch.env.PI_CODING_AGENT_DIR, launch.env.TMPDIR])
-    expect((await stat(directory!)).mode & 0o777).toBe(0o700)
+    if (process.platform !== 'win32') expect((await stat(directory!)).mode & 0o777).toBe(0o700)
   for (const name of await readdir(launch.env.PI_CODING_AGENT_DIR!)) {
     const path = join(launch.env.PI_CODING_AGENT_DIR!, name)
     expect(await readFile(path, 'utf8')).not.toContain(fixtureKey)
-    expect((await stat(path)).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect((await stat(path)).mode & 0o777).toBe(0o600)
   }
   await launch.cleanup()
   await launch.cleanup()
@@ -214,7 +214,7 @@ it.each(['root', 'account-runtime'])(
     )
     await expect(preparePiOmpAccountTerminal(input)).rejects.toThrow('symlink')
     expect(await readdir(external)).toEqual([])
-    expect((await stat(external)).mode & 0o777).toBe(0o755)
+    if (process.platform !== 'win32') expect((await stat(external)).mode & 0o777).toBe(0o755)
   },
 )
 
@@ -242,10 +242,11 @@ it.each(['pi', 'omp'] as const)(
     await exec(launch.argv[0]!, launch.argv.slice(1), { cwd: launch.cwd, env: launch.env, timeout: 5000 })
     const observed = JSON.parse(await readFile(join(launch.cwd, 'observed.json'), 'utf8'))
     expect(observed.keyPresent).toBe(false)
-    expect(observed.mask).toBe(0o077)
+    // ConPTY receives the native argv directly on Windows; POSIX uses the mask wrapper.
+    expect(observed.mask).toBe(process.platform === 'win32' ? 0 : 0o077)
     expect(observed.args).toContain('--no-tools')
     expect(observed.args).not.toContain('--print')
-    expect((await stat(join(launch.cwd, 'observed.json'))).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect((await stat(join(launch.cwd, 'observed.json'))).mode & 0o777).toBe(0o600)
   },
 )
 
@@ -372,8 +373,8 @@ writeFileSync(${JSON.stringify(join(agent, 'synthetic-auth.json'))}, '{}');`
       cwd: launch.cwd, env: launch.env, timeout: 5000,
     })
     expect(await readFile(join(logs, 'omp.synthetic.log'), 'utf8')).toBe('synthetic log')
-    expect((await stat(logs)).mode & 0o777).toBe(0o700)
-    expect((await stat(join(logs, 'omp.synthetic.log'))).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect((await stat(logs)).mode & 0o777).toBe(0o700)
+    if (process.platform !== 'win32') expect((await stat(join(logs, 'omp.synthetic.log'))).mode & 0o777).toBe(0o600)
   } finally {
     await launch.cleanup()
   }

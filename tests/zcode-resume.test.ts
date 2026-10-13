@@ -238,7 +238,8 @@ describe('ZCode resume selection wrapper (simulated native processes)', () => {
       assertExited(record.pid)
   })
 
-  it.each(['hang-resume', 'hang-close'])(
+  // Windows TerminateProcess does not deliver POSIX signals; native Job cleanup is tested separately.
+  it.skipIf(process.platform === 'win32').each(['hang-resume', 'hang-close'])(
     'cancelling %s waits for metadata exit and does not spawn headless',
     async (scenario) => {
       const f = fixture(scenario),
@@ -260,23 +261,26 @@ describe('ZCode resume selection wrapper (simulated native processes)', () => {
     },
   )
 
-  it('cancels the prompt process and preserves an error terminal after partial output', async () => {
-    const f = fixture('cancel-headless'),
-      running = f.launch()
-    await waitFor(() => f.records().some((value) => value.type === 'headless-start'))
-    running.child.kill('SIGTERM')
-    const result = await running.done
-    expect(result.code).toBe(143)
-    const parser = new ZCodeProtocol(
-      () => {},
-      () => {},
-      1024 * 1024,
-    )
-    parser.feed(result.stdout)
-    parser.end()
-    expect(parser.result?.status).toBe('ERROR')
-    assertExited(f.records().find((value) => value.type === 'headless-start').pid)
-  })
+  it.skipIf(process.platform === 'win32')(
+    'cancels the prompt process and preserves an error terminal after partial output',
+    async () => {
+      const f = fixture('cancel-headless'),
+        running = f.launch()
+      await waitFor(() => f.records().some((value) => value.type === 'headless-start'))
+      running.child.kill('SIGTERM')
+      const result = await running.done
+      expect(result.code).toBe(143)
+      const parser = new ZCodeProtocol(
+        () => {},
+        () => {},
+        1024 * 1024,
+      )
+      parser.feed(result.stdout)
+      parser.end()
+      expect(parser.result?.status).toBe('ERROR')
+      assertExited(f.records().find((value) => value.type === 'headless-start').pid)
+    },
+  )
 
   it('rejects a later observed model mismatch and removes the prompt process', async () => {
     const f = fixture('observed-mismatch')

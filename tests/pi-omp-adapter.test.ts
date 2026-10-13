@@ -42,6 +42,7 @@ afterEach(async () => {
 const fixtureKey = 'SYNTHETIC_TEST_KEY_NOT_A_CREDENTIAL'
 const fixtureEnvironment = (home: string | undefined, env: Record<string, string> = {}) => ({
   PATH: process.env.PATH ?? '/usr/bin:/bin',
+  ...(process.platform === 'win32' ? { SYSTEMROOT: process.env.SYSTEMROOT ?? process.env.SystemRoot ?? '' } : {}),
   HOME: home ?? '/private/tmp',
   LANG: 'C',
   ...env,
@@ -260,6 +261,7 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
   it('uses native arguments for SDK discovery and account metadata on the same managed OMP snapshot', async () => {
     const { root, input } = await fixture('omp', 'non-glm')
     vi.stubEnv('HOME', root)
+    if (process.platform === 'win32') vi.stubEnv('USERPROFILE', root)
     const nativePrograms: string[] = []
     const phases: string[] = []
     const states: string[] = []
@@ -281,7 +283,7 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
         })
         outputs.push(JSON.parse(result.stdout))
         const candidatesPath = join(request.stateDirectory, 'agent', 'catalog-candidates.json')
-        expect((await stat(candidatesPath)).mode & 0o777).toBe(0o600)
+        if (process.platform !== 'win32') expect((await stat(candidatesPath)).mode & 0o777).toBe(0o600)
         expect(
           (await readFile(candidatesPath, 'utf8')).includes('SYNTHETIC_HOST_REFERENCE_MUST_STAY_IN_ENV'),
         ).toBe(false)
@@ -327,6 +329,24 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
       { name: 'safe-model', headers: { 'x-public': true }, thinkingLevelMap: { high: true } },
     ])
   })
+  it.each(['symlink', 'hardlink'] as const)(
+    'rejects a %s Pi native metadata credential file before querying the SDK',
+    async (kind) => {
+      const { root, input } = await fixture('pi')
+      const { queryNativeCandidates } = await import('../src/host/pi-native-catalog.mjs')
+      const agent = join(root, 'synthetic-metadata')
+      const outside = join(root, 'synthetic-outside-auth.json')
+      const contents = JSON.stringify({ fixture: { type: 'api', key: 'SYNTHETIC_LINKED_KEY' } })
+      await mkdir(agent)
+      await writeFile(outside, contents)
+      if (kind === 'symlink') await symlink(outside, join(agent, 'auth.json'))
+      else await link(outside, join(agent, 'auth.json'))
+      await expect(
+        queryNativeCandidates('pi', input.executable, agent, fixtureEnvironment(root)),
+      ).rejects.toThrow('无法读取 Pi/OMP 原生模型目录')
+      expect(await readFile(outside, 'utf8')).toBe(contents)
+    },
+  )
   it('keeps preparation cleanup failures typed and does not start the account phase', async () => {
     const { input } = await fixture('omp')
     const capture = vi.fn(async () => {
@@ -366,7 +386,7 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
         await symlink(outside, target)
         await expect(preparePiOmp(input)).rejects.toThrow('symlink')
         expect(await readdir(outside)).toEqual([])
-        expect((await stat(outside)).mode & 0o777).toBe(0o755)
+        if (process.platform !== 'win32') expect((await stat(outside)).mode & 0o777).toBe(0o755)
       }
     },
   )
@@ -392,7 +412,7 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
           expect(result!.stdout).not.toContain('HELLO')
         }
         expect(await readdir(outside)).toEqual([])
-        expect((await stat(outside)).mode & 0o777).toBe(0o755)
+        if (process.platform !== 'win32') expect((await stat(outside)).mode & 0o777).toBe(0o755)
       }
     },
   )
@@ -421,7 +441,7 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
         const file = await stat(join(agent, name))
         expect(file.ino).not.toBe(before.ino)
         expect(file.nlink).toBe(1)
-        expect(file.mode & 0o777).toBe(0o600)
+        if (process.platform !== 'win32') expect(file.mode & 0o777).toBe(0o600)
       }
     },
   )
@@ -445,7 +465,7 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
       expect(await readFile(outside, 'utf8')).toBe('EXTERNAL SENTINEL')
       expect((await stat(outside)).mode).toBe(before.mode)
       expect((await stat(mapping)).ino).not.toBe(before.ino)
-      expect((await stat(mapping)).mode & 0o777).toBe(0o600)
+      if (process.platform !== 'win32') expect((await stat(mapping)).mode & 0o777).toBe(0o600)
       expect(JSON.parse(await readFile(mapping, 'utf8')).id).toBe('fixture-id')
     },
   )
@@ -473,7 +493,7 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
       expect(result.frames.at(-1)).toMatchObject({ status: 'ERROR' })
       expect(result.stdout).not.toContain('RESUMED')
       expect(await readFile(outside, 'utf8')).toBe('EXTERNAL SESSION')
-      expect((await stat(outside)).mode & 0o777).toBe(0o644)
+      if (process.platform !== 'win32') expect((await stat(outside)).mode & 0o777).toBe(0o644)
     },
   )
   it.each(['pi', 'omp'] as const)('%s discovers its exact model without prompting', async (cli) => {
@@ -515,7 +535,7 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
       expect(args).toContain(cli === 'pi' ? '--session' : '--resume')
       expect(args).not.toContain('bash')
       expect(args).not.toContain('--yolo')
-      expect((await stat(prepared.argv[2]!)).mode & 0o077).toBe(0)
+      if (process.platform !== 'win32') expect((await stat(prepared.argv[2]!)).mode & 0o077).toBe(0)
     },
   )
   it.each(['pi', 'omp'] as const)('%s refuses a failed tool even when native CLI exits zero', async (cli) => {
@@ -567,7 +587,9 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
     const result = await launch(input)
     expect(result.frames.at(-1)).toMatchObject({ status: 'ERROR' })
   })
-  it('waits for native SIGTERM cleanup before bridge termination', async () => {
+  // Node kill(SIGTERM) is TerminateProcess on Windows, not a delivered signal.
+  // Windows SDK Job cancellation is covered by windows-process.test.ts instead.
+  it.skipIf(process.platform === 'win32')('waits for native SIGTERM cleanup before bridge termination', async () => {
     const { root, input } = await fixture('pi', 'cancel')
     const prepared = await prepareConfirmed(input)
     const child = spawn(prepared.argv[0]!, prepared.argv.slice(1), {
@@ -704,7 +726,7 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
       error: '无法读取 Pi/OMP 原生模型目录，请检查本机配置',
     })
   })
-  it('cleans up OMP native metadata queries when the bridge is stopped', async () => {
+  it.skipIf(process.platform === 'win32')('cleans up OMP native metadata queries when the bridge is stopped', async () => {
     const { root, input } = await fixture('omp', 'catalog-cancel')
     const prepared = await preparePiOmp(input)
     const request = JSON.parse(await readFile(prepared.argv[2]!, 'utf8'))
@@ -832,6 +854,7 @@ it.each(['pi', 'omp'] as const)(
   async (cli) => {
     const { root, input } = await fixture(cli, 'non-glm')
     vi.stubEnv('HOME', root)
+    if (process.platform === 'win32') vi.stubEnv('USERPROFILE', root)
     const foreign = [
       join(root, '.env'),
       join(root, '.env.production'),

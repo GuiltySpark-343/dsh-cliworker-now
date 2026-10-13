@@ -196,16 +196,23 @@ async function nativeCandidates(
 // Availability is deliberately separate from native catalog presence. A model
 // is selectable only through current account scope or a declared exact API route.
 async function privateJSON(path, fallback = {}) {
-  const { open } = await import('node:fs/promises')
+  const { open, lstat } = await import('node:fs/promises')
   const { constants } = await import('node:fs')
-  let handle
+  let handle, entry
   try {
+    // Windows does not implement O_NOFOLLOW. Check the directory entry before
+    // opening and bind it to the descriptor and final entry on every platform.
+    entry = await lstat(path)
+    if (entry.isSymbolicLink() || !entry.isFile() || entry.nlink !== 1)
+      throw new Error('Unsafe private metadata input')
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     const info = await handle.stat()
-    if (!info.isFile() || info.nlink !== 1 || info.size > 2 * 1024 * 1024)
+    if (!info.isFile() || info.nlink !== 1 || info.size > 2 * 1024 * 1024 ||
+        info.dev !== entry.dev || info.ino !== entry.ino)
       throw new Error('Unsafe private metadata input')
     const text = await handle.readFile('utf8')
     const after = await handle.stat()
+    const current = await lstat(path)
     const value = JSON.parse(text)
     if (
       !value ||
@@ -213,12 +220,15 @@ async function privateJSON(path, fallback = {}) {
       Array.isArray(value) ||
       Buffer.byteLength(text) > 2 * 1024 * 1024 ||
       info.size !== after.size ||
-      info.mtimeMs !== after.mtimeMs
+      info.mtimeMs !== after.mtimeMs ||
+      current.isSymbolicLink() || !current.isFile() || current.nlink !== 1 ||
+      current.dev !== info.dev || current.ino !== info.ino ||
+      current.size !== after.size || current.mtimeMs !== after.mtimeMs
     )
       throw new Error('Invalid private metadata input')
     return value
   } catch (error) {
-    if (error?.code === 'ENOENT') return fallback
+    if (!entry && error?.code === 'ENOENT') return fallback
     throw error
   } finally {
     await handle?.close()

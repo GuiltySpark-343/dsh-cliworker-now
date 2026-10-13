@@ -15,6 +15,25 @@ const reply = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } })
 
 describe('read-only account-supported metadata (all credentials and responses simulated)', () => {
+  it('queries current Codex models with its native client version and safe reasoning metadata', async () => {
+    const fetcher = vi.fn(async (url: unknown, init: any) => {
+      expect(init.headers.version).toBe('0.162.1')
+      if (String(url).includes('/wham/usage')) return reply({ rate_limit: { allowed: true, limit_reached: false }, plan_type: 'plus' })
+      expect(String(url)).toContain('?client_version=0.162.1')
+      return reply({ models: [
+        { slug: 'gpt-6.1-sol', display_name: 'GPT-6.1 Sol', supported_in_api: true, visibility: 'list', availability_nux: { message: 'Informational model announcement' }, supported_reasoning_levels: [{ effort: 'low' }, { effort: 'max' }] },
+        { slug: 'internal-hidden', supported_in_api: true, visibility: 'hide' },
+        { slug: 'explicitly-denied', supported_in_api: true, allowed: false, availability_nux: { message: 'Informational announcement' } },
+      ] })
+    })
+    expect(await probeAccountModels({ ...oauth(), codexClientVersion: '0.162.1' }, { fetch: fetcher as typeof fetch }))
+      .toMatchObject({ state: 'supported', models: [{ id: 'gpt-6.1-sol', reasoningEfforts: ['low', 'max'], cost: 'paid' }] })
+  })
+  it.each(['', '0.162.1&unsafe=1', 'guessed-latest', `${'1'.repeat(65)}.0.0`])( 'rejects an invalid Codex version %s before a request', async (version) => {
+    const fetcher = vi.fn()
+    expect(await probeAccountModels({ ...oauth(), codexClientVersion: version }, { fetch: fetcher })).toMatchObject({ state: 'unknown', models: [] })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
   it('keeps ordinary Anthropic metadata authentication unchanged without native dual-header opt-in', async () => {
     const fetcher = vi.fn(async (_url: any, options: any) => {
       expect(options.headers['x-api-key']).toBe(key)
