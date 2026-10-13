@@ -156,7 +156,9 @@ For the Web profile:
 dsh plugin --profile web add dsh-cliworker-now@latest
 ```
 
-Finish active tasks and fully quit Harness before installation or updates, then reopen it. Each run of the `@latest` command installs or updates to the version currently tagged latest on npm. Starting Harness does not automatically update the plugin. The npm package is prebuilt and needs no manual extraction or compilation. You can also enter `dsh-cliworker-now@latest` in the plugin manager's Add Plugin dialog.
+Finish active tasks and fully quit Harness before installation or updates, then reopen it. `@latest` resolves the latest npm version under the installer's current rules. Starting Harness does not automatically update the plugin. pnpm 11 waits 24 hours after publication by default, so the command may exit successfully while retaining an older version. Check the installed version and retry after the waiting period, or use the verified release archive below. The npm package is prebuilt and needs no manual extraction or compilation. You can also enter `dsh-cliworker-now@latest` in the plugin manager's Add Plugin dialog.
+
+Run `dsh plugin --profile desktop ls dsh-cliworker-now --depth=0` to check the installed version.
 
 GitHub Release fallback:
 

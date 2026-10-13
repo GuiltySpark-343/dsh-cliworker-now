@@ -14,12 +14,16 @@ README.md SHALL 默认提供中文首页，完整英文页有双向语言切换�
 - **THEN** 默认显示中文，English 链接打开完整英文介绍，语言切换和图片路径有效
 
 #### Scenario: 跨平台安装
-- **WHEN** macOS 或 Windows 用户已配置 Desktop 的 dsh 命令并执行安装行
+- **WHEN** macOS 或 Windows 用户已配置 Desktop 的 dsh 命令并执行安装行，且安装器当前策略允许 npm latest 版本
 - **THEN** 通过包名将执行时的 npm latest 版本安装到指定 profile，无需用户克隆、构建源码或批准插件prepare脚本；web/desktop profile 含义准确
 
 #### Scenario: 主动升级已有安装
-- **WHEN** 用户已有旧版插件并再次执行推荐的 `@latest` 安装命令
+- **WHEN** 用户已有旧版插件并再次执行推荐的 `@latest` 安装命令，且安装器当前策略允许 npm latest 版本
 - **THEN** 指定 profile 更新至执行时的 npm latest，文档明确只有执行更新命令才更新，不把宿主启动描述成自动更新
+
+#### Scenario: 安装器暂缓刚发布版本
+- **WHEN** npm 已公开新版本，但安装器的新版本等待策略仍选择旧版本
+- **THEN** 安装说明明确等待规则及核对实际版本的方法，不把命令退出成功视为升级成功；保留已验证的固定预构建来源，不修改用户安装器保护配置，最新版本升级验收保持待办
 
 #### Scenario: Registry未发布
 - **WHEN** 对应npm版本尚未发布或发布失败

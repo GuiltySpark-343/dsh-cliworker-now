@@ -1126,3 +1126,14 @@
 - 已提交 [dshfind PR #51](https://github.com/hikariming/dshfind/pull/51)，提交 `bd643d647c3f51ab86938bc3c983c1b9ee0f880f`，仅修改三文件：本插件旧新名映射、经核验的历史 npm 回链兼容和回归；44 项辅助函数测试通过。没有改变其他别名策略、全站下载门槛或工作流；没有 D1 写入/部署权限，因此主键迁移与公开页面刷新仍待维护方完成，保留未勾选任务。维护步骤见 `doc/dshfind-sync.md`。
 - 名称预览曾执行 318 项关联检查及 typecheck，但用户澄清后对应实现已撤回，不将这些当作当前新增功能。最终运行时/测试零 diff，139 个源码文件与重新生成的隔离 preview 全部一致，冻结包哈希不变；浏览器复查恢复 CLI Worker NOW。此次外部分发修改未重复全量或真实模型调用。
 - 私有证据：`.test-data/dshfind-078/` 中 repository-rename、redirect-verification、release-names-after、ui-preserved-final、dshfind-pr-receipt，以及市场 canonical-market-update-receipt；均未作为运行数据提交 Git。
+
+
+## 2026-10-13 npm v0.7.8 公开后核验与链接延期
+
+- 用户确认 npm v0.7.8 已成功公开并取消删除重传。03:00:53 UTC 匿名读取固定版本及 latest 均为 0.7.8；npm 记录的发布时间为 02:58:52.809 UTC。此前维护者状态为 validating，现已结束；未撤包、未重复发布，未改版本或冻结资产。
+- npm 与 GitHub Release 公开 tgz 逐字节一致，SHA-256 为 `e2eebaebcb0e3cdcd503d070428de668add7288f7eaf8756cb43a8677f4a0f51`，npm integrity 匹配。隔离 profile 显式安装 npm 0.7.8、原生命令列包/导出配置通过，362 个安装文件全部与冻结包匹配。
+- 新发现：开发 pnpm 11.25.0 与真实 Desktop 自带 pnpm 11.7.0，在独立 0.7.7 profile 中执行 `@latest` 均退出 0 但仍为 0.7.7，与 pnpm 11 默认 1440 分钟的新版本等待策略一致。当前 0.7.8 按 npm 时间约在 2026-10-14 10:58:53（北京时间）满足默认年龄条件，实际仍须届时查询核验；没有提前报告升级成功。固定版本安装由 pnpm 原生在测试 profile 写入仅针对该精确版本的年龄例外，之后再执行 latest 保持 0.7.8，不能以此代替无例外的默认升级验收。
+- 两次独立 Host 加载夹具均检测到 Client 解析到开发仓库而非 registry 安装目录，主动拒绝该来源；未计为公开包 Host/Client 加载或自然退出通过。超时后仅向测试进程范围发送 SIGTERM，两个观测端口关闭，测试 Host 进程全部退出。没有修改用户 Desktop、账号或安装器策略，账号查询和模型生成均为 0。
+- 用户明确选择保留 v0.7.8，Repository/Homepage 留待下一次批准发布时同步。源码及未来打包清单的 repository/bugs/homepage 已指向 `SuperWheel/dsh-cliworker-now`，但已发布 0.7.8 包保留冻结时的旧字段；GitHub 旧链接仍重定向。此要求写入 `doc/release-template.md`，不擅自升号。
+- 双语安装说明、Release 和分发规格已补充安装器等待规则及实际版本核对，不改变主安装行。v0.7.8 Release 已通过 API 精确回读；三个原资产保留。规格严格校验 14/14，通过 diff 检查；运行时代码和版本无改动，未重复全量测试。发布变更为 11/12，4.2 默认 latest 升级保留待办，不归档；npm Host 来源检查失败也保留在本记录中。
+- 市场 PR #6795 的两项检查均成功但仍 OPEN；dshfind PR #51 仍 OPEN、无检查结果，页面迁移继续待维护方处理。私有证据：`.test-data/release-078-sol61/install-078/final-acceptance-receipt.json`、`desktop-install-078/carrier-installed.json`、`release-after-npm-public.json`。

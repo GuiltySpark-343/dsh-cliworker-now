@@ -6,6 +6,7 @@
 - 正文依次为 `## vX.Y.Z`、一段简介、`### 更新`、`### 安装或更新`、`### 验证`。更新与验证使用一层项目符号，不嵌套。
 - 简介说明本次解决的问题；更新项按最终交付行为撰写，不照搬历史版本内容或放入内部实施过程。
 - 推荐命令保持单行，使用已验证的 `@latest`；发布时核对 npm `latest` 指向本版。tgz 备用链接固定到本次版本，不另加第二个安装代码块。
+- 冻结安装包前核对公开 `package.json` 的 `repository`、`homepage` 和 `bugs` 均指向 `SuperWheel/dsh-cliworker-now`，发布后从 npm 固定版本元数据回读。仓库改名不会改写已发布包；v0.7.8 保留原包，旧链接按用户确认留待下一次获准发布时更新，不为改链接撤包或擅自升号。
 - 验证数字、CI 链接、文件数量、包哈希及实际交互均从本次证据填写。没有执行的项目删除对应通过描述，并明确未验证范围；不复制旧版本数字或把模拟、目录读取、安装成功写成真实模型生成成功。
 - 发布前替换全部占位符。正文不得包含私人路径、账号标识、凭据或个人运行日志。
 
@@ -32,7 +33,7 @@ Release 标题：`dsh-cliworker-now vX.Y.Z`
 dsh plugin --profile desktop add dsh-cliworker-now@latest
 ```
 
-每次执行此命令，都会安装或更新到 npm 的 `latest` 标签指向的版本；启动 Harness 本身不会自动更新插件。完成后重新打开 Harness。无需克隆或构建项目。
+此命令按安装器当前规则解析 npm 的 `latest`；启动 Harness 本身不会自动更新插件。pnpm 11 默认等待新版本发布满 24 小时，期间可能保留旧版，请核对实际安装版本。完成后重新打开 Harness。无需克隆或构建项目。
 
 也可使用本版[预构建 tgz](https://github.com/SuperWheel/dsh-cliworker-now/releases/download/vX.Y.Z/dsh-cliworker-now-X.Y.Z.tgz) 作为安装来源。无需克隆或构建项目。
 

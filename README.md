@@ -155,7 +155,9 @@ dsh plugin --profile desktop add dsh-cliworker-now@latest
 dsh plugin --profile web add dsh-cliworker-now@latest
 ```
 
-安装或更新前先结束活动任务并完整退出 Harness，完成后重新打开。 每次执行带 `@latest` 的命令，都会安装或更新到 npm 的 latest 标签指向的版本；启动 Harness 本身不会自动更新插件。npm 包已预构建，无需手动解压或编译。也可以在插件页“添加插件”中输入 `dsh-cliworker-now@latest`。
+安装或更新前先结束活动任务并完整退出 Harness，完成后重新打开。`@latest` 按安装器当前规则解析 npm 最新版本；启动 Harness 本身不会自动更新插件。pnpm 11 默认等待新版本发布满 24 小时，期间命令可能成功退出但仍安装旧版；请核对实际安装版本，等待后重试，或使用下方已校验的本版预构建包。npm 包已预构建，无需手动解压或编译。也可以在插件页“添加插件”中输入 `dsh-cliworker-now@latest`。
+
+可运行 `dsh plugin --profile desktop ls dsh-cliworker-now --depth=0` 核对实际安装版本。
 
 GitHub Release 备用安装：
 
