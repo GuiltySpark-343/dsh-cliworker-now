@@ -1196,3 +1196,15 @@
 - `spec:check` 归档前 16 项、归档后 15 项均通过、0 失败；本 change 的 9 项任务完成，规格同步并归档为 `2026-10-15-add-running-message-modes`；已有 `release-v078-latest-install` 的重复 ADDED 信息保留，本轮未修改该旧 change。`git diff --check` 通过。
 
 未执行：真实 CLI 模型引导/跨模型上下文、Windows 实机、已安装 Desktop、全量测试、GitHub 推送或发布。原生语义来源和能力边界见 `doc/running-message-protocol.md`；回执仅表示 CLI 接收，不等于模型执行完毕。独立审查发现的回执与结束竞态、确定未发送失败重试问题已修复并回归。
+
+
+## 2026-10-15：v0.7.9 已安装 macOS Desktop 最小验收
+
+- 用户明确要求放到桌面端测试。更新前 24 个 Worker 全为终态、无本插件任务/账号桥接进程；正常退出 Desktop 并确认主进程结束后执行 `pnpm --config.verifyDepsBeforeRun=false build`。372 个 lib 文件核对，正式 Host 与此前通过的 preview 相同，Client 仅构建路径 region 注释/源映射不同，去除 region 注释后的执行文本相同。新增控制 helper 齐备；没有重复安装或修改 profile 链接。
+- 实际 Desktop 插件详情确认 v0.7.9、已启用、1 个组件运行中。高级设置下拉三项文案正确；Codex 默认排队且引导禁用，Pi/OMP 默认引导。Codex 保存插队、切换 CLI 后回读保持，测试后恢复排队。实际运行中输入可编辑，唯一动作按钮随草稿切换发送/停止。
+- 沿用 Codex 的 GPT-5.6-Luna / Low 真实执行 5 轮：4 轮完成、1 轮按插队操作中断。`sleep 60` 的原生工具退出码 0；其完成后排队消息自动执行。第二组 `sleep 120` 被停止，原第二条卡片先回复 `DESKTOP_INTERRUPT_ONE`，其余消息随后回复 `DESKTOP_AFTER_INTERRUPT`。同一原生会话，事件顺序为 completed 后新 user、interrupted 后新 user，没有并发轮次或剩余待发消息；没有文件读写工具。原生 CLI 进程数值退出码未单独持久化，Host completed 路径要求退出码 0 且清理已确认，不能把模型自述当退出证据。
+- 已安装界面可见待发送标题下分隔线；实际展开/收起正常，收起后卡片操作不出现在辅助功能树，标题保留；折叠期间继续发送，数量从 1 更新为 2，展开内容完整。Desktop 未做逐帧过渡计时；前轮隔离组件的 220ms/180ms 与 reduced-motion 验证仍单独保留。
+- Pi 历史记录缺少账号绑定，沿原 GLM-5.3 / Low 选型通过 UI 的新建对话建立独立验收 Worker，旧历史保留。共 3 轮：前两轮因无 shell 工具/模型简短回复而很快结束，未发送引导，不计为引导通过；第三轮在输出期间成功接收原生引导，持久 receipt 为 steer/acknowledged，原生会话也有同一引导消息。一个 runId、一个原生 conversationId、一个连接事件，无工具/重启；当前 2205 字正文继续输出完成后，原生下一条 assistant 精确回复 `PI_STEER_OK`，Host completed，队列为空。证明同轮原生引导，不表示立即截断正在生成的内容。
+- 最终 25 个 Worker、活动 0、待发 0，本次桥接与 sleep 进程 0。更新前 4633 份文件中最终 4622 份未变；153 份 profile、账号绑定/凭据及设置文件哈希未变，Codex 原有事件日志前缀也匹配原哈希。变化为本次 Codex 会话、宿主两份对话日志、host.lock 及 OMP 目录查询的数据库/日志；OMP 自身保留最近 5 份日志的轮转移除了 10月9日调试日志，不能宣称全部原始文件不变。测试记录和新 Pi 对话保留，已返回原“用AGY进行问候对话”及 CLI Worker 总览。
+- 私有核查结果位于 `.cache/desktop-v079/`，含 build-verification、state-before/after-restart/final、cleanup、codex-run-audit、pi-run-audit 和 verification JSON；屏幕与辅助功能核查记录在本次工具轨迹。部分 Codex 原生日志有 MCP 502 和中断后的缺失前一工具输出诊断，未阻止上述成功轮完成，本轮不扩大排查范围。
+- 只补正式构建、安装界面和相关真实交互验收，没有重跑全量测试；未做 OMP 真实模型引导、Windows Desktop 或跨模型上下文验收。保持 v0.7.9，不推送 GitHub、不发布。
