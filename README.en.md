@@ -19,7 +19,7 @@ Choose a CLI, model and role, dispatch a named agent, follow its work in the sid
 
 </div>
 
-The development version is **v0.7.9 (unreleased)** and stays fixed until the formal GitHub submission. Bug fixes use focused verification; full acceptance runs before an approved GitHub submission. Download links below still point to the published v0.7.8 package.
+This version is **v0.7.9**. Bug fixes use focused verification; full macOS and Windows acceptance runs before the formal GitHub submission. Actual results and verification boundaries are recorded in the [implementation log](doc/tasks.md).
 
 When a resumed AGY turn has a complete reply but its final aggregate reports ERROR, sufficient conflicting evidence produces an `uncertain` outcome. The current reply and original error remain available; this does not establish success or prove that the error is historical. Verify actual results before retrying writes. Harness jobs support only completed/failed/killed, so the outer job remains failed with an explicit uncertainty notice and structured outcome. Current errors, nonzero exits, partial output and cancellation retain their failure or interruption outcome.
 
@@ -105,7 +105,7 @@ The plugin package and Harness UI are not restricted to macOS. Worker execution 
 
 ### 4.2 Adapter coverage and verification
 
-An integrated adapter does not mean every model, subscription or platform has been tested. The table preserves historical live checks. Account isolation and model permissions were tightened in later releases, so an earlier successful task does not establish current access. No new model-generation tasks were run for this release.
+An integrated adapter does not mean every model, subscription or platform has been tested. The table preserves historical live checks. Account isolation and model permissions were tightened in later releases, so an earlier successful task does not establish current access. During v0.7.9 development, macOS Antigravity and Codex live conversations were checked for the affected message and stop flows. Cross-platform release checks cover automated regressions and isolated installation/lifecycle checks; they do not establish live generation access for every provider. See the [verification log](doc/tasks.md) for exact scopes.
 
 | CLI | Checked version | Verification scope |
 | --- | --- | --- |
@@ -167,7 +167,7 @@ Run `dsh plugin --profile desktop ls dsh-cliworker-now --depth=0` to check the i
 GitHub Release fallback:
 
 ```sh
-dsh plugin --profile desktop add https://github.com/SuperWheel/dsh-cliworker-now/releases/download/v0.7.8/dsh-cliworker-now-0.7.8.tgz
+dsh plugin --profile desktop add https://github.com/SuperWheel/dsh-cliworker-now/releases/download/v0.7.9/dsh-cliworker-now-0.7.9.tgz
 ```
 
 **Install from GitHub source**

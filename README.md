@@ -162,7 +162,7 @@ dsh plugin --profile web add dsh-cliworker-now@latest
 GitHub Release 备用安装：
 
 ```sh
-dsh plugin --profile desktop add https://github.com/SuperWheel/dsh-cliworker-now/releases/download/v0.7.8/dsh-cliworker-now-0.7.8.tgz
+dsh plugin --profile desktop add https://github.com/SuperWheel/dsh-cliworker-now/releases/download/v0.7.9/dsh-cliworker-now-0.7.9.tgz
 ```
 
 **GitHub 源码安装**
@@ -384,7 +384,7 @@ Desktop 不会读取你的 `.zshrc`。插件会识别部分常见安装位置；
 
 ## 8. 开发与验证
 
-当前开发版本为 **v0.7.9（未发布）**，正式提交 GitHub 前不额外升号。修复阶段只做相关最小验收，全量验收在获准的正式 GitHub 提交之前执行；上方下载链接仍指向已发布的 v0.7.8。
+本版为 **v0.7.9**。修复阶段执行相关最小验收，正式提交 GitHub 前执行 macOS 与 Windows 全量验收；实际结果与验证边界记录在 [实施记录](doc/tasks.md)。
 
 AGY 续聊若本轮已完整返回但最终汇总为 ERROR，会在证据充分时显示「结果待核实」，保留本轮回复和原始错误；这不代表任务成功或已证实错误来自历史。请先核查实际结果，避免重复写入。宿主后台任务仅有成功/失败/中断三类，其外层仍显示失败，但详情及回传结果会明确区分 `uncertain`。真实本轮错误、非零退出、部分输出和取消仍保留失败或中断状态。
 

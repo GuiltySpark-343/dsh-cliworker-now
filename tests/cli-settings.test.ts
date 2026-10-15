@@ -340,20 +340,49 @@ describe('profile-wide CLI enablement', () => {
     expect(storage.preference(project, 'antigravity')).toBeUndefined()
   })
 
-  it('refuses a followup after an in-flight lookup and resumes eligibility when re-enabled', async () => {
+  it('refuses disabling during followup preparation until an explicit stop settles', async () => {
     const { service, signal, worker, jobs, runtime } = fixture()
     const loading = deferred<Catalog>()
     vi.mocked(catalogFor).mockReturnValueOnce(loading.promise)
     const pending = service.followup('parent', worker.id, 'Next task', signal)
-    const rejected = expect(pending).rejects.toThrow('已关闭')
-    await vi.waitFor(() => expect(catalogFor).toHaveBeenCalledTimes(1))
-    await service.setCliEnabled('parent', 'antigravity', false, signal)
-    loading.resolve(catalog)
-    await rejected
+    const rejected = expect(pending).rejects.toThrow('用户已停止')
+    try {
+      await vi.waitFor(() => expect(catalogFor).toHaveBeenCalledTimes(1))
+      await expect(service.setCliEnabled('parent', 'antigravity', false, signal))
+        .rejects.toThrow('运行或排队')
+      const stopping = runtime.stop('parent', worker.id)
+      loading.resolve(catalog)
+      await rejected
+      await stopping
+    } finally {
+      loading.resolve(catalog)
+      await pending.catch(() => undefined)
+    }
     expect(jobs.start).not.toHaveBeenCalled()
+    await service.setCliEnabled('parent', 'antigravity', false, signal)
     await service.setCliEnabled('parent', 'antigravity', true, signal)
     expect(() => runtime.assertCliEnabled('antigravity')).not.toThrow()
     await expect(service.catalogForCli('parent', 'antigravity', signal)).resolves.toContain('fixture')
+  })
+
+  it('refuses a followup if enablement changes externally during its in-flight lookup', async () => {
+    const { service, signal, worker, jobs, storage } = fixture()
+    const loading = deferred<Catalog>()
+    vi.mocked(catalogFor).mockReturnValueOnce(loading.promise)
+    const pending = service.followup('parent', worker.id, 'Next task', signal)
+    const rejected = expect(pending).rejects.toThrow('已关闭')
+    try {
+      await vi.waitFor(() => expect(catalogFor).toHaveBeenCalledTimes(1))
+      // Simulate a separate configuration writer; the public Gateway rejects
+      // this change while preparation is active, as covered immediately above.
+      storage.setCliEnabled('antigravity', false)
+      loading.resolve(catalog)
+      await rejected
+    } finally {
+      loading.resolve(catalog)
+      await pending.catch(() => undefined)
+    }
+    expect(jobs.start).not.toHaveBeenCalled()
   })
 })
 
