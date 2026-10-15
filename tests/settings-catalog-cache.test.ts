@@ -160,3 +160,58 @@ it('rejects a linked state root or ancestor before creating anything in its targ
   expect(readdirSync(outside)).toEqual([])
   expect(statSync(outside).mode).toBe(mode)
 })
+
+it('reads a saved Worker directory after restart without any account or discovery query', async () => {
+  const f = fixture()
+  await f.cache.get(f.input)
+  f.input.binding.mockClear()
+  f.input.discover.mockClear()
+  const restarted = new SettingsCatalogCache(f.root)
+  const displayed = restarted.display(f.root, 'codex', 'synthetic-binding')!
+  expect(displayed).toEqual(catalog)
+  displayed.models[0]!.label = 'Synthetic caller mutation'
+  expect(restarted.display(f.root, 'codex', 'synthetic-binding')).toEqual(catalog)
+  expect(restarted.display(f.root, 'codex', 'different-account')).toBeUndefined()
+  expect(restarted.display(join(f.root, 'other'), 'codex', 'synthetic-binding')).toBeUndefined()
+  expect(restarted.display(f.root, 'claude', 'synthetic-binding')).toBeUndefined()
+  expect(f.input.binding).not.toHaveBeenCalled()
+  expect(f.input.discover).not.toHaveBeenCalled()
+  // A display read never primes the settings-page authorization cache.
+  await restarted.get(f.input)
+  expect(f.input.discover).toHaveBeenCalledOnce()
+})
+
+it('does not display old disk choices after invalidation, refresh failure, or during an active query', async () => {
+  const f = fixture()
+  await f.cache.get(f.input)
+  f.cache.invalidate('codex')
+  expect(f.cache.display(f.root, 'codex', 'synthetic-binding')).toBeUndefined()
+  await f.cache.get(f.input)
+  expect(f.cache.display(f.root, 'codex', 'synthetic-binding')).toEqual(catalog)
+  let finish!: () => void
+  f.input.discover.mockImplementationOnce(async () => {
+    await new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    throw new Error('Synthetic refresh failed')
+  })
+  const pending = f.cache.get({ ...f.input, refresh: true })
+  const failed = expect(pending).rejects.toThrow('refresh failed')
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+  expect(f.cache.display(f.root, 'codex', 'synthetic-binding')).toBeUndefined()
+  finish()
+  await failed
+  expect(f.cache.display(f.root, 'codex', 'synthetic-binding')).toBeUndefined()
+})
+
+it('remembers a first dispatch directory only if its source revision remains current', () => {
+  const f = fixture()
+  const revision = f.cache.revision('codex')
+  f.cache.remember(f.root, { catalog, binding: 'synthetic-binding' }, revision)
+  expect(new SettingsCatalogCache(f.root).display(f.root, 'codex', 'synthetic-binding')).toEqual(catalog)
+  f.cache.invalidate('codex')
+  expect(() => f.cache.remember(f.root, { catalog, binding: 'synthetic-binding' }, revision)).toThrow(
+    '来源已变化',
+  )
+  expect(f.cache.display(f.root, 'codex', 'synthetic-binding')).toBeUndefined()
+})

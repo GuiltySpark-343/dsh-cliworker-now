@@ -27,10 +27,10 @@ function completedEmptyReply(item: TimelineItem, worker?: Worker): boolean {
   )
 }
 function ProcessRow({ item }: { item: TimelineItem }) {
-  return item.kind === 'tool' || item.kind === 'diagnostic' ? (
-    <details className="cwn-tool">
+  return item.kind === 'tool' || item.kind === 'diagnostic' || item.kind === 'reasoning' ? (
+    <details className={`cwn-tool${item.kind === 'reasoning' ? ' cwn-reasoning' : ''}`}>
       <summary>
-        <Glyph name="tool" />
+        {item.kind !== 'reasoning' && <Glyph name="tool" />}
         <span className="cwn-tool-title">{item.text}</span>
         <small title={item.runStatus ? `CLI 最后状态：${item.state}；未收到最终工具状态` : undefined}>
           {item.runStatus ? (item.runStatus === 'interrupted' ? '本轮已中断' : '本轮已结束') : item.state}
@@ -68,12 +68,20 @@ function Progress({ rows, item, worker }: { rows: TimelineItem[]; item: Timeline
         </span>
       </summary>
       <div className="cwn-process-body">
-        <p className="cwn-process-note">以下为 CLI 公开的工作记录；未公开的思考内容无法展示。</p>
+        <p className="cwn-process-note">
+          {rows.some((row) => row.kind === 'reasoning' && row.detail?.trim())
+            ? '以下为 CLI 返回的公开思考、计划与工具记录。'
+            : '本轮 CLI 未返回可展示的思考摘要；以下为已有工作记录。'}
+        </p>
         {item.sessionDurationSeconds !== undefined && (
           <p className="cwn-process-note">CLI 会话累计耗时：{item.sessionDurationSeconds}秒</p>
         )}
         {rows
-          .filter((row) => !['user', 'assistant'].includes(row.kind) || completedEmptyReply(row, worker))
+          .filter((row) =>
+            row.kind === 'reasoning'
+              ? !!row.detail?.trim()
+              : !['user', 'assistant'].includes(row.kind) || completedEmptyReply(row, worker),
+          )
           .map((row) =>
             row.kind === 'assistant' ? (
               <div key={row.id} className="cwn-process-event" data-empty-reply-id={row.id}>

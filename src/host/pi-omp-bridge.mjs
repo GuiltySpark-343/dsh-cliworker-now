@@ -375,6 +375,31 @@ try {
       response = '',
       currentText = '',
       assistantStep = 0
+    const thinkingBlocks = new Map()
+    const thinkingKey = (value) => value.messageId ?? assistantStep
+    const publicThinking = (messageKey, index, text, state, force = false) => {
+      if (!Number.isSafeInteger(index) || index < 0 || typeof text !== 'string') return
+      const key = `${messageKey}:${index}`
+      let block = thinkingBlocks.get(key)
+      if (!block) {
+        block = { messageKey, index, step: thinkingBlocks.size, text: '', emittedAt: 0 }
+        thinkingBlocks.set(key, block)
+      }
+      block.text = text
+      block.state = state
+      // Native token deltas can be tiny. Bound live snapshot frequency while
+      // always delivering the authoritative completed block immediately.
+      const now = Date.now()
+      if (!force && state === 'RUNNING' && now - block.emittedAt < 200) return
+      block.emittedAt = now
+      event({
+        kind: 'reasoning',
+        step: block.step,
+        text: `${config.cli === 'pi' ? 'Pi' : 'OMP'} 公开思考`,
+        detail: text,
+        state,
+      })
+    }
     const toolSteps = new Map()
     const send = (value) => {
       if (!child.stdin.destroyed) child.stdin.write(JSON.stringify(value) + '\n')
@@ -498,12 +523,45 @@ try {
         event({ kind: 'assistant', step: assistantStep, text })
         return
       }
+      if (
+        value.type === 'message_update' &&
+        ['thinking_delta', 'thinking_end'].includes(value.assistantMessageEvent?.type)
+      ) {
+        const update = value.assistantMessageEvent
+        const messageKey = thinkingKey(value),
+          index = update.contentIndex
+        const previous = thinkingBlocks.get(`${messageKey}:${index}`)?.text ?? ''
+        // RPC explicitly publishes these visible text fields. Partial messages,
+        // signatures and provider replay payloads are never copied.
+        const redacted = update.partial?.content?.[index]?.redacted === true
+        const text = redacted
+          ? ''
+          : update.type === 'thinking_end'
+            ? update.content
+            : typeof update.delta === 'string'
+              ? previous + update.delta
+              : undefined
+        publicThinking(messageKey, index, text, update.type === 'thinking_end' ? 'COMPLETED' : 'RUNNING')
+        return
+      }
       if (value.type === 'message_end' && value.message?.role === 'assistant') {
         if (['error', 'aborted'].includes(value.message.stopReason)) failure ??= '模型请求失败或被中止'
         if (value.message.model && value.message.model !== selectedModel)
           failure ??= '模型响应与所选型号不一致'
         if (value.message.provider && value.message.provider !== selectedProvider)
           failure ??= '模型响应与所选提供商不一致'
+        const messageKey = thinkingKey(value)
+        const content = Array.isArray(value.message.content) ? value.message.content : []
+        for (const block of thinkingBlocks.values()) {
+          if (block.messageKey !== messageKey) continue
+          const final = content[block.index]
+          if (final?.type !== 'thinking' || final.redacted === true || typeof final.thinking !== 'string')
+            publicThinking(messageKey, block.index, '', 'COMPLETED')
+        }
+        for (const [index, block] of content.entries()) {
+          if (block.type === 'thinking' && block.redacted !== true && typeof block.thinking === 'string')
+            publicThinking(messageKey, index, block.thinking, 'COMPLETED')
+        }
         if (!currentText) {
           const text = (value.message.content ?? [])
             .filter((c) => c.type === 'text')
@@ -578,6 +636,8 @@ try {
       })
       child.once('close', (code, signal) => resolve({ code, signal }))
     })
+    for (const block of thinkingBlocks.values())
+      publicThinking(block.messageKey, block.index, block.text, block.state, true)
     clearTimeout(startupTimer)
     clearTimeout(closeTimer)
     clearTimeout(forceTimer)

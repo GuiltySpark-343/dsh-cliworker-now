@@ -106,6 +106,7 @@ function SessionPanel({
   const error = errors[selected] ?? ''
   const setError = (text: string) => setErrors((old) => ({ ...old, [selected]: text }))
   const pendingAction = useRef(false)
+  const queuedRequests = useRef(new Map<string, { runId: string; prompt: string; id: string }>())
   const managementAbort = useRef<AbortController>()
   const [following, setFollowing] = useState(true)
   const alive = useRef(true),
@@ -191,8 +192,15 @@ function SessionPanel({
   const unavailable = connecting || !!streamError
   const startingNew = !!worker && restartFor === worker.id
   const resumeBlocked = snapshot.resumeBlockedReason
+  const queuedFollowups = snapshot.queuedFollowups ?? []
+  const waitingForTurn = worker?.status === 'running' || worker?.status === 'queued'
+  const queueSubmission = !!waitingForTurn || queuedFollowups.length > 0
   const canResume =
-    (startingNew || (worker?.conversationId && !resumeBlocked)) && !retired && !running && !unavailable
+    (startingNew || ((waitingForTurn || worker?.conversationId) && !resumeBlocked)) &&
+    !retired &&
+    (!startingNew || !running) &&
+    worker?.status !== 'stopping' &&
+    !unavailable
   submitEnabled.current = !!prompt.trim() && !!canResume && !busy
   const jumpToLatest = () => {
     setHistoryPage(undefined)
@@ -709,13 +717,79 @@ function SessionPanel({
                 }
                 return
               }
-              value(await api.cliworker.followup(sessionId, worker.id, prompt))
+              if (queueSubmission) {
+                const previous = queuedRequests.current.get(worker.id)
+                const request =
+                  previous?.runId === worker.runId && previous.prompt === prompt
+                    ? previous
+                    : { runId: worker.runId, prompt, id: crypto.randomUUID() }
+                queuedRequests.current.set(worker.id, request)
+                value(
+                  await api.cliworker.queueFollowup(sessionId, worker.id, prompt, worker.runId, request.id),
+                )
+                if (queuedRequests.current.get(worker.id) === request)
+                  queuedRequests.current.delete(worker.id)
+              } else {
+                value(await api.cliworker.followup(sessionId, worker.id, prompt))
+              }
               clearSubmitted(worker.id, prompt)
               if (isCurrent()) jumpToLatest()
             })
           }}
         >
           {retired && <p className="cwn-resume-hint">{RETIRED_HARNESS_NOTICE}</p>}
+          {queuedFollowups.length > 0 && (
+            <section className="cwn-followup-queue" aria-label="待发送消息" aria-live="polite">
+              <div className="cwn-followup-heading">
+                <span>待发送 · {queuedFollowups.length}</span>
+                {queuedFollowups.some((item) => item.state === 'paused') && !running && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy || unavailable || !!resumeBlocked || !worker.conversationId}
+                    onClick={() =>
+                      void perform(async () => {
+                        value(await api.cliworker.retryQueuedFollowups(sessionId, worker.id, worker.runId))
+                      })
+                    }
+                  >
+                    继续发送
+                  </Button>
+                )}
+              </div>
+              <ol>
+                {queuedFollowups.map((item, index) => (
+                  <li key={item.id}>
+                    <div className="cwn-followup-content">
+                      <p>{item.prompt}</p>
+                      <small>
+                        {item.state === 'paused'
+                          ? item.pauseReason || '已暂停，等待继续发送'
+                          : item.state === 'sending'
+                            ? '准备发送…'
+                            : '本轮结束后发送'}
+                      </small>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      aria-label={`取消待发送消息 ${index + 1}`}
+                      disabled={busy || unavailable || (item.state === 'sending' && !!running)}
+                      onClick={() =>
+                        void perform(async () => {
+                          value(await api.cliworker.cancelQueuedFollowup(sessionId, worker.id, item.id))
+                        })
+                      }
+                    >
+                      取消
+                    </Button>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
           <div className="cwn-compose-box">
             <textarea
               ref={composerInput}
@@ -725,13 +799,13 @@ function SessionPanel({
               onKeyDown={composerKeys.onKeyDown}
               onCompositionStart={composerKeys.onCompositionStart}
               onCompositionEnd={composerKeys.onCompositionEnd}
-              disabled={!canResume || busy}
+              disabled={!canResume}
               maxLength={100000}
               placeholder={
                 startingNew
                   ? '输入新对话的任务…'
                   : running
-                    ? '本轮完成后可以继续对话'
+                    ? '输入下一步，本轮结束后自动发送…'
                     : '给这个子 Agent 分配下一步…'
               }
               rows={1}
@@ -744,7 +818,7 @@ function SessionPanel({
                 sessionId={sessionId}
                 disabled={retired || busy || unavailable || !!running || startingNew || !!resumeBlocked}
               />
-              {running ? (
+              {running && (!prompt.trim() || worker.status === 'stopping') ? (
                 <Button
                   type="button"
                   size="sm"
@@ -765,8 +839,10 @@ function SessionPanel({
                 <button
                   type="submit"
                   className="cwn-send"
-                  aria-label={startingNew ? '新建对话并发送' : '继续对话'}
-                  title={startingNew ? '新建对话并发送' : '继续对话'}
+                  aria-label={
+                    startingNew ? '新建对话并发送' : queueSubmission ? '加入待发送消息' : '继续对话'
+                  }
+                  title={startingNew ? '新建对话并发送' : queueSubmission ? '本轮结束后发送' : '继续对话'}
                   disabled={!canResume || busy || !prompt.trim()}
                   onMouseDown={(e) => {
                     e.preventDefault()

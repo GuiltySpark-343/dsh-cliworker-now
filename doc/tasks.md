@@ -1165,3 +1165,16 @@
 - Tabbit 实际渲染使用真实 ConversationTimeline、MarkdownText、UsageIndicator 和生产样式，输入全部明确标注模拟。六模式覆盖完成空步骤、空流式、正文流式、失败空输出、结果待核实、历史页：完成模式 2 个 article/0 空 assistant、过程 3 个统计行；步骤 Token 23/11/7 可查看，本轮 5 秒与累计 4100 秒独立，最终总用量保持 410 tok；末条 tail=always，流式及历史 tail=hover。截图逐张视觉核查通过。证据 `.cache/agy-issues-v079/{verification.json,completed.png,process.png}`；可复现夹具 `.cache/issue-2-ui/`。
 - 中间检查如实保留：pnpm 初次自动检查依赖因无 TTY 中止，改为既有配置开关，无安装/清理依赖；新测试初跑两处断言使用不当已修正（undefined 的 not.toContain 和两个同类统计控件的选择范围），重跑通过；隔离 UI 初次 bundle 缺少 automatic JSX 导致 React is not defined，修正夹具构建并补齐生产样式后刷新，无脚本错误。独立审查发现空/纯空白 result 会话 ID 可能进入 uncertain，已在 parser 严格拒绝并在 runtime 二次比对，补协议及运行时回归，复审无剩余确定问题。
 - `spec:check` 归档前后均 15/15 通过，差异检查通过；本 change 的规格、实现和最小验收完成后同步归档，既有三个未完成 change 保持原状态。没有 Windows 实机、真实 CLI/模型、正式 Desktop 更新、全量验收、GitHub 推送/评论/关闭 issue 或发布；浏览器模拟不等同于这些实机验收。既有图标归档、宣传资料与历史文档改动保留。
+
+## 2026-10-15：v0.7.9 轮后续聊与模型快选最小验收
+
+- 已实现 Host 持久待发送队列、正常结束后 FIFO 续聊、取消/暂停/显式恢复，失败/停止/uncertain/重启保留未发送内容。停止等待发送前原生查询清理；真正执行前重新核验账号/模型及父会话权限。输入运行中可编辑，成功响应不覆盖后来草稿；用户最终要求的单一动作按钮已落实：空草稿停止，有文本发送，二者不并排。
+- 已实现首次派遣保存目录、Worker 同来源缓存读取、菜单预取复用及选择时本地保存。原生会话 ID 保持；没有依据添加“换模型必然丢失上下文”弹窗。发送时原生授权继续，失效不静默回退。
+- 公开过程接入 Codex、Claude、Pi、OMP、Grok，协议来源及未支持范围见 [public-process.md](public-process.md)。只显示原生公开文本与计划，不提取隐藏推理。
+- 所有命令加 `--config.verifyDepsBeforeRun=false`，避免 pnpm 触发与本次无关的依赖重建。缓存/设置/core 三个关联测试文件 69 项通过；Panel 全文件在初版测试按钮名修正后 66 项通过，随后新增 metadata 取消用例通过，并对最终单按钮行为定向回归 3 项通过（最终文件共 67 项；未把重复运行累加成新增覆盖）。
+- `tests/followup-queue.test.ts tests/runtime.test.ts tests/agy-run-outcome.test.ts tests/storage.test.ts tests/cleanup-persistence.test.ts` 共 69 项通过，其中队列新增 15 项覆盖 FIFO、身份/账号、去重、停止清理、重启、uncertain、取消、执行前拒绝保留、目录等待后权限变化及文件边界。
+- `tests/public-process.test.ts tests/conversation-timeline.test.tsx tests/grok-adapter.test.ts tests/adapters.test.ts` 共 47 项通过；Pi/OMP 相关定向测试 4 项通过（其余 52 项按名称未运行）。首次 Pi/OMP 合成回环服务器受沙箱 EPERM 阻断，获准本机监听后重跑通过；没有真实模型请求。
+- 独立审查修复了：停止在元数据查询中提前返回、outbox 读取链接边界、runtime 等待后权限变化、metadata 准备阶段 UI 无取消出口。最终没有剩余确定性 Host 问题。
+- `pnpm ... build:preview` 最终通过；在隔离包内运行 `pnpm ... typecheck`，使用本次生成的 Remote 声明，Host 和 Client 均通过。全部 src 与最终预览源逐字节一致。正式 lib 不修改，避免热更新已安装插件。构建仅保留既有 CommonJS 建议提示。
+- Tabbit 使用真实 Panel/ConversationTimeline/原生控件、明确模拟 Gateway：运行中打字与 Enter 入队、继续草稿、暂停/显式恢复/取消、模型及强度快选（目录读取 1 次、偏好保存 2 次、任务启动 0 次）、公开摘要安全文本、无摘要提示均已实际渲染核对；最终按钮数始终为 1。320 px 窄栏 clientWidth/scrollWidth 均为 320，按钮可见。夹具与证据在 `.cache/followup-ui/`，`single-action.png` 为最终界面，`verification.json` 记录范围与哈希。模拟渲染不等于安装后的 Desktop 验收。
+- 版本仍为 0.7.9。未执行真实账号/模型、Windows 实机、正式 Desktop 更新、全量测试、GitHub 推送或发布。全量验收只在获准的正式 GitHub 提交前执行。

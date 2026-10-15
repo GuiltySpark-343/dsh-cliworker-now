@@ -46,6 +46,7 @@ export function WorkerModelMenu({
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
   const [query, setQuery] = useState('')
+  const [selection, setSelection] = useState(worker.preference)
   const alive = useRef(true)
   useEffect(() => {
     alive.current = true
@@ -54,13 +55,16 @@ export function WorkerModelMenu({
     }
   }, [])
   useEffect(() => {
-    if (!open) return
+    setSelection(worker.preference)
+  }, [worker.id, worker.preference.model, worker.preference.effort, worker.preference.cli])
+  useEffect(() => {
+    if (!worker.conversationId) return
     const controller = new AbortController()
     setLoading(true)
     setCatalog(undefined)
     setError('')
     void api.cliworker
-      .catalogForCli(sessionId, cli, controller.signal)
+      .catalogForWorker(sessionId, worker.id, controller.signal)
       .then((result) => {
         if (controller.signal.aborted) return
         const next = JSON.parse(value(result))
@@ -79,13 +83,13 @@ export function WorkerModelMenu({
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [open, api, sessionId, cli, attempt])
-  const identity = modelName(worker.preference)
+  }, [api, sessionId, worker.id, worker.conversationId, cli, attempt])
+  const identity = modelName(selection)
   const chosen = catalog?.models.find(
-    (m) => m.id === identity || Object.values(m.variants ?? {}).includes(worker.preference.model),
+    (m) => m.id === identity || Object.values(m.variants ?? {}).includes(selection.model),
   )
-  const visible = visibleModelChoices(catalog?.models ?? [], worker.preference.model)
-  const name = visible.find((model) => model.id === chosen?.id)?.label ?? displayModelName(worker.preference)
+  const visible = visibleModelChoices(catalog?.models ?? [], selection.model)
+  const name = visible.find((model) => model.id === chosen?.id)?.label ?? displayModelName(selection)
   const locked = disabled || saving || active(worker.status)
   const choicesLocked = locked || loading || !catalog || !!error
   const close = () => {
@@ -107,6 +111,7 @@ export function WorkerModelMenu({
     try {
       value(await api.cliworker.configureWorker(sessionId, worker.id, JSON.stringify(next)))
       if (alive.current) {
+        setSelection(next)
         setOpen(false)
         setPane('root')
         setQuery('')
@@ -130,7 +135,7 @@ export function WorkerModelMenu({
           { id: 'model', label: cell('模型', name), disabled: choicesLocked },
           {
             id: 'effort',
-            label: cell('思考强度', effortLabel(worker.preference.effort)),
+            label: cell('思考强度', effortLabel(selection.effort)),
             disabled: choicesLocked || !chosen,
           },
         ]
@@ -149,7 +154,7 @@ export function WorkerModelMenu({
       className="cwn-model-menu"
       listClassName="cwn-model-popover"
       items={items}
-      selectedId={pane === 'effort' ? worker.preference.effort : undefined}
+      selectedId={pane === 'effort' ? selection.effort : undefined}
       onClose={close}
       onSelect={(id) => {
         if (id === 'back') {
@@ -178,11 +183,11 @@ export function WorkerModelMenu({
           title={
             active(worker.status)
               ? '本轮结束后可以修改模型与强度'
-              : `${name} · ${effortLabel(worker.preference.effort)}`
+              : `${name} · ${effortLabel(selection.effort)}`
           }
         >
           <span>{name}</span>
-          <span className="cwn-model-effort">{effortLabel(worker.preference.effort)}</span>
+          <span className="cwn-model-effort">{effortLabel(selection.effort)}</span>
           <IconChevronDownOutlineRegular className="cwn-model-chevron" size={12} />
         </Button>
       }
@@ -204,9 +209,7 @@ export function WorkerModelMenu({
                 key={m.id}
                 disabled={choicesLocked}
                 onSelect={() => {
-                  const effort = m.efforts?.includes(worker.preference.effort)
-                    ? worker.preference.effort
-                    : m.efforts?.[0]
+                  const effort = m.efforts?.includes(selection.effort) ? selection.effort : m.efforts?.[0]
                   if (effort) void save({ cli, model: m.id, effort })
                 }}
               >
@@ -220,7 +223,7 @@ export function WorkerModelMenu({
       )}
       {loading && (
         <div className="cwn-model-provider" role="status">
-          <StateDot state="ongoing" size={14} /> 正在读取 CLI 模型…
+          <StateDot state="ongoing" size={14} /> 正在读取模型目录…
         </div>
       )}
       {saving && (

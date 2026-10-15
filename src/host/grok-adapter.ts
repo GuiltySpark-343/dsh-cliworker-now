@@ -169,6 +169,9 @@ export class GrokProtocol {
   private decoder = new StringDecoder('utf8')
   private pending = ''
   private response = ''
+  private thought = ''
+  private thoughtStep = 0
+  private thoughtEmittedAt = 0
   private terminal = false
   private failure?: string
   private ended = false
@@ -198,6 +201,8 @@ export class GrokProtocol {
     this.pending = ''
     this.ended = true
     if (!this.conversationId) return
+    if (this.thought && !this.terminal)
+      this.emit({ kind: 'reasoning', step: this.thoughtStep, text: 'Grok 公开思考', detail: this.thought, state: 'RUNNING' })
     const error =
       this.failure ??
       (!this.terminal
@@ -230,7 +235,22 @@ export class GrokProtocol {
     if (!record(e) || typeof e.type !== 'string') throw new Error('Invalid Grok event')
     if (this.terminal) throw new Error('Unexpected event after Grok end')
     if (e.sessionId !== undefined) this.id(e.sessionId)
-    if (e.type === 'thought') return
+    if (e.type === 'thought') {
+      if (e.redacted === true) return
+      if (typeof e.data !== 'string') throw new Error('Invalid Grok public thought')
+      this.thought += e.data
+      const now = Date.now()
+      if (now - this.thoughtEmittedAt < 200) return
+      this.thoughtEmittedAt = now
+      this.emit({
+        kind: 'reasoning',
+        step: this.thoughtStep,
+        text: 'Grok 公开思考',
+        detail: this.thought,
+        state: 'RUNNING',
+      })
+      return
+    }
     if (e.type === 'text') {
       if (typeof e.data !== 'string') throw new Error('Invalid Grok text')
       this.response += e.data
@@ -263,6 +283,14 @@ export class GrokProtocol {
     }
     if (e.type === 'end') {
       if (!this.conversationId) throw new Error('Missing Grok end session identity')
+      if (this.thought)
+        this.emit({
+          kind: 'reasoning',
+          step: this.thoughtStep,
+          text: 'Grok 公开思考',
+          detail: this.thought,
+          state: 'COMPLETED',
+        })
       this.terminal = true
       if (e.stopReason !== 'end_turn') this.failure ??= `Grok 未正常完成：${String(e.stopReason)}`
       return
@@ -272,9 +300,29 @@ export class GrokProtocol {
       this.emit({ kind: 'diagnostic', text: this.failure, state: 'error' })
       return
     }
-    if (e.type === 'usage') return
+    if (e.type === 'usage') {
+      if (this.thought)
+        this.emit({
+          kind: 'reasoning',
+          step: this.thoughtStep,
+          text: 'Grok 公开思考',
+          detail: this.thought,
+          state: 'COMPLETED',
+        })
+      this.thought = ''
+      this.thoughtStep++
+      this.thoughtEmittedAt = 0
+      return
+    }
     if (e.type === 'plan') {
-      this.emit({ kind: 'status', text: 'Grok 更新计划', detail: JSON.stringify(e.entries) })
+      // The native ACP plan exposes content/status/priority only. Never copy
+      // opaque extension metadata into the public process view.
+      const entries = Array.isArray(e.entries) ? e.entries : []
+      const detail = entries
+        .filter((entry) => record(entry) && typeof entry.content === 'string')
+        .map((entry) => `${typeof entry.status === 'string' ? `[${entry.status}] ` : ''}${entry.content}`)
+        .join('\n')
+      if (detail) this.emit({ kind: 'diagnostic', step: 0, text: 'Grok 工作计划', detail })
       return
     }
     if (e.type === 'available_commands') return

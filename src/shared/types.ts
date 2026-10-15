@@ -134,7 +134,7 @@ export interface WorkerEvent {
   seq: number
   runId: string
   time: string
-  kind: 'user' | 'assistant' | 'tool' | 'status' | 'diagnostic' | 'result'
+  kind: 'user' | 'assistant' | 'reasoning' | 'tool' | 'status' | 'diagnostic' | 'result'
   text: string
   observedModel?: string
   step?: number
@@ -159,6 +159,13 @@ export interface TimelineItem {
   runEndedAt?: string
   runOutcome?: WorkerStatus
 }
+export interface QueuedFollowup {
+  id: string
+  prompt: string
+  createdAt: string
+  state: 'pending' | 'sending' | 'paused'
+  pauseReason?: string
+}
 export interface WorkerSnapshot {
   telemetry?: Telemetry
   workers: Worker[]
@@ -166,6 +173,8 @@ export interface WorkerSnapshot {
   selected?: Worker
   /** Safe selected-Worker admission information; never exposes account identities. */
   resumeBlockedReason?: string
+  /** Accepted messages for the selected Worker; not delivered to the CLI yet. */
+  queuedFollowups?: QueuedFollowup[]
   timeline: TimelineItem[]
   revision: number
   truncated: boolean
@@ -194,7 +203,7 @@ export function foldEvents(
   const markEnded = (runId: string, status: WorkerStatus) => {
     for (const row of rows) {
       if (
-        row.kind === 'tool' &&
+        (row.kind === 'tool' || row.kind === 'reasoning') &&
         row.id.startsWith(runId + ':') &&
         ['ACTIVE', 'RUNNING', 'PENDING', 'QUEUED', 'IN_PROGRESS'].includes(row.state ?? '')
       )
@@ -255,7 +264,10 @@ export function foldEvents(
       if (event.kind === 'assistant') existing.text += event.text
       else if (event.text) existing.text = event.text
       if (event.state) existing.state = event.state
-      if (event.detail) existing.detail = event.detail
+      // Public reasoning carries a complete visible-text snapshot. An empty
+      // snapshot can withdraw a block; never append or retain its older text.
+      if (event.detail || (event.kind === 'reasoning' && event.detail !== undefined))
+        existing.detail = event.detail
     } else {
       const row: TimelineItem = {
         id: key,

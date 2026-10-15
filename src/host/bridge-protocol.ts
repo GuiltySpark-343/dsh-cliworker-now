@@ -43,7 +43,11 @@ export class BridgeProtocol {
       })
     } else if (v.type === 'event') {
       const e = v.event
-      if (!e || !['assistant', 'tool', 'status', 'diagnostic'].includes(e.kind) || typeof e.text !== 'string')
+      if (
+        !e ||
+        !['assistant', 'reasoning', 'tool', 'status', 'diagnostic'].includes(e.kind) ||
+        typeof e.text !== 'string'
+      )
         throw new Error('Invalid bridge event')
       this.emit({
         kind: e.kind,

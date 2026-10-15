@@ -21,6 +21,7 @@ import {
   type TimelineItem,
   type CliId,
   type RoleSnapshot,
+  type QueuedFollowup,
 } from '../shared/types.ts'
 import {
   agentNameSchema,
@@ -46,6 +47,7 @@ import { readCliAccountBinding } from './cli-account-binding.ts'
 import { assertFirstPartyConfiguration, firstPartyEnvironment } from './first-party-models.ts'
 import { agyBackgroundEnvironment } from './agy-background-environment.ts'
 import { AgyProtocol } from './protocol.ts'
+import { FollowupQueue } from './followup-queue.ts'
 
 interface Task {
   worker: Worker
@@ -54,11 +56,16 @@ interface Task {
   done: Promise<Worker>
   settle: (worker: Worker) => void
   admission: Promise<string>
+  queuedFollowupId?: string
 }
 export interface Submission {
   worker: Worker
   done: Promise<Worker>
   cancel: () => void
+}
+export interface QueuedAdmission {
+  id: string
+  expectedRunId: string
 }
 
 export class WorkerRuntime {
@@ -70,18 +77,133 @@ export class WorkerRuntime {
   private listeners = new Set<() => void>()
   private disposed = false
   private blocked?: string
+  private followups: FollowupQueue
+  private followupDispatches = new Map<
+    string,
+    { id: string; expectedRunId: string; controller: AbortController; done?: Promise<void> }
+  >()
+  private followupRuns = new Set<Promise<void>>()
+  private followupLauncher?: (
+    worker: Worker,
+    item: QueuedFollowup,
+    admission: QueuedAdmission,
+    signal: AbortSignal,
+  ) => Promise<void>
+  private queuedExecutionGuard?: (worker: Worker) => void
   revision = 0
   constructor(
     readonly storage: WorkerStorage,
     private backend: ProcessBackend,
     readonly config: RuntimeConfig,
   ) {
+    try {
+      this.followups = new FollowupQueue(storage)
+    } catch (error) {
+      storage.close()
+      throw error
+    }
     const cleanup = storage.cleanupBlockState()
     if (cleanup !== 'none')
       this.blocked =
         cleanup === 'invalid'
           ? '进程清理隔离记录无法核验，已暂停任务和账号操作'
           : '无法确认 CLI 进程已清理，已暂停后续派遣，请先核查进程退出状态'
+  }
+  setFollowupLauncher(launch: NonNullable<WorkerRuntime['followupLauncher']>): void {
+    this.followupLauncher = launch
+  }
+  setQueuedExecutionGuard(guard: (worker: Worker) => void): void {
+    this.queuedExecutionGuard = guard
+  }
+  queueFollowup(
+    parent: string,
+    id: string,
+    prompt: string,
+    expectedRunId: string,
+    requestId: string,
+  ): QueuedFollowup {
+    const worker = this.get(parent, id)
+    this.assertCliEnabled(cliOf(worker.preference))
+    if (!this.tasks.has(id) && !this.storage.accountBinding(id)) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
+    if (worker.runId !== expectedRunId) throw new Error('本轮状态已变化，请刷新后重新发送')
+    if (
+      worker.status === 'stopping' ||
+      (!['queued', 'running', 'completed'].includes(worker.status) && !this.followups.list(id).length)
+    )
+      throw new Error('本轮已暂停或异常，请确认后重新发送')
+    const item = this.followups.add(id, prompt, requestId)
+    this.changed()
+    if (worker.status === 'completed') this.dispatchFollowup(worker)
+    return item
+  }
+  cancelQueuedFollowup(parent: string, id: string, queuedId: string): void {
+    this.get(parent, id)
+    if (this.disposed) throw new Error('CLI Worker is shutting down')
+    if (this.tasks.get(id)?.queuedFollowupId === queuedId)
+      throw new Error('消息已进入执行队列，请使用停止操作')
+    this.followups.remove(id, queuedId)
+    const dispatch = this.followupDispatches.get(id)
+    if (dispatch?.id === queuedId) dispatch.controller.abort(new Error('待发送消息已取消'))
+    this.changed()
+  }
+  retryQueuedFollowups(parent: string, id: string, expectedRunId: string): void {
+    const worker = this.get(parent, id)
+    this.assertManagedIdle(worker)
+    this.assertCliEnabled(cliOf(worker.preference))
+    if (worker.runId !== expectedRunId) throw new Error('本轮状态已变化，请刷新后重试')
+    if (!worker.conversationId) throw new Error('尚未收到 CLI 会话标识，无法继续发送')
+    if (this.followupDispatches.has(id)) throw new Error('消息正在准备发送，请稍后再试')
+    this.followups.update(id, 'pending')
+    this.changed()
+    this.dispatchFollowup(worker, true)
+  }
+  private pauseFollowups(id: string, reason: string): void {
+    this.followupDispatches.get(id)?.controller.abort(new Error(reason))
+    try {
+      this.followups.update(id, 'paused', reason)
+    } catch (error) {
+      this.blocked = `待发送消息状态保存失败，已暂停执行：${String(error)}`
+    }
+  }
+  private dispatchFollowup(worker: Worker, explicitlyRetried = false): void {
+    if (this.disposed || this.blocked || !this.followupLauncher || this.followupDispatches.has(worker.id))
+      return
+    if (
+      this.tasks.has(worker.id) ||
+      active(worker.status) ||
+      (!explicitlyRetried && worker.status !== 'completed')
+    )
+      return
+    let item: QueuedFollowup | undefined
+    try {
+      item = this.followups.claim(worker.id)
+    } catch (error) {
+      this.blocked = `待发送消息状态保存失败，已暂停执行：${String(error)}`
+      this.changed()
+      return
+    }
+    if (!item) return
+    const dispatch: { id: string; expectedRunId: string; controller: AbortController; done?: Promise<void> } =
+      { id: item.id, expectedRunId: worker.runId, controller: new AbortController() }
+    this.followupDispatches.set(worker.id, dispatch)
+    this.changed()
+    const running = this.followupLauncher(structuredClone(worker), item, dispatch, dispatch.controller.signal)
+      .catch((error) => {
+        if (this.followups.list(worker.id).some((entry) => entry.id === item.id))
+          this.pauseFollowups(
+            worker.id,
+            `发送已暂停：${error instanceof Error ? error.message : String(error)}`,
+          )
+        this.changed()
+      })
+      .finally(() => {
+        this.followupRuns.delete(running)
+        if (this.followupDispatches.get(worker.id) === dispatch) this.followupDispatches.delete(worker.id)
+        const current = this.storage.workers.get(worker.id)
+        if (current && !current.archivedAt) this.dispatchFollowup(current, explicitlyRetried)
+      })
+    this.followupRuns.add(running)
+    dispatch.done = running
   }
   subscribe(callback: () => void): () => void {
     this.listeners.add(callback)
@@ -263,6 +385,7 @@ export class WorkerRuntime {
       workers,
       archivedWorkers,
       selected: worker,
+      queuedFollowups: worker ? this.followups.list(worker.id) : [],
       resumeBlockedReason:
         worker?.conversationId && !this.storage.accountBinding(worker.id)
           ? LEGACY_ACCOUNT_RECORD_NOTICE
@@ -330,6 +453,7 @@ export class WorkerRuntime {
     previousId?: string,
     identity?: { agentName?: string; role?: RoleSnapshot },
     authorizedBinding?: string,
+    queuedAdmission?: QueuedAdmission,
   ): Submission {
     if (this.disposed) throw new Error('CLI Worker is shutting down')
     if (this.blocked) throw new Error(this.blocked)
@@ -347,6 +471,20 @@ export class WorkerRuntime {
       throw new Error('Cannot resume a worker in another workspace')
     if (cliOf(effective) === 'kimi' && (previous?.mode ?? mode) === 'plan')
       throw new Error('Kimi 非交互模式不支持只读派遣')
+    if (queuedAdmission) {
+      const dispatch = previous && this.followupDispatches.get(previous.id)
+      if (
+        !previous ||
+        !dispatch ||
+        dispatch.id !== queuedAdmission.id ||
+        dispatch.expectedRunId !== queuedAdmission.expectedRunId ||
+        previous.runId !== queuedAdmission.expectedRunId ||
+        dispatch.controller.signal.aborted ||
+        this.followups.list(previous.id)[0]?.id !== queuedAdmission.id ||
+        this.followups.list(previous.id)[0]?.state !== 'sending'
+      )
+        throw new Error('待发送消息已取消或本轮状态已变化')
+    } else if (previous) this.pauseFollowups(previous.id, '已手动发送新消息，请确认后继续队列')
     const now = new Date().toISOString()
     const worker: Worker = previous ?? {
       id: randomUUID(),
@@ -397,6 +535,7 @@ export class WorkerRuntime {
       done,
       settle,
       admission,
+      queuedFollowupId: queuedAdmission?.id,
     }
     this.tasks.set(worker.id, task)
     this.queue.push(task)
@@ -417,8 +556,14 @@ export class WorkerRuntime {
   }
   stop(parent: string, id: string): Promise<Worker> {
     const worker = this.get(parent, id)
+    const dispatch = this.followupDispatches.get(id)?.done
+    this.pauseFollowups(id, '任务已停止，请确认后继续发送')
+    this.changed()
     const task = this.tasks.get(id)
-    if (!task) return Promise.resolve(structuredClone(worker))
+    if (!task)
+      return dispatch
+        ? dispatch.then(() => structuredClone(worker))
+        : Promise.resolve(structuredClone(worker))
     if (worker.status !== 'stopping') {
       worker.status = 'stopping'
       this.storage.save(worker)
@@ -429,7 +574,7 @@ export class WorkerRuntime {
         void this.finishQueued(task, 'interrupted', '用户已取消排队任务')
       }
     }
-    return task.done
+    return dispatch ? Promise.all([task.done, dispatch]).then(([result]) => result) : task.done
   }
   /** A queued task may already own a native account-query process. */
   private async finishQueued(task: Task, status: 'failed' | 'interrupted', reason: string): Promise<void> {
@@ -480,11 +625,17 @@ export class WorkerRuntime {
     } finally {
       this.tasks.delete(worker.id)
       this.running.delete(task)
+      if (worker.status !== 'completed')
+        this.pauseFollowups(
+          worker.id,
+          worker.status === 'uncertain' ? '结果待核实，请核查后继续发送' : '前轮未正常完成，请确认后继续发送',
+        )
       this.changed()
       // A later followup mutates the live worker. Completion consumers must retain
       // the exact outcome of this run, including its runId and response.
       task.settle(structuredClone(worker))
       this.drain()
+      if (worker.status === 'completed') this.dispatchFollowup(worker)
     }
   }
   private async run(task: Task): Promise<void> {
@@ -626,6 +777,7 @@ export class WorkerRuntime {
       controller.signal.throwIfAborted()
       if ('activate' in launch && typeof launch.activate === 'function') await launch.activate()
       controller.signal.throwIfAborted()
+      if (task.queuedFollowupId) this.queuedExecutionGuard?.(worker)
       this.storage.bindAccount(worker.id, binding)
       handle = await spawnManagedAgent(this.backend, {
         argv: launch.argv,
@@ -637,6 +789,13 @@ export class WorkerRuntime {
       })
       // Observe spawn rejection immediately even while draining protocol streams.
       void handle.done.catch(() => undefined)
+      controller.signal.throwIfAborted()
+      // Before a CLI process is actually launched, a rejected account/model or
+      // permission check must leave the original outbox message recoverable.
+      if (task.queuedFollowupId) {
+        this.followups.remove(worker.id, task.queuedFollowupId)
+        this.changed()
+      }
       const capture = async (stream: SubprocessHandle['stdout'], isError: boolean) => {
         if (!stream) throw new Error('CLI pipe unavailable')
         for await (const chunk of stream) {
@@ -726,8 +885,11 @@ export class WorkerRuntime {
   async close(): Promise<void> {
     if (this.disposed) return
     this.disposed = true
+    for (const worker of this.storage.workers.values())
+      this.pauseFollowups(worker.id, 'Host 已关闭，请确认后继续发送')
     const tasks = [...this.tasks.values()]
     await Promise.all(tasks.map((task) => this.stop(task.worker.parentSessionId, task.worker.id)))
+    await Promise.allSettled([...this.followupRuns])
     this.listeners.clear()
     this.storage.close()
   }

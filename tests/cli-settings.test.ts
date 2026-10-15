@@ -9,6 +9,8 @@ import { WorkerStorage } from '../src/host/storage.ts'
 import { WorkerRuntime } from '../src/host/runtime.ts'
 import { DEFAULT_CONFIG, ProcessCleanupUnconfirmedError, type ProcessBackend } from '../src/host/process.ts'
 import { catalogFor, type Catalog } from '../src/host/adapters.ts'
+import { readCliAccountBinding } from '../src/host/cli-account-binding.ts'
+import { SettingsCatalogCache } from '../src/host/settings-catalog-cache.ts'
 
 vi.mock('../src/host/adapters.ts', async (original) => ({
   ...(await original<object>()),
@@ -182,7 +184,8 @@ describe('profile-wide CLI enablement', () => {
     const returned = storage.cliSettings()
     returned.enabled.antigravity = false
     expect(storage.cliSettings().enabled.antigravity).toBe(true)
-    if (process.platform !== 'win32') expect(statSync(join(storage.directory, 'cli-settings.json')).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32')
+      expect(statSync(join(storage.directory, 'cli-settings.json')).mode & 0o777).toBe(0o600)
     storage.close()
     const restored = new WorkerStorage(storage.directory)
     cleanups.push(() => restored.close())
@@ -222,6 +225,7 @@ describe('profile-wide CLI enablement', () => {
     await expect(start()).rejects.toThrow('已关闭')
     await expect(service.followup('parent', worker.id, 'Next', signal)).rejects.toThrow('已关闭')
     await expect(service.catalogForCli('parent', 'antigravity', signal)).rejects.toThrow('已关闭')
+    await expect(service.catalogForWorker('parent', worker.id, signal)).rejects.toThrow('已关闭')
     await expect(service.catalog('parent', signal)).rejects.toThrow('已关闭')
     await expect(service.configure('parent', JSON.stringify(preference), signal)).rejects.toThrow('已关闭')
     await expect(
@@ -403,6 +407,105 @@ describe('account-supported model selection', () => {
     await expect(service.followup('parent', worker.id, '【模拟】继续', signal)).rejects.toThrow('不可用')
     expect(storage.preference(project, 'antigravity')).toEqual(worker.preference)
     expect(backend.spawn).not.toHaveBeenCalled()
+  })
+})
+
+describe('saved Worker model directory', () => {
+  it('reuses a matching persisted directory across Host cache restart without native lookups', async () => {
+    const f = fixture()
+    const first = JSON.parse(await f.service.catalogForWorker('parent', f.worker.id, f.signal))
+    expect(first).toEqual(catalog)
+    expect(catalogFor).toHaveBeenCalledOnce()
+    ;(f.service as any).settingsCatalogs = new SettingsCatalogCache(f.storage.directory)
+    vi.mocked(catalogFor).mockClear()
+    vi.mocked(readCliAccountBinding).mockClear()
+    const cached = await f.service.catalogForWorker('parent', f.worker.id, f.signal)
+    expect(JSON.parse(cached)).toEqual(catalog)
+    expect(cached).not.toContain('synthetic-settings-account')
+    expect(catalogFor).not.toHaveBeenCalled()
+    expect(readCliAccountBinding).not.toHaveBeenCalled()
+    expect(f.backend.spawn).not.toHaveBeenCalled()
+  })
+
+  it('saves cached model and effort locally, preserves history, and rejects unavailable choices at send time', async () => {
+    const f = fixture()
+    const selectable: Catalog = {
+      ...catalog,
+      models: [
+        ...catalog.models,
+        {
+          id: 'synthetic-next',
+          label: 'Synthetic next',
+          efforts: ['low', 'high'],
+          variants: { high: 'synthetic-next-high' },
+        },
+      ],
+    }
+    vi.mocked(catalogFor).mockResolvedValueOnce(selectable)
+    await f.service.catalogForWorker('parent', f.worker.id, f.signal)
+    vi.mocked(catalogFor).mockClear()
+    vi.mocked(readCliAccountBinding).mockClear()
+    const originalHistory = f.storage.history(f.worker.id)
+    const selected = { cli: 'antigravity', model: 'synthetic-next', effort: 'high' }
+    const updated = JSON.parse(
+      await f.service.configureWorker('parent', f.worker.id, JSON.stringify(selected), f.signal),
+    )
+    expect(updated.preference.model).toBe('synthetic-next-high')
+    expect(updated.conversationId).toBe(f.worker.conversationId)
+    expect(f.storage.history(f.worker.id)).toEqual(originalHistory)
+    expect(f.storage.preference(f.project, 'antigravity')).toBeUndefined()
+    expect(catalogFor).not.toHaveBeenCalled()
+    expect(readCliAccountBinding).not.toHaveBeenCalled()
+    expect(f.backend.spawn).not.toHaveBeenCalled()
+    await expect(
+      f.service.followup('parent', f.worker.id, 'Synthetic unsent question', f.signal),
+    ).rejects.toThrow('不可用')
+    expect(catalogFor).toHaveBeenCalledOnce()
+    expect(readCliAccountBinding).toHaveBeenCalled()
+    expect(f.jobs.start).not.toHaveBeenCalled()
+    expect(f.storage.history(f.worker.id)).toEqual(originalHistory)
+  })
+
+  it('refuses missing directories, invalid combinations, changed account and foreign Worker ownership', async () => {
+    const f = fixture()
+    await expect(
+      f.service.configureWorker('parent', f.worker.id, JSON.stringify(preference), f.signal),
+    ).rejects.toThrow('模型目录已失效')
+    expect(catalogFor).not.toHaveBeenCalled()
+    expect(readCliAccountBinding).not.toHaveBeenCalled()
+    await f.service.catalogForWorker('parent', f.worker.id, f.signal)
+    await expect(
+      f.service.configureWorker(
+        'parent',
+        f.worker.id,
+        JSON.stringify({ ...preference, effort: 'high' }),
+        f.signal,
+      ),
+    ).rejects.toThrow('不可用')
+    ;(f.service as any).settingsCatalogs.invalidate('antigravity')
+    vi.mocked(catalogFor).mockClear()
+    vi.mocked(readCliAccountBinding).mockResolvedValueOnce('synthetic-other-account')
+    await expect(f.service.catalogForWorker('parent', f.worker.id, f.signal)).rejects.toThrow('账号已变更')
+    expect(catalogFor).not.toHaveBeenCalled()
+    ;(f.service as any).parent.mockResolvedValueOnce({ id: 'other-parent' })
+    vi.mocked(readCliAccountBinding).mockClear()
+    await expect(f.service.catalogForWorker('parent', f.worker.id, f.signal)).rejects.toThrow()
+    expect(readCliAccountBinding).not.toHaveBeenCalled()
+    expect(f.runtime.get('parent', f.worker.id).preference).toEqual(preference)
+  })
+
+  it('saves the first dispatch directory before its Worker opens the menu', async () => {
+    const f = fixture()
+    f.ask
+      .mockResolvedValueOnce({ answers: [{ id: 'cliworker_model', selected: ['Synthetic fixture'] }] })
+      .mockResolvedValueOnce({ answers: [{ id: 'cliworker_role', selected: ['不使用角色预设'] }] })
+    const agent = await (f.service as any).parent('parent')
+    await (f.service as any).chooseDispatch(agent, f.signal, 'antigravity')
+    vi.mocked(catalogFor).mockClear()
+    vi.mocked(readCliAccountBinding).mockClear()
+    expect(JSON.parse(await f.service.catalogForWorker('parent', f.worker.id, f.signal))).toEqual(catalog)
+    expect(catalogFor).not.toHaveBeenCalled()
+    expect(readCliAccountBinding).not.toHaveBeenCalled()
   })
 })
 

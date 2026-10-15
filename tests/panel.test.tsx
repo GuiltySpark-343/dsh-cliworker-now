@@ -133,7 +133,12 @@ const deferred = () => {
   })
   return { promise, resolve, reject }
 }
-async function setup(openFirst = true, openNativeSettings?: () => void, snapshotWorkers = workers) {
+async function setup(
+  openFirst = true,
+  openNativeSettings?: () => void,
+  snapshotWorkers = workers,
+  cliworkerOverrides = {},
+) {
   clipboard.mockReset().mockResolvedValue(true)
   const streams: Stream[] = []
   const history = vi.fn()
@@ -147,6 +152,13 @@ async function setup(openFirst = true, openNativeSettings?: () => void, snapshot
     cliworker: {
       followup,
       history,
+      catalogForWorker: vi.fn(async (_parent, id) => ({
+        ok: true,
+        value: JSON.stringify({
+          cli: snapshotWorkers.find((worker) => worker.id === id)?.preference.cli ?? 'antigravity',
+          models: [{ id: 'fixture', label: 'Synthetic fixture', efforts: ['low'] }],
+        }),
+      })),
       restartWorker: vi
         .fn()
         .mockResolvedValue({ ok: true, value: JSON.stringify({ workerId: 'new-worker-fixture' }) }),
@@ -168,6 +180,7 @@ async function setup(openFirst = true, openNativeSettings?: () => void, snapshot
           actions: [],
         }),
       })),
+      ...cliworkerOverrides,
     },
   } as unknown as API
   const feed = { scrollTop: 0, scrollHeight: 1400, clientHeight: 300 }
@@ -311,6 +324,117 @@ it('shows and searches worker names alongside model metadata and the conversatio
   ])
   await t.click('修改智能体名称')
   expect(t.r.root.findByProps({ 'aria-label': '新的智能体名称' }).props.value).toBe('因果审稿人')
+})
+it('queues a running followup without interrupting and keeps newer typing while admission is pending', async () => {
+  const t = await setup(),
+    done = deferred()
+  const queueFollowup = vi.fn().mockReturnValue(done.promise)
+  const stop = vi.fn()
+  Object.assign(t.api.cliworker, { queueFollowup, stop })
+  await t.push('a', 2, { status: 'running' })
+  expect(t.input().props.disabled).toBe(false)
+  const composerActions = () =>
+    t.r.root.findAllByType('button').filter((button) => button.props.className === 'cwn-send')
+  expect(composerActions()).toHaveLength(1)
+  expect(composerActions()[0]!.props['aria-label']).toBe('停止')
+  await t.edit('next step')
+  expect(composerActions()).toHaveLength(1)
+  expect(composerActions()[0]!.props['aria-label']).toBe('加入待发送消息')
+  await t.submit()
+  await t.submit()
+  expect(queueFollowup).toHaveBeenCalledOnce()
+  expect(queueFollowup.mock.calls[0]!.slice(0, 4)).toEqual(['parent', 'a', 'next step', 'run-a'])
+  expect(queueFollowup.mock.calls[0]![4]).toEqual(expect.any(String))
+  expect(t.input().props.disabled).toBe(false)
+  await t.edit('another instruction')
+  await act(async () => done.resolve({ ok: true, value: '{}' }))
+  expect(t.input().props.value).toBe('another instruction')
+  expect(t.followup).not.toHaveBeenCalled()
+  expect(stop).not.toHaveBeenCalled()
+  await t.edit('')
+  expect(composerActions()).toHaveLength(1)
+  expect(composerActions()[0]!.props['aria-label']).toBe('停止')
+})
+it('retains a rejected queued draft and reuses its request identity on retry', async () => {
+  const t = await setup()
+  const queueFollowup = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('模拟连接中断'))
+    .mockResolvedValue({ ok: true, value: '{}' })
+  Object.assign(t.api.cliworker, { queueFollowup })
+  await t.push('a', 2, { status: 'queued', conversationId: undefined })
+  await t.edit('send after the first turn')
+  await t.submit()
+  expect(t.input().props.value).toBe('send after the first turn')
+  expect(t.text()).toContain('模拟连接中断')
+  await t.submit()
+  expect(queueFollowup.mock.calls[1]).toEqual(queueFollowup.mock.calls[0])
+  expect(t.input().props.value).toBe('')
+})
+it('shows host queued messages with cancel and explicit resume after failure, without automatic client dispatch', async () => {
+  const t = await setup()
+  const cancelQueuedFollowup = vi.fn().mockResolvedValue({ ok: true, value: undefined })
+  const retryQueuedFollowups = vi.fn().mockResolvedValue({ ok: true, value: undefined })
+  const queueFollowup = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
+  Object.assign(t.api.cliworker, { cancelQueuedFollowup, retryQueuedFollowups, queueFollowup })
+  const queuedFollowups = [
+    {
+      id: 'pending-a',
+      prompt: 'saved pending instruction',
+      createdAt: '',
+      state: 'paused' as const,
+      pauseReason: '前轮失败，等待继续发送',
+    },
+  ]
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'failed' }), queuedFollowups }),
+  )
+  expect(t.text()).toContain('saved pending instruction')
+  expect(t.text()).toContain('前轮失败，等待继续发送')
+  expect(retryQueuedFollowups).not.toHaveBeenCalled()
+  await t.edit('append after the paused message')
+  await t.submit()
+  expect(queueFollowup.mock.calls[0]!.slice(0, 3)).toEqual(['parent', 'a', 'append after the paused message'])
+  expect(t.followup).not.toHaveBeenCalled()
+  await t.click('继续发送')
+  expect(retryQueuedFollowups).toHaveBeenCalledWith('parent', 'a', 'run-a')
+  await t.click('取消待发送消息 1')
+  expect(cancelQueuedFollowup).toHaveBeenCalledWith('parent', 'a', 'pending-a')
+})
+it('does not submit queued guidance while stopping or disconnected', async () => {
+  const t = await setup()
+  const queueFollowup = vi.fn()
+  Object.assign(t.api.cliworker, { queueFollowup })
+  await t.edit('keep this draft')
+  await t.push('a', 2, { status: 'stopping' })
+  expect(t.input().props.disabled).toBe(true)
+  await t.submit()
+  await t.push('a', 3, { status: 'running' })
+  await act(async () => t.streams.at(-1)!.fail())
+  await t.submit()
+  expect(queueFollowup).not.toHaveBeenCalled()
+  expect(t.input().props.value).toBe('keep this draft')
+})
+it('allows cancelling queued metadata preparation but uses stop after runtime admission', async () => {
+  const t = await setup()
+  const cancelQueuedFollowup = vi.fn().mockResolvedValue({ ok: true, value: undefined })
+  Object.assign(t.api.cliworker, { cancelQueuedFollowup })
+  const queuedFollowups = [
+    { id: 'preparing', prompt: 'pending preparation', createdAt: '', state: 'sending' as const },
+  ]
+  await act(async () => t.streams.at(-1)!.push({ ...t.snapshot('a', 2), queuedFollowups }))
+  const cancel = () =>
+    t.r.root.findAllByType('button').find((button) => button.props['aria-label'] === '取消待发送消息 1')!
+  expect(cancel().props.disabled).toBe(false)
+  await t.click('取消待发送消息 1')
+  expect(cancelQueuedFollowup).toHaveBeenCalledWith('parent', 'a', 'preparing')
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 3, { status: 'queued' }), queuedFollowups }),
+  )
+  expect(cancel().props.disabled).toBe(true)
+  expect(
+    t.r.root.findAllByType('button').find((button) => button.props['aria-label'] === '停止')!.props.disabled,
+  ).toBe(false)
 })
 it('late submission success clears only its originating draft', async () => {
   const t = await setup(),
@@ -488,7 +612,9 @@ it('preserves the overview filters and each draft across back navigation', async
 })
 it('shows uncertain AGY results as attention warnings, preserves replies and never retries automatically', async () => {
   const uncertain: Worker = {
-    ...workers[0]!, status: 'uncertain', lastResult: 'AGY_READY',
+    ...workers[0]!,
+    status: 'uncertain',
+    lastResult: 'AGY_READY',
     error: '本轮已返回，但 CLI 汇总状态异常；结果待核实，请勿自动重试。',
   }
   const t = await setup(false, undefined, [uncertain, workers[1]!])
@@ -498,10 +624,20 @@ it('shows uncertain AGY results as attention warnings, preserves replies and nev
   expect(t.r.root.findAllByProps({ 'data-open-worker-id': 'a' })).toHaveLength(1)
   expect(t.text()).toContain('结果待核实')
   await t.select('a')
-  await act(async () => t.streams.at(-1)!.push({
-    ...t.snapshot('a'),
-    timeline: [{ id: 'run-a:assistant:45', kind: 'assistant', text: 'AGY_READY', state: 'DONE', time: '2026-10-15T00:00:00Z' }],
-  }))
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a'),
+      timeline: [
+        {
+          id: 'run-a:assistant:45',
+          kind: 'assistant',
+          text: 'AGY_READY',
+          state: 'DONE',
+          time: '2026-10-15T00:00:00Z',
+        },
+      ],
+    }),
+  )
   expect(t.r.root.findByProps({ className: 'cwn-notice cwn-warning' }).children).toContain(uncertain.error)
   expect(t.r.root.findAllByProps({ className: 'cwn-error' })).toHaveLength(0)
   expect(t.text()).toContain('AGY_READY')
@@ -829,18 +965,17 @@ it('keeps metadata out of child header and stops through the integrated composer
   expect(header.findAllByProps({ title: '派遣时选择的模型' })).toHaveLength(0)
   expect(header.findAllByProps({ className: 'cwn-back' })).not.toHaveLength(0)
   expect(t.text()).toContain('fixture')
-  expect(t.input().props.disabled).toBe(true)
+  expect(t.input().props.disabled).toBe(false)
   await t.click('停止')
   expect(stop).toHaveBeenCalledWith('parent', 'a')
   expect(t.followup).not.toHaveBeenCalled()
 })
 
 it('model menu updates an idle worker without dispatching or changing project defaults', async () => {
-  const t = await setup()
   const configureWorker = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
   const configure = vi.fn()
-  Object.assign(t.api.cliworker, {
-    catalogForCli: vi.fn().mockResolvedValue({
+  const t = await setup(true, undefined, workers, {
+    catalogForWorker: vi.fn().mockResolvedValue({
       ok: true,
       value: JSON.stringify({ cli: 'antigravity', models: [{ id: 'next-model', efforts: ['low'] }] }),
     }),
@@ -886,11 +1021,10 @@ it('worker model choices deduplicate with free priority while keeping the select
   const history = [
     { ...workers[0]!, preference: { cli: 'pi' as const, model: 'paid/GLM-5.3', effort: 'high' as const } },
   ]
-  const t = await setup(true, undefined, history)
   const configureWorker = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
   const configure = vi.fn()
-  Object.assign(t.api.cliworker, {
-    catalogForCli: vi.fn().mockResolvedValue({
+  const t = await setup(true, undefined, history, {
+    catalogForWorker: vi.fn().mockResolvedValue({
       ok: true,
       value: JSON.stringify({
         cli: 'pi',
@@ -944,9 +1078,8 @@ it('worker model choices deduplicate with free priority while keeping the select
 })
 
 it('model catalog failure is recoverable and never appears as a raw transport option', async () => {
-  const t = await setup()
-  Object.assign(t.api.cliworker, {
-    catalogForCli: vi.fn().mockRejectedValue(new Error('transport failure: HTTP 404')),
+  const t = await setup(true, undefined, workers, {
+    catalogForWorker: vi.fn().mockRejectedValue(new Error('transport failure: HTTP 404')),
   })
   await t.click('模型与强度')
   expect(t.text()).toContain('插件服务尚未更新')
@@ -954,81 +1087,103 @@ it('model catalog failure is recoverable and never appears as a raw transport op
   expect(t.text()).not.toContain('transport failure')
 })
 
-it('worker model menu clears old options on reopen and rejects a different CLI until a fresh retry succeeds', async () => {
-  const t = await setup()
-  const read = deferred()
-  const result = (cli: string, model: string) => ({
+it('worker model menu preloads once and reuses its choices after reopening and changing selection', async () => {
+  const catalogForWorker = vi.fn().mockResolvedValue({
     ok: true,
     value: JSON.stringify({
-      cli,
-      models: [{ id: model, efforts: ['low'] }],
+      cli: 'antigravity',
+      models: [{ id: 'saved-model', label: 'Saved model', efforts: ['low', 'high'] }],
     }),
   })
-  const catalogForCli = vi
-    .fn()
-    .mockResolvedValueOnce(result('antigravity', 'original-model'))
-    .mockReturnValueOnce(read.promise)
-    .mockResolvedValueOnce(result('antigravity', 'fresh-model'))
   const configureWorker = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
-  Object.assign(t.api.cliworker, { catalogForCli, configureWorker })
+  const t = await setup(true, undefined, workers, { catalogForWorker, configureWorker })
+  expect(catalogForWorker).toHaveBeenCalledExactlyOnceWith('parent', 'a', expect.any(AbortSignal))
   await t.click('模型与强度')
   await t.click('model')
-  expect(t.text()).toContain('original-model')
-  await t.click('模型与强度')
-  await t.click('模型与强度')
-  expect(t.text()).not.toContain('original-model')
-  const menuChoice = () => t.r.root.findAllByType('button').find((b) => b.props['aria-label'] === 'model')!
-  expect(menuChoice().props.disabled).toBe(true)
-  await act(async () => menuChoice().props.onClick())
-  expect(configureWorker).not.toHaveBeenCalled()
-  await act(async () => read.resolve(result('pi', 'wrong-cli-model')))
-  expect(t.text()).toContain('收到不匹配的 CLI 模型目录')
-  expect(t.text()).not.toContain('wrong-cli-model')
-  expect(menuChoice().props.disabled).toBe(true)
-  await t.click('重试')
-  expect(menuChoice().props.disabled).toBe(false)
-  await t.click('model')
-  const freshChoice = t.r.root
+  const choice = t.r.root
     .findAllByType('button')
-    .find((b) => b.findAll((n) => n.type === 'span' && n.props.title === 'fresh-model').length > 0)!
-  await act(async () => freshChoice.props.onClick())
-  expect(configureWorker).toHaveBeenCalledExactlyOnceWith(
+    .find(
+      (button) =>
+        button.findAll((node) => node.type === 'span' && node.props.title === 'Saved model').length > 0,
+    )!
+  await act(async () => choice.props.onClick())
+  expect(configureWorker).toHaveBeenCalledWith(
     'parent',
     'a',
-    JSON.stringify({ cli: 'antigravity', model: 'fresh-model', effort: 'low' }),
+    JSON.stringify({ cli: 'antigravity', model: 'saved-model', effort: 'low' }),
   )
+  await t.click('模型与强度')
+  await t.click('effort')
+  await t.click('high')
+  expect(configureWorker).toHaveBeenLastCalledWith(
+    'parent',
+    'a',
+    JSON.stringify({ cli: 'antigravity', model: 'saved-model', effort: 'high' }),
+  )
+  await t.click('模型与强度')
+  await t.click('model')
+  expect(t.text()).toContain('Saved model')
+  expect(catalogForWorker).toHaveBeenCalledTimes(1)
   expect(t.followup).not.toHaveBeenCalled()
 })
 
-it('worker model menu keeps its previous choices unavailable after a failed refresh or empty result', async () => {
-  const t = await setup()
-  const catalogForCli = vi
+it('worker model preload rejects a different CLI and retries without admitting its choices', async () => {
+  const response = (cli: string, models: unknown[]) => ({ ok: true, value: JSON.stringify({ cli, models }) })
+  const catalogForWorker = vi
     .fn()
-    .mockResolvedValueOnce({
-      ok: true,
-      value: JSON.stringify({ cli: 'antigravity', models: [{ id: 'old-model', efforts: ['low'] }] }),
-    })
+    .mockResolvedValueOnce(response('pi', [{ id: 'wrong-cli-model', efforts: ['low'] }]))
     .mockRejectedValueOnce(new Error('CliAccountBindingError: 模拟：原生目录读取失败'))
-    .mockResolvedValueOnce({
-      ok: true,
-      value: JSON.stringify({ cli: 'antigravity', models: [], notice: '模拟：请完成登录后刷新' }),
-    })
+    .mockResolvedValueOnce(response('antigravity', []))
+    .mockResolvedValueOnce(response('antigravity', [{ id: 'recovered-model', efforts: ['low'] }]))
   const configureWorker = vi.fn()
-  Object.assign(t.api.cliworker, { catalogForCli, configureWorker })
+  const t = await setup(true, undefined, workers, { catalogForWorker, configureWorker })
   await t.click('模型与强度')
-  await t.click('model')
-  expect(t.text()).toContain('old-model')
-  await t.click('模型与强度')
-  await t.click('模型与强度')
-  expect(t.text()).not.toContain('old-model')
+  expect(t.text()).toContain('收到不匹配的 CLI 模型目录')
+  expect(t.text()).not.toContain('wrong-cli-model')
+  const modelButton = () =>
+    t.r.root.findAllByType('button').find((button) => button.props['aria-label'] === 'model')!
+  expect(modelButton().props.disabled).toBe(true)
+  await t.click('重试')
   expect(t.text()).toContain('模拟：原生目录读取失败')
   expect(t.text()).not.toContain('Error:')
   await t.click('重试')
-  expect(t.text()).toContain('模拟：请完成登录后刷新')
-  expect(
-    t.r.root.findAllByType('button').find((b) => b.props['aria-label'] === 'model')!.props.disabled,
-  ).toBe(true)
+  expect(t.text()).toContain('此 CLI 未返回可用模型')
+  expect(modelButton().props.disabled).toBe(true)
+  await t.click('重试')
+  expect(modelButton().props.disabled).toBe(false)
+  await t.click('model')
+  expect(t.text()).toContain('recovered-model')
   expect(configureWorker).not.toHaveBeenCalled()
+  expect(t.followup).not.toHaveBeenCalled()
+})
+
+it('worker menu cancels a slow preload when changing conversations', async () => {
+  const first = deferred()
+  const catalogForWorker = vi
+    .fn()
+    .mockReturnValueOnce(first.promise)
+    .mockResolvedValueOnce({
+      ok: true,
+      value: JSON.stringify({ cli: 'antigravity', models: [{ id: 'worker-b-model', efforts: ['low'] }] }),
+    })
+  const t = await setup(true, undefined, workers, { catalogForWorker })
+  const firstSignal = catalogForWorker.mock.calls[0]![2] as AbortSignal
+  await t.select('b')
+  await t.push('b')
+  expect(firstSignal.aborted).toBe(true)
+  await act(async () =>
+    first.resolve({
+      ok: true,
+      value: JSON.stringify({
+        cli: 'antigravity',
+        models: [{ id: 'stale-worker-a-model', efforts: ['low'] }],
+      }),
+    }),
+  )
+  await t.click('模型与强度')
+  await t.click('model')
+  expect(t.text()).toContain('worker-b-model')
+  expect(t.text()).not.toContain('stale-worker-a-model')
 })
 
 it('closing settings during slow CLI discovery leaves conversation and stop controls available', async () => {

@@ -59,6 +59,37 @@ const article = (result: ReactTestRenderer, id: string) =>
 const reveal = (result: ReactTestRenderer, id: string) =>
   article(result, id)[0]!.findByProps({ className: 'cwn-message-tail' }).props['data-actions-reveal']
 
+it('renders public thinking and plans only inside the process as inert text', async () => {
+  const result = await render([
+    row('r:reasoning:1', 'reasoning', 'Codex 思考摘要', {
+      detail: '<script>模拟不可信内容</script>',
+      state: 'COMPLETED',
+    }),
+    row('r:diagnostic:1', 'diagnostic', 'Grok 工作计划', { detail: '[completed] 模拟检查' }),
+    row('r:assistant:2', 'assistant', '模拟最终回复', { state: 'DONE' }),
+  ])
+  expect(result.root.findAllByType('article')).toHaveLength(1)
+  const process = result.root.findByProps({ className: 'cwn-progress' })
+  expect(JSON.stringify(result.toJSON())).toContain('公开思考、计划与工具记录')
+  expect(process.findAllByType('pre').map((node) => node.children.join(''))).toEqual([
+    '<script>模拟不可信内容</script>',
+    '[completed] 模拟检查',
+  ])
+  expect(result.root.findAllByType('script')).toHaveLength(0)
+  expect(JSON.stringify(result.toJSON())).not.toContain('未返回可展示')
+})
+
+it('explains missing public thinking and hides withdrawn or blank blocks', async () => {
+  const result = await render([
+    row('r:reasoning:1', 'reasoning', 'Pi 公开思考', { detail: '' }),
+    row('r:reasoning:2', 'reasoning', 'Pi 公开思考', { detail: '  ' }),
+    row('r:tool:3', 'tool', '模拟读取', { detail: '实际工具输出' }),
+  ])
+  expect(JSON.stringify(result.toJSON())).toContain('本轮 CLI 未返回可展示的思考摘要')
+  expect(result.root.findAllByProps({ className: 'cwn-tool cwn-reasoning' })).toHaveLength(0)
+  expect(result.root.findAllByType('pre')[0]!.children).toEqual(['实际工具输出'])
+})
+
 it.each(['', ' \n\t '])(
   'moves a DONE empty/whitespace reply into the process without losing statistics: %j',
   async (text) => {

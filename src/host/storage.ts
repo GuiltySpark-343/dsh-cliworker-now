@@ -111,7 +111,7 @@ const eventSchema = z.object({
   seq: z.number().int().positive(),
   runId: z.uuid(),
   time: z.string(),
-  kind: z.enum(['user', 'assistant', 'tool', 'status', 'diagnostic', 'result']),
+  kind: z.enum(['user', 'assistant', 'reasoning', 'tool', 'status', 'diagnostic', 'result']),
   text: z.string(),
   observedModel: z.string().optional(),
   step: z.number().optional(),

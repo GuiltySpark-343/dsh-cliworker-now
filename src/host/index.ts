@@ -43,7 +43,7 @@ import { validatePreference, configuredCliExecutable, resolveCliExecutable } fro
 import { CliExecutablePathStore } from './cli-executable-paths.ts'
 import type { CliExecutablePathStatus } from '../shared/cli-settings.ts'
 import { WindowsCliInstallationError } from './windows-cli-installation.ts'
-import { authorizedCatalog, authorizeSelection } from './authorized-catalog.ts'
+import { ACCOUNT_CHANGED, authorizedCatalog, authorizeSelection } from './authorized-catalog.ts'
 import { WorkerStorage, type DispatchSetup } from './storage.ts'
 import { WorkerRuntime, type Submission } from './runtime.ts'
 import { AccountManager } from './accounts.ts'
@@ -212,6 +212,21 @@ export class CliWorkerService extends TypertRemoteService {
       this.backend,
       this.options,
     )
+    this.runtime.setFollowupLauncher(async (worker, item, admission, signal) => {
+      const agent = await this.parent(worker.parentSessionId)
+      const control = AbortSignal.any([signal, this.disposed.signal])
+      control.throwIfAborted()
+      await this.launch(agent, worker.title, item.prompt, worker.preference, worker.mode, worker.id,
+        undefined, control, undefined, admission)
+    })
+    this.runtime.setQueuedExecutionGuard((worker) => {
+      const agent = this.ctx.agents.get(worker.parentSessionId as Agent['id'])
+      if (!agent) throw new Error('父会话已关闭，请重新打开后继续发送')
+      this.assertExecution(agent)
+      if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目继续')
+      this.runtime.assertCliEnabled(cliOf(worker.preference))
+      if (this.accounts.isBusy(cliOf(worker.preference))) throw new Error('请先关闭账号终端')
+    })
     ctx.effect(
       () => () => {
         this.disposed.abort()
@@ -296,9 +311,12 @@ export class CliWorkerService extends TypertRemoteService {
       signal.throwIfAborted()
       this.assertExecution(agent)
       this.runtime.assertCliEnabled(cli)
+      this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
+      const catalogRevision = this.settingsCatalogs.revision(cli)
       const { catalog, binding } = await this.queryCatalog(cli, this.backend, this.options, project, signal)
       signal.throwIfAborted()
       this.runtime.assertCliEnabled(cli)
+      this.settingsCatalogs.remember(project, { catalog, binding }, catalogRevision)
       const models = catalog.models
       const valid = (setup: DispatchSetup | undefined): setup is DispatchSetup => {
         if (!setup || setup.binding !== binding || cliOf(setup.preference) !== cli) return false
@@ -425,6 +443,7 @@ export class CliWorkerService extends TypertRemoteService {
     identity?: { agentName?: string; role?: RoleSnapshot },
     signal: AbortSignal = this.disposed.signal,
     restartSourceId?: string,
+    queuedAdmission?: { id: string; expectedRunId: string },
   ): Promise<string> {
     this.assertExecution(agent)
     this.runtime.assertCliEnabled(cliOf(preference))
@@ -469,6 +488,7 @@ export class CliWorkerService extends TypertRemoteService {
           workerId,
           identity,
           binding,
+          queuedAdmission,
         )
         submission = submitted
         return {
@@ -1071,6 +1091,42 @@ export class CliWorkerService extends TypertRemoteService {
   async catalogForCli(parentSessionId: string, cli: string, signal: AbortSignal): Promise<string> {
     return this.settingsCatalog(parentSessionId, cli, signal, false)
   }
+  /** @param parentSessionId - Owning parent. @param workerId - Worker whose original account scopes the saved choices. @param signal - Caller lifetime. @returns Saved model choices; only a missing valid directory requires discovery. */
+  @Remote('catalogForWorker')
+  async catalogForWorker(parentSessionId: string, workerId: string, signal: AbortSignal): Promise<string> {
+    try {
+      const agent = await this.parent(parentSessionId)
+      const control = AbortSignal.any([signal, this.disposed.signal])
+      control.throwIfAborted()
+      const worker = this.runtime.get(agent.id, workerId)
+      const cli = cliOf(worker.preference)
+      const expected = this.runtime.storage.accountBinding(workerId)
+      if (!expected) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
+      this.runtime.assertCliEnabled(cli)
+      this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
+      let catalog = this.settingsCatalogs.display(worker.project, cli, expected)
+      if (!catalog) {
+        const result = await this.settingsCatalogs.get({
+          cli,
+          project: worker.project,
+          signal: control,
+          binding: async () => {
+            const current = await readCliAccountBinding(cli, this.backend, this.options, worker.project, control)
+            if (current !== expected) throw new Error(ACCOUNT_CHANGED)
+            return current
+          },
+          discover: () => this.queryCatalog(cli, this.backend, this.options, worker.project, control, expected),
+        })
+        catalog = result.catalog
+      }
+      control.throwIfAborted()
+      this.runtime.assertCliEnabled(cli)
+      return JSON.stringify(catalog)
+    } catch (error) {
+      if (error instanceof ProcessCleanupUnconfirmedError) this.runtime.blockOnCleanup(error)
+      throw failure(error)
+    }
+  }
   /** @param parentSessionId - Parent session identity. @param cli - Selected CLI. @param signal - Caller lifetime. @returns Fresh model catalog and saved project preference. */
   @Remote('refreshCatalogForCli')
   async refreshCatalogForCli(parentSessionId: string, cli: string, signal: AbortSignal): Promise<string> {
@@ -1132,7 +1188,7 @@ export class CliWorkerService extends TypertRemoteService {
       throw failure(error)
     }
   }
-  /** @param parentSessionId - Owning session. @param workerId - Idle worker. @param selection - JSON preference. @param signal - Caller lifetime. @returns Saved worker configuration. */
+  /** @param parentSessionId - Owning session. @param workerId - Idle worker. @param selection - JSON preference from saved choices. @param signal - Caller lifetime. @returns Saved preference; execution performs live authorization. */
   @Remote('configureWorker')
   async configureWorker(
     parentSessionId: string,
@@ -1148,20 +1204,61 @@ export class CliWorkerService extends TypertRemoteService {
       const expected = this.runtime.storage.accountBinding(workerId)
       if (!expected) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
       this.runtime.assertCliEnabled(cliOf(preference))
-      const { catalog } = await this.querySelection(
-        preference,
-        this.backend,
-        this.options,
-        worker.project,
-        signal,
-        expected,
-      )
+      this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
+      const catalog = this.settingsCatalogs.display(worker.project, cliOf(preference), expected)
+      if (!catalog) throw new Error('模型目录已失效，请重试读取或在设置中刷新')
       validatePreference(preference, catalog)
       signal.throwIfAborted()
       this.runtime.assertCliEnabled(cliOf(preference))
       return JSON.stringify(
         this.runtime.configureWorker(agent.id, workerId, resolveModel(preference, catalog.models)),
       )
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param workerId - Worker to continue after this turn. @param prompt - Unsent message. @param expectedRunId - Run observed by the caller. @param requestId - Stable UUID for retries of this message. @param signal - Admission lifetime. @returns Accepted outbox item JSON. */
+  @Remote('queueFollowup')
+  async queueFollowup(
+    parentSessionId: string,
+    workerId: string,
+    prompt: string,
+    expectedRunId: string,
+    requestId: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    try {
+      const agent = await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      this.assertExecution(agent)
+      const worker = this.runtime.get(agent.id, workerId)
+      if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目继续')
+      return JSON.stringify(this.runtime.queueFollowup(agent.id, workerId, prompt, expectedRunId, requestId))
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param workerId - Owning Worker. @param queuedId - Unsent item identity. @param signal - Mutation lifetime. @returns Completion; already admitted messages cannot be cancelled here. */
+  @Remote('cancelQueuedFollowup')
+  async cancelQueuedFollowup(parentSessionId: string, workerId: string, queuedId: string, signal: AbortSignal): Promise<void> {
+    try {
+      const agent = await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      this.runtime.cancelQueuedFollowup(agent.id, workerId, queuedId)
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param workerId - Idle Worker with paused messages. @param expectedRunId - Current run identity. @param signal - Mutation lifetime. @returns Explicit queue reactivation; each turn rechecks native authorization. */
+  @Remote('retryQueuedFollowups')
+  async retryQueuedFollowups(parentSessionId: string, workerId: string, expectedRunId: string, signal: AbortSignal): Promise<void> {
+    try {
+      const agent = await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      this.assertExecution(agent)
+      const worker = this.runtime.get(agent.id, workerId)
+      if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目继续')
+      this.runtime.retryQueuedFollowups(agent.id, workerId, expectedRunId)
     } catch (error) {
       throw failure(error)
     }

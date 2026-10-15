@@ -117,11 +117,20 @@ export class CliProtocol {
           id = String(item.id),
           done = v.type === 'item.completed'
         if (item.type === 'agent_message' && done) this.assistant(id, text(item.text ?? ''))
+        // Codex exec projects only ThreadItem::Reasoning.summary into this
+        // completed text field. Raw/encrypted content is never inspected.
+        else if (item.type === 'reasoning' && done && typeof item.text === 'string' && item.redacted !== true)
+          this.emit({
+            kind: 'reasoning',
+            step: this.step(`reasoning:${id}`),
+            text: 'Codex 思考摘要',
+            detail: item.text,
+            state: 'COMPLETED',
+          })
         else if (
           ['command_execution', 'file_change', 'mcp_tool_call', 'web_search', 'todo_list'].includes(item.type)
         )
           this.tool(id, item.command ?? item.tool ?? item.type, item, done, item.status === 'failed')
-        // Reasoning items are deliberately omitted from the conversation view.
       } else if (v.type === 'turn.completed') this.finish('SUCCESS', this.lastAssistant)
       else if (v.type === 'turn.failed') this.finish('ERROR', this.lastAssistant, text(v.error))
       else if (v.type === 'error') this.emit({ kind: 'diagnostic', text: text(v.message ?? v.error) })
@@ -137,6 +146,14 @@ export class CliProtocol {
       else if (v.type === 'assistant' && object(v.message)) {
         for (const [i, block] of (v.message.content ?? []).entries()) {
           if (block.type === 'text') this.assistant(`${v.message.id}:${i}`, text(block.text))
+          else if (block.type === 'thinking' && typeof block.thinking === 'string' && block.redacted !== true)
+            this.emit({
+              kind: 'reasoning',
+              step: this.step(`reasoning:${v.message.id}:${i}`),
+              text: 'Claude Code 公开思考',
+              detail: block.thinking,
+              state: 'COMPLETED',
+            })
           else if (block.type === 'tool_use') this.tool(block.id, block.name, block.input)
         }
       } else if (v.type === 'user' && object(v.message)) {

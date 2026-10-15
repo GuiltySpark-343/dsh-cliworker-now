@@ -186,17 +186,17 @@ setInterval(()=>{},1000);\n`,
     g.send(g.end)
     expect(() => g.send({ type: 'text', data: 'late' })).toThrow('after Grok end')
   })
-  it('handles split UTF-8 and omits thought events with bounded frames', () => {
+  it('handles split UTF-8 and separates public thoughts from the final answer with bounded frames', () => {
     const f = fixture()
     const bytes = Buffer.from(
-      [{ type: 'thought', data: 'private reasoning' }, { type: 'text', data: '中文' }, f.end]
+      [{ type: 'thought', data: '模拟公开思考' }, { type: 'text', data: '中文' }, f.end]
         .map(JSON.stringify)
         .join('\n'),
     )
     for (const b of bytes) f.parser.feed(Buffer.from([b]))
     f.parser.end()
     expect(f.parser.result?.response).toBe('中文')
-    expect(JSON.stringify(f.events)).not.toContain('private reasoning')
+    expect(f.events.find((event) => event.kind === 'reasoning')).toMatchObject({ detail: '模拟公开思考' })
     expect(() => fixture(20).parser.feed('x'.repeat(21))).toThrow('maxLineBytes')
     expect(() => fixture(20).send({ type: 'text', data: 'x'.repeat(30) })).toThrow('maxLineBytes')
   })

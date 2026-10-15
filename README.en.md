@@ -275,7 +275,7 @@ OMP, Pi, Hermes and OpenCode display their own provider and authentication metho
 
 OMP, Pi and Hermes use the same logout button and open their own native logout menus. If more than one own account directory exists, choose the source first. The operation targets that source and preserves others. API keys in Pi/OMP `.env` or model configuration must be managed in their original configuration when native logout cannot remove them. Hermes's native disabled-source state also governs login, model discovery and execution.
 
-Account discovery and execution use the same source. Saving a model choice, starting a task, dequeuing work and continuing a session recheck the account, model and effort. Switching accounts or logging out blocks stale queued work. After an account switch, create a new task; earlier conversations remain available. Older tasks without an account binding also require a new task. Other CLIs' credentials and Harness API credentials are not imported. The legacy `zaiCredentialRef` setting remains readable but has no effect. Derived authentication snapshots are rebuilt from current own sources; invalid preferences require a new selection.
+Account discovery and execution use the same source. Saving a choice in settings, starting a task, dequeuing work and continuing a session recheck the account, model and effort. Child-conversation changes first save a preference from the matching saved catalog; execution revalidates it. Switching accounts or logging out blocks stale queued work. After an account switch, create a new task; earlier conversations remain available. Older tasks without an account binding also require a new task. Other CLIs' credentials and Harness API credentials are not imported. The legacy `zaiCredentialRef` setting remains readable but has no effect. Derived authentication snapshots are rebuilt from current own sources; invalid preferences require a new selection.
 
 Some account modes have additional boundaries:
 
@@ -313,7 +313,9 @@ flowchart LR
 - Stop a running task from its conversation. Stopping is reported only after managed processes exit.
 - Child conversations match the Harness circular return-to-latest button and historical action-bar fade. Latest-message actions stay visible; older actions appear on hover or keyboard focus.
 - Press Enter to send, Shift+Enter for a newline, or Ctrl/Cmd+Enter to send. IME confirmation does not submit the draft.
-- After a turn finishes, send the next step in the child conversation or tell the main conversation: **“Ask Code Reviewer to continue checking test coverage.”**
+- The composer has one action button: Stop while running with an empty draft, Send when text is present.
+- You can type and submit the next step while a turn is running. Accepted messages wait in a visible queue and continue the same session in order after normal completion, even with the sidebar closed. Cancel individual messages, or explicitly resume the retained queue after a stop, failure, uncertain outcome or Host restart.
+- After a turn finishes, you can also tell the main conversation: **“Ask Code Reviewer to continue checking test coverage.”**
 - Follow-ups by name stay within the current main conversation and reuse the same CLI session. Renaming preserves history and the role.
 - Closing the sidebar does not stop background work; completed results still return to the main conversation.
 
@@ -324,7 +326,11 @@ flowchart LR
 | Agent settings | Add, edit or remove name / summary / instruction presets | Shared in the current Harness profile; existing agents keep their original role snapshot |
 | CLI connections | Enable a CLI, refresh status, manage or switch accounts, open the native account terminal | That CLI; finish its tasks and account terminals before disabling it |
 | Project defaults | Save the default model and reasoning effort | New main conversations in the current project and CLI; confirmed conversations keep their setup |
-| Child-conversation model menu | Change an agent's model or effort after a turn | Next continuation, retaining the same native session |
+| Child-conversation model menu | Quickly choose a model or effort from the saved catalog | Revalidated and applied when sending, retaining the same native session |
+
+Child conversations reuse the catalog saved during first dispatch. Reopening the menu does not query the CLI again; missing matching catalogs require discovery. Cached choices do not authorize execution. Invalid choices fail explicitly at send time without silent fallback. The plugin retains the native session ID on model changes; provider-side cross-model context semantics have not been live-tested in this iteration.
+
+The process area also displays supported CLIs' explicitly public reasoning summaries and plans. See [public process coverage](doc/public-process.md). Hidden reasoning is neither extracted nor replaced with generated content.
 
 Included roles: **commercial reviewer, logic reviewer, style reviewer, prose reviser, plot-beat designer, story-structure planner and lead novelist**. See [default role presets](doc/role-presets.md) for their instructions.
 
@@ -341,7 +347,7 @@ An empty model directory for an unconfigured CLI stays gray. Account reads finis
 ### 7.1 Execution and data
 
 - **Explicit execution:** a missing or failed CLI does not trigger fallback to another CLI. The plugin does not take over independently started CLI processes.
-- **Scheduling:** two concurrent tasks by default, one active turn per native session, and serial write tasks in the same directory. The hierarchy is main conversation → direct child agent. Running-task interjections and recursive dispatch are not supported.
+- **Scheduling:** two concurrent tasks by default, one active turn per native session, and serial write tasks in the same directory. The hierarchy is main conversation → direct child agent. Messages submitted during a running turn wait for normal completion; they do not immediately interrupt it. Recursive dispatch is not supported.
 - **Permissions:** Harness planning mode or read-only host permissions prevent task startup. Once execution is allowed, supported CLIs can receive read-only tasks. Kimi and Hermes noninteractive modes do not support read-only dispatch and are rejected for such tasks. See probe documents for native CLI permission and tool capabilities.
 - **Local records:** plugin records live under `$DSH_HOME/cliworker-now`, normally `~/.dsh/cliworker-now`. On POSIX systems, directories use `0700` and files `0600`. External CLIs still send model requests according to their services and configuration.
 - **Sourced usage:** only CLI-reported or verifiable statistics are shown; unavailable values display `—`. Context usage is distinct from cumulative token usage. Antigravity's estimate source is explained in the details.

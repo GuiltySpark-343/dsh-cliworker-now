@@ -22,6 +22,7 @@ import { createHash } from 'node:crypto'
 import { preparePiOmp, discoverPiOmp, type PiOmpInput, type PiOmpCli } from '../src/host/pi-omp-adapter.ts'
 import { extendedCatalog, extendedLaunch } from '../src/host/extended-adapters.ts'
 import { DEFAULT_CONFIG, ProcessCleanupUnconfirmedError } from '../src/host/process.ts'
+import { foldEvents, type WorkerEvent } from '../src/shared/types.ts'
 
 const exec = promisify(execFile)
 const roots: string[] = []
@@ -161,11 +162,17 @@ if(cmd.type==='get_available_models'){send({id:cmd.id,type:'response',command:cm
 if(cmd.type==='prompt'){
 send({id:cmd.id,type:'response',command:'prompt',success:true});send({type:'message_start',message:{role:'assistant'}});
 send({type:'message_update',assistantMessageEvent:{type:'thinking_delta',delta:'SECRET_REASONING_FIXTURE'}});
+if(scenario==='public-thinking'){
+send({type:'message_update',assistantMessageEvent:{type:'thinking_delta',contentIndex:0,delta:'模拟公开',partial:{content:[{thinkingSignature:'OPAQUE_SIGNATURE'}]}}});
+send({type:'message_update',assistantMessageEvent:{type:'thinking_delta',contentIndex:0,delta:'过程'}});
+send({type:'message_update',assistantMessageEvent:{type:'thinking_end',contentIndex:0,content:'模拟公开过程（完成）'}});
+send({type:'message_update',assistantMessageEvent:{type:'thinking_delta',contentIndex:2,delta:'REDACTED_TEXT',partial:{content:[null,null,{redacted:true,thinkingSignature:'OPAQUE_SIGNATURE'}]}}});
+}
 send({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:resumed?'RESUMED':'HELLO'}});
 if(scenario==='cancel')return;
 if(scenario==='tool-error'){send({type:'tool_execution_start',toolCallId:'t',toolName:'write'});send({type:'tool_execution_end',toolCallId:'t',toolName:'write',isError:true,result:{content:[{type:'text',text:'denied'}]}})}
 if(scenario==='malformed'){process.stdout.write('not-json\\n');return}
-send({type:'message_end',message:{role:'assistant',provider:model.provider,model:model.id,content:[{type:'text',text:resumed?'RESUMED':'HELLO'}],stopReason:'stop'}});
+send({type:'message_end',message:{role:'assistant',provider:model.provider,model:model.id,content:scenario==='public-thinking'?[{type:'thinking',thinking:'模拟公开过程（权威快照）',thinkingSignature:'OPAQUE_SIGNATURE'},{type:'text',text:'HELLO'},{type:'thinking',thinking:'REDACTED_TEXT',redacted:true,thinkingSignature:'OPAQUE_SIGNATURE'},{type:'redactedThinking',data:'ENCRYPTED_DATA'},{type:'thinking',thinking:'模拟仅完成时提供'}]:[{type:'text',text:resumed?'RESUMED':'HELLO'}],stopReason:'stop'}});
 send({type:'agent_end'});if(cli==='pi'&&scenario!=='unsettled')send({type:'agent_settled'});
 if(scenario==='unsettled')setTimeout(()=>process.exit(0),20);
 }});
@@ -240,6 +247,28 @@ async function prepareConfirmed(input: PiOmpInput) {
   )
 }
 describe('Pi/OMP bridge with simulated native RPC processes', () => {
+  it.each(['pi', 'omp'] as const)(
+    '%s publishes visible thinking snapshots without opaque or redacted fields',
+    async (cli) => {
+      const { input } = await fixture(cli, 'public-thinking')
+      const result = await launch(input)
+      expect(result.code).toBe(0)
+      const events = result.frames
+        .filter((frame) => frame.type === 'event')
+        .map((frame, index) => ({
+          ...frame.event,
+          seq: index + 1,
+          runId: 'synthetic',
+          time: '',
+        })) as WorkerEvent[]
+      const thoughts = foldEvents(events).filter((row) => row.kind === 'reasoning' && row.detail)
+      expect(thoughts.map((row) => row.detail)).toEqual(['模拟公开过程（权威快照）', '模拟仅完成时提供'])
+      expect(result.frames.at(-1)).toMatchObject({ status: 'SUCCESS', response: 'HELLO' })
+      expect(result.stdout).not.toMatch(
+        /OPAQUE_SIGNATURE|REDACTED_TEXT|ENCRYPTED_DATA|SECRET_REASONING_FIXTURE/,
+      )
+    },
+  )
   it.each(['1.0.2', '1.0.4'])(
     'Pi %s discovers and executes through the same SDK and native RPC package',
     async (version) => {

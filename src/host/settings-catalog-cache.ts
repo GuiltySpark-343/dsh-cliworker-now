@@ -84,13 +84,13 @@ function wait(pending: Promise<void>, signal: AbortSignal): Promise<void> {
   })
 }
 
-/** A settings display cache, never an execution authorization cache. Persist only
- * sanitized choices and a one-way account binding. Every new Host must discover
- * before admitting its first settings list; disk data only avoids unchanged writes. */
+/** Display choices only, never execution authorization. Settings still discover
+ * once per Host; a Worker may read a saved list matching its original account. */
 export class SettingsCatalogCache {
   private ready = new Map<string, Entry>()
   private pending = new Map<string, Promise<void>>()
   private revisions = new Map<CliId, number>()
+  private failed = new Set<string>()
   private directory: string
   constructor(root: string) {
     this.directory = join(root, 'settings-catalogs')
@@ -99,6 +99,36 @@ export class SettingsCatalogCache {
   invalidate(cli: CliId): void {
     this.revisions.set(cli, (this.revisions.get(cli) ?? 0) + 1)
     for (const [key, entry] of this.ready) if (entry.catalog.cli === cli) this.ready.delete(key)
+  }
+  revision(cli: CliId): number {
+    return this.revisions.get(cli) ?? 0
+  }
+  private key(project: string, cli: CliId): string {
+    return hash(JSON.stringify([process.platform, hostname(), project, cli]))
+  }
+  /** Local display read: no account lookup, CLI process or execution admission. */
+  display(project: string, cli: CliId, binding: string): Catalog | undefined {
+    const key = this.key(project, cli)
+    if (this.pending.has(key) || this.failed.has(key)) return
+    const entry = this.ready.get(key) ?? (this.revision(cli) === 0 ? this.previous(key) : undefined)
+    if (entry?.catalog.cli !== cli || entry.binding !== binding) return
+    return structuredClone(entry.catalog)
+  }
+  /** Save a freshly authorized directory without allowing an invalidated query
+   * to republish its previous source. Used by the initial dispatch selection. */
+  remember(project: string, result: { catalog: Catalog; binding: string }, revision: number): void {
+    const cli = result.catalog.cli
+    if (this.revision(cli) !== revision) throw new Error('模型来源已变化，请刷新重试')
+    const key = this.key(project, cli)
+    const entry = schema.parse({ policy: 1, key, ...result })
+    const serialized = JSON.stringify(entry)
+    if (Buffer.byteLength(serialized) > MAX_BYTES) throw new Error('模型目录过大，请检查 CLI 配置')
+    if (JSON.stringify(this.previous(key)) !== serialized) {
+      privateDirectory(this.directory)
+      atomicJSON(join(this.directory, `${key}.json`), entry)
+    }
+    this.ready.set(key, entry)
+    this.failed.delete(key)
   }
   private previous(key: string): Entry | undefined {
     let fd: number | undefined
@@ -158,7 +188,7 @@ export class SettingsCatalogCache {
     discover: () => Promise<{ catalog: Catalog; binding: string }>
   }): Promise<{ catalog: Catalog; binding: string }> {
     const { cli, signal } = input
-    const key = hash(JSON.stringify([process.platform, hostname(), input.project, cli]))
+    const key = this.key(input.project, cli)
     // Serialize concurrent opens without letting a cancelled caller publish data.
     while (this.pending.has(key)) {
       signal.throwIfAborted()
@@ -174,7 +204,7 @@ export class SettingsCatalogCache {
     )
     try {
       if (input.refresh) this.ready.delete(key)
-      const revision = this.revisions.get(cli) ?? 0
+      const revision = this.revision(cli)
       const binding = await input.binding()
       signal.throwIfAborted()
       const current = this.ready.get(key)
@@ -182,24 +212,13 @@ export class SettingsCatalogCache {
       this.ready.delete(key)
       const result = await input.discover()
       signal.throwIfAborted()
-      if (
-        (this.revisions.get(cli) ?? 0) !== revision ||
-        result.binding !== binding ||
-        result.catalog.cli !== cli
-      )
+      if (this.revision(cli) !== revision || result.binding !== binding || result.catalog.cli !== cli)
         throw new Error('模型来源已变化，请刷新重试')
-      const entry = schema.parse({ policy: 1, key, binding, catalog: result.catalog })
-      const previous = this.previous(key)
-      const serialized = JSON.stringify(entry)
-      if (Buffer.byteLength(serialized) > MAX_BYTES) throw new Error('模型目录过大，请检查 CLI 配置')
-      if (JSON.stringify(previous) !== serialized) {
-        privateDirectory(this.directory)
-        atomicJSON(join(this.directory, `${key}.json`), entry)
-      }
-      this.ready.set(key, entry)
-      return structuredClone({ catalog: entry.catalog, binding })
+      this.remember(input.project, result, revision)
+      return structuredClone(result)
     } catch (error) {
       this.ready.delete(key)
+      this.failed.add(key)
       throw error
     } finally {
       this.pending.delete(key)
