@@ -1308,11 +1308,11 @@ export class CliWorkerService extends TypertRemoteService {
       throw failure(error)
     }
   }
-  /** @param parentSessionId - Owning parent. @param workerId - Worker with pending messages. @param queuedId - Explicit priority message. @param expectedRunId - Observed run. @param signal - Admission lifetime. @returns Priority admission; cleanup and authorization still apply. */
+  /** @param parentSessionId - Owning parent. @param workerId - Worker with pending messages. @param queuedId - Explicit priority message. @param expectedRunId - Observed run. @param signal - Admission lifetime. @returns JSON priority request receipt with queuedId and snapshot revision; not confirmation of native delivery. */
   @Remote('interruptQueuedFollowup')
   async interruptQueuedFollowup(
     parentSessionId: string, workerId: string, queuedId: string, expectedRunId: string, signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<string> {
     try {
       const agent = await this.parent(parentSessionId)
       signal.throwIfAborted()
@@ -1321,6 +1321,7 @@ export class CliWorkerService extends TypertRemoteService {
       if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目继续')
       if (this.accounts.isBusy(cliOf(worker.preference))) throw new Error('请先关闭账号终端')
       await this.runtime.interruptQueuedFollowup(agent.id, workerId, queuedId, expectedRunId, signal)
+      return JSON.stringify({ queuedId, revision: this.runtime.revision })
     } catch (error) {
       throw failure(error)
     }

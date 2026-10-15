@@ -148,6 +148,8 @@ export interface WorkerEvent {
   step?: number
   state?: string
   detail?: string
+  /** Exact persisted outbox item admitted into this run; admission is not native delivery. */
+  queuedFollowupId?: string
 }
 export interface TimelineItem {
   usage?: TokenUsage
@@ -161,6 +163,7 @@ export interface TimelineItem {
   time: string
   state?: string
   detail?: string
+  queuedFollowupId?: string
   /** Run ended without a final tool status; the observed CLI state stays intact. */
   runStatus?: WorkerStatus
   runStartedAt?: string
@@ -286,6 +289,7 @@ export function foldEvents(
         time: event.time,
         state: event.state,
         detail: event.detail,
+        queuedFollowupId: event.queuedFollowupId,
       }
       steps.set(key, row)
       rows.push(row)

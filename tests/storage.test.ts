@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { WorkerStorage } from '../src/host/storage.ts'
-import { CLI_IDS, isUserInterrupted, type Worker } from '../src/shared/types.ts'
+import { CLI_IDS, foldEvents, isUserInterrupted, type Worker } from '../src/shared/types.ts'
 
 // Explicitly synthetic persisted legacy state; no user accounts or logs are read.
 const cleanup: (() => void)[] = []
@@ -129,4 +129,25 @@ it.each([
   expect(restored).toMatchObject({ status, error })
   expect(restored.interruptionReason).toBeUndefined()
   expect(isUserInterrupted(restored)).toBe(false)
+})
+
+it('restores exact outbox admission identity into the timeline after reopening persisted history', () => {
+  const f = fixture(),
+    queuedFollowupId = randomUUID()
+  writeFileSync(
+    f.eventPath,
+    JSON.stringify({
+      seq: 1,
+      runId: f.worker.runId,
+      time: f.worker.updatedAt,
+      kind: 'user',
+      text: 'Synthetic queued message',
+      queuedFollowupId,
+    }) + '\n',
+  )
+  const store = new WorkerStorage(f.dir)
+  cleanup.push(() => store.close())
+  const events = store.history(f.worker.id)
+  expect(events[0]?.queuedFollowupId).toBe(queuedFollowupId)
+  expect(foldEvents(events)[0]).toMatchObject({ kind: 'user', queuedFollowupId })
 })

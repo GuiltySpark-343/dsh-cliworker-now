@@ -1224,3 +1224,15 @@
 - 保留性核对：4669 个基线文件中 4662 未变、7 个预期变化、无丢失；变化为 AGY Worker/事件/待发送记录、原生 AGY session、host.lock，以及两份旧正常停止 Worker 的精确迁移。337 个匹配账号/认证/偏好/配置的基线文件均未变化；原事件文件前缀哈希保持。结束时活动 Worker 0、待发消息 0，Desktop 保留在最新 AGY 结果。
 - 边界：本轮未执行 Windows Desktop、其他 CLI 真实执行、新无ID真实会话（由自动回归覆盖）、全量验收或 GitHub 推送/发布。真实 Desktop 验证只覆盖现有 AGY 选型；模拟主题渲染不冒充真实 CLI 验证。
 - OpenSpec 严格校验通过；归档前后复核主规格与增量一致，保留上述未测边界。历史文档/assets的既有未提交修改保持原样，仅提交本次修复范围。
+
+
+### v0.7.9：插队即时展示、无发送提示与平滑退场（2026-10-15）
+
+- [x] 去除用户消息下“正在发送…”及等待同步文字；卡片插队不占全局等待，立即展示用户消息并退场，保留后续草稿编辑与单按钮。
+- [x] 队列事件精确身份及回执水位对账；覆盖临时暂停、准备失败、同文后续消息、丢失回执、显式停止、关闭侧栏与历史截断，不把本地展示当作原生成功。
+- [x] `pnpm --config.verifyDepsBeforeRun=false exec vitest run tests/panel.test.tsx`：93/93；`... vitest run tests/followup-queue.test.ts tests/core.test.ts`：76/76；`... vitest run tests/storage.test.ts -t 'restores exact outbox admission identity'`：1 通过、8 跳过；`... vitest run tests/followup-queue-presence.test.tsx`：6/6。合计 176 项关联测试通过；未执行全量测试。
+- [x] `pnpm --config.verifyDepsBeforeRun=false typecheck`、`build:preview`、空闲时 `build` 通过。Desktop 插件链接仍指向本仓库；Host 和生成协议与 preview 一致，Client 仅构建来源路径注释不同，归一化后完全一致。
+- [x] 标注模拟的真实组件逐帧验收：中间行高度 72.5→0，最后区域连同间距 114.5→0，透明度同步下降；重复快照不重建剩余 DOM；70ms 内失败恢复保留节点并反向平滑展开；切换 Worker 不串卡片，减少动态效果立即移除，360px 无横向溢出。证据 `.cache/interrupt-feedback-v079/animation/verification.json`；浏览器动效测量不冒充真实 CLI。
+- [x] macOS 已安装 DeepSeek Harness 0.2.0-rc.2：确认无活动 Worker/队列后正常退出并更新构建；使用原已选 Antigravity / gemini-3.8-flash-low / low，真实等待轮→卡片插队。点击后用户消息直接显示，待发送区域退出，未显示发送中提示，继续输入未发送测试草稿并清除；最终显示 SMOOTH_INTERRUPT_OK 一次且无错误。
+- [x] 原生证据核对：等待轮 interrupted / native ERROR interrupted；插队轮 completed / native SUCCESS，用户事件 queuedFollowupId 与被选卡片一致，未调用工具；同一原生会话、历史前缀不变、队列与活动 Worker 均为 0，测试 sleep 无残留；24 个账号/配置相关文件哈希未变。私有证据 `.cache/interrupt-feedback-v079/verification.json`，不入 Git。
+- [x] 同步中英文 README、设计与 OpenSpec；归档前严格校验 16/16、同步主规格 12/12、归档后严格校验 15/15 通过；本轮版本仍为 v0.7.9，不推送或发布 GitHub。未做 Windows Desktop、其他真实 CLI 和全量验收；失败/未知等异常路径使用自动回归，不额外消耗真实账号调用。

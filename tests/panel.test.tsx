@@ -1744,13 +1744,19 @@ it('prioritizes the chosen queued card and allows Stop while priority cleanup is
     t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), queuedFollowups }),
   )
   await t.click('插队待发送消息 2')
-  expect(interruptQueuedFollowup).toHaveBeenCalledExactlyOnceWith('parent', 'a', 'second', 'run-a')
+  expect(interruptQueuedFollowup).toHaveBeenCalledExactlyOnceWith(
+    'parent',
+    'a',
+    'second',
+    'run-a',
+    expect.any(AbortSignal),
+  )
   const stopButton = t.r.root.findAllByType('button').find((button) => button.props['aria-label'] === '停止')!
   expect(stopButton.props.disabled).toBe(false)
   await t.click('停止')
   expect(stop).toHaveBeenCalledExactlyOnceWith('parent', 'a')
   await act(async () => pending.reject(new Error('模拟插队被停止')))
-  expect(t.text()).toContain('模拟插队被停止')
+  expect(t.text()).not.toContain('模拟插队被停止')
   expect(t.text()).toContain('first')
   expect(t.text()).toContain('second')
 })
@@ -1831,7 +1837,7 @@ it('immediately shows a pending user message and clears the composer before slow
   expect(t.input().props.value).toBe('')
   expect(t.input().props.disabled).toBe(false)
   expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
-  expect(t.text()).toContain('正在发送…')
+  expect(t.text()).not.toContain('正在发送…')
   const actions = t.r.root.findAllByType('button').filter((button) => button.props.className === 'cwn-send')
   expect(actions).toHaveLength(1)
   expect(actions[0]!.props['aria-label']).toBe('停止')
@@ -1916,7 +1922,9 @@ it('matches identical optimistic steering messages to distinct actual events one
   host.timeline.push({ id: 'run-a:first', kind: 'user', text: 'same guidance', time: '' })
   await act(async () => t.streams.at(-1)!.push(host))
   expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(2)
-  expect(t.text().match(/正在发送…/g)).toHaveLength(1)
+  expect(
+    t.r.root.findAllByType('article').filter((row) => row.props['data-message-id']?.startsWith('local-')),
+  ).toHaveLength(1)
   await act(async () => first.resolve({ ok: true, value: '{}' }))
   expect(sendRunningMessage).toHaveBeenCalledTimes(2)
   expect(sendRunningMessage.mock.calls[0]![4]).not.toBe(sendRunningMessage.mock.calls[1]![4])
@@ -2072,4 +2080,246 @@ it('clears uncertain feedback when the actual user event arrives without restori
   expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
   expect(t.input().props.value).toBe('')
   expect(t.followup).toHaveBeenCalledOnce()
+})
+
+it('moves an interrupted queue card into the conversation immediately and keeps later input behind exact admission', async () => {
+  const priority = deferred()
+  const interruptQueuedFollowup = vi.fn().mockReturnValue(priority.promise)
+  const sendRunningMessage = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
+  const t = await setup(true, undefined, workers, { interruptQueuedFollowup, sendRunningMessage })
+  const items = ['first', 'second', 'third'].map((id) => ({
+    id,
+    prompt: id,
+    createdAt: '',
+    state: 'pending' as const,
+  }))
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), queuedFollowups: items }),
+  )
+  await t.click('插队待发送消息 2')
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
+  expect(t.r.root.findByProps({ 'data-queue-id': 'second' }).props['data-exiting']).toBe(true)
+  expect(
+    t.r.root.findAllByProps({ className: 'cwn-followup-row' }).map((row) => row.props['data-queue-id']),
+  ).toEqual(['first', 'second', 'third'])
+  expect(t.text()).not.toContain('正在发送…')
+  expect(t.text()).not.toContain('已提交，等待同步')
+  await t.click('插队待发送消息 2')
+  expect(interruptQueuedFollowup).toHaveBeenCalledOnce()
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 3, { status: 'stopping' }),
+      queuedFollowups: items.map((item) => ({
+        ...item,
+        state: 'paused',
+        pauseReason: '任务已停止，请确认后继续发送',
+      })),
+    }),
+  )
+  expect(t.input().props.disabled).toBe(false)
+  expect(t.r.root.findByProps({ 'data-queue-id': 'second' }).props['data-exiting']).toBe(true)
+  await t.edit('second')
+  await t.submit()
+  expect(t.input().props.value).toBe('')
+  expect(sendRunningMessage).not.toHaveBeenCalled()
+  await act(async () =>
+    priority.resolve({ ok: true, value: JSON.stringify({ queuedId: 'second', revision: 4 }) }),
+  )
+  expect(sendRunningMessage).not.toHaveBeenCalled()
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 4, { status: 'interrupted', interruptionReason: 'user' }),
+      queuedFollowups: items.map((item) => ({
+        ...item,
+        state: item.id === 'second' ? 'sending' : 'pending',
+      })),
+    }),
+  )
+  expect(t.r.root.findByProps({ 'data-queue-id': 'second' }).props['data-exiting']).toBe(true)
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 5, { status: 'queued', runId: 'priority-admitted' }),
+      queuedFollowups: items.filter((item) => item.id !== 'second'),
+      timeline: [
+        { id: 'priority-admitted:1', kind: 'user', text: 'second', time: '', queuedFollowupId: 'second' },
+      ],
+    }),
+  )
+  expect(sendRunningMessage.mock.calls[0]!.slice(0, 4)).toEqual([
+    'parent',
+    'a',
+    'second',
+    'priority-admitted',
+  ])
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
+  expect(
+    t.r.root
+      .findAllByProps({ className: 'cwn-followup-content' })
+      .some((row) => row.findByType('p').children.includes('second')),
+  ).toBe(true)
+})
+
+it('restores a promoted card only for a paused snapshot at its receipt watermark or later', async () => {
+  const priority = deferred()
+  const interruptQueuedFollowup = vi.fn().mockReturnValue(priority.promise)
+  const t = await setup(true, undefined, workers, { interruptQueuedFollowup })
+  const item = { id: 'priority', prompt: 'prepare then fail', createdAt: '', state: 'pending' as const }
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), queuedFollowups: [item] }),
+  )
+  await t.click('插队待发送消息 1')
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 3, { status: 'interrupted', interruptionReason: 'user' }),
+      queuedFollowups: [{ ...item, state: 'paused', pauseReason: '任务已停止，请确认后继续发送' }],
+    }),
+  )
+  await act(async () =>
+    priority.resolve({ ok: true, value: JSON.stringify({ queuedId: item.id, revision: 5 }) }),
+  )
+  expect(t.r.root.findByProps({ 'data-queue-id': item.id }).props['data-exiting']).toBe(true)
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 6, { status: 'interrupted', interruptionReason: 'user' }),
+      queuedFollowups: [{ ...item, state: 'paused', pauseReason: '发送已暂停：模拟权限变化' }],
+    }),
+  )
+  expect(t.r.root.findByProps({ 'data-queue-id': item.id }).props['data-exiting']).toBe(false)
+  expect(t.text()).toContain('模拟权限变化')
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(0)
+})
+
+it('retains the card tombstone after exact admission but restores it if pre-spawn authorization later fails', async () => {
+  const interruptQueuedFollowup = vi
+    .fn()
+    .mockResolvedValue({ ok: true, value: JSON.stringify({ queuedId: 'priority', revision: 4 }) })
+  const t = await setup(true, undefined, workers, { interruptQueuedFollowup })
+  const item = { id: 'priority', prompt: 'same text', createdAt: '', state: 'pending' as const }
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), queuedFollowups: [item] }),
+  )
+  await t.click('插队待发送消息 1')
+  const admitted = {
+    ...t.snapshot('a', 5, { status: 'queued', runId: 'new-run' }),
+    queuedFollowups: [{ ...item, state: 'sending' as const }],
+    timeline: [
+      { id: 'new-run:1', kind: 'user' as const, text: item.prompt, time: '', queuedFollowupId: item.id },
+    ],
+  }
+  await act(async () => t.streams.at(-1)!.push(admitted))
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
+  expect(t.r.root.findByProps({ 'data-queue-id': item.id }).props['data-exiting']).toBe(true)
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...admitted,
+      revision: 6,
+      selected: { ...admitted.selected!, status: 'failed' },
+      queuedFollowups: [{ ...item, state: 'paused', pauseReason: '账号已变化' }],
+    }),
+  )
+  expect(t.r.root.findByProps({ 'data-queue-id': item.id }).props['data-exiting']).toBe(false)
+  expect(t.text()).toContain('账号已变化')
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
+})
+
+it('does not resend an uncertain priority request and keeps its persisted operation alive after closing the view', async () => {
+  const priority = deferred()
+  const interruptQueuedFollowup = vi.fn().mockReturnValue(priority.promise)
+  const t = await setup(true, undefined, workers, { interruptQueuedFollowup })
+  const item = { id: 'priority', prompt: 'persisted priority', createdAt: '', state: 'pending' as const }
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), queuedFollowups: [item] }),
+  )
+  await t.click('插队待发送消息 1')
+  const signal = interruptQueuedFollowup.mock.calls[0]![4] as AbortSignal
+  await act(async () => t.r.unmount())
+  expect(signal.aborted).toBe(false)
+  await act(async () =>
+    priority.resolve({ ok: true, value: JSON.stringify({ queuedId: item.id, revision: 4 }) }),
+  )
+  expect(interruptQueuedFollowup).toHaveBeenCalledOnce()
+})
+
+it('keeps Stop available after a lost priority receipt while Host is still stopping', async () => {
+  const interruptQueuedFollowup = vi.fn().mockRejectedValue(new Error('transport failure'))
+  const stop = vi.fn().mockResolvedValue({
+    ok: true,
+    value: JSON.stringify({ ...workers[0], status: 'interrupted', interruptionReason: 'user' }),
+  })
+  const t = await setup(true, undefined, workers, { interruptQueuedFollowup, stop })
+  const item = { id: 'priority', prompt: 'unknown priority', createdAt: '', state: 'pending' as const }
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), queuedFollowups: [item] }),
+  )
+  await t.click('插队待发送消息 1')
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 3, { status: 'stopping' }),
+      queuedFollowups: [{ ...item, state: 'paused' }],
+    }),
+  )
+  const stopButton = t.r.root.findAllByType('button').find((button) => button.props['aria-label'] === '停止')!
+  expect(stopButton.props.disabled).toBe(false)
+  expect(t.text()).toContain('发送结果待确认')
+  expect(t.text()).not.toContain('未发送：发送结果待确认')
+  await t.click('停止')
+  expect(stop).toHaveBeenCalledOnce()
+  expect(interruptQueuedFollowup).toHaveBeenCalledOnce()
+  expect(t.r.root.findByProps({ 'data-queue-id': item.id }).props['data-exiting']).toBe(false)
+})
+
+it('uses an exact admission event as the watermark if a lost receipt is followed by pre-spawn failure', async () => {
+  const interruptQueuedFollowup = vi.fn().mockRejectedValue(new Error('transport failure'))
+  const t = await setup(true, undefined, workers, { interruptQueuedFollowup })
+  const item = { id: 'priority', prompt: 'admitted then rejected', createdAt: '', state: 'pending' as const }
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), queuedFollowups: [item] }),
+  )
+  await t.click('插队待发送消息 1')
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 6, { status: 'failed', runId: 'rejected-run' }),
+      queuedFollowups: [{ ...item, state: 'paused', pauseReason: '发送已暂停：模拟账号变化' }],
+      timeline: [
+        { id: 'rejected-run:1', kind: 'user', text: item.prompt, time: '', queuedFollowupId: item.id },
+      ],
+    }),
+  )
+  expect(t.r.root.findByProps({ 'data-queue-id': item.id }).props['data-exiting']).toBe(false)
+  expect(t.text()).toContain('模拟账号变化')
+  expect(t.text()).not.toContain('发送结果待确认')
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
+})
+
+it('releases a priority admission wait as uncertain when its exact event has fallen outside the live window', async () => {
+  const interruptQueuedFollowup = vi
+    .fn()
+    .mockResolvedValue({ ok: true, value: JSON.stringify({ queuedId: 'priority', revision: 4 }) })
+  const sendRunningMessage = vi.fn()
+  const t = await setup(true, undefined, workers, { interruptQueuedFollowup, sendRunningMessage })
+  const item = { id: 'priority', prompt: 'earlier priority', createdAt: '', state: 'pending' as const }
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), queuedFollowups: [item] }),
+  )
+  await t.click('插队待发送消息 1')
+  await t.edit('later local instruction')
+  await t.submit()
+  expect(sendRunningMessage).not.toHaveBeenCalled()
+  await t.select('b')
+  await t.push('b')
+  await t.select('a')
+  await act(async () =>
+    t.streams
+      .at(-1)!
+      .push({
+        ...t.snapshot('a', 20, { status: 'completed', runId: 'later-run' }),
+        queuedFollowups: [],
+        truncated: true,
+      }),
+  )
+  expect(t.text()).toContain('插队结果待确认')
+  expect(t.input().props.value).toBe('later local instruction')
+  expect(sendRunningMessage).not.toHaveBeenCalled()
+  const stop = t.r.root.findAllByType('button').find((button) => button.props['aria-label'] === '停止')!
+  expect(stop.props.disabled).toBe(false)
 })

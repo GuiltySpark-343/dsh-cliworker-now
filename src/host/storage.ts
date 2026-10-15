@@ -132,6 +132,7 @@ const eventSchema = z.object({
   step: z.number().optional(),
   state: z.string().optional(),
   detail: z.string().optional(),
+  queuedFollowupId: z.uuid().optional(),
 })
 
 export function atomicJSON(path: string, value: unknown): void {

@@ -393,9 +393,19 @@ it('keeps the original queued item when execution-time authorization fails after
   expect(f.items()).toMatchObject([{ id: item.id, prompt: item.prompt, state: 'paused' }])
   expect(f.worker.error).toContain('执行时模型目录已失效')
   expect(f.calls).toHaveLength(1)
+  const failedAdmission = f.runtime
+    .snapshot('parent', f.worker.id)
+    .timeline.filter((row) => row.kind === 'user' && row.queuedFollowupId === item.id)
+  expect(failedAdmission).toHaveLength(1)
+  expect(failedAdmission[0]?.runOutcome).toBe('failed')
   f.runtime.retryQueuedFollowups('parent', f.worker.id, f.worker.runId)
   const resumed = await f.ready(2)
   expect(f.items()).toEqual([])
+  const attempts = f.runtime
+    .snapshot('parent', f.worker.id)
+    .timeline.filter((row) => row.kind === 'user' && row.queuedFollowupId === item.id)
+  expect(attempts).toHaveLength(2)
+  expect(attempts[0]?.id).not.toBe(attempts[1]?.id)
   resumed.finish()
 })
 
@@ -1045,5 +1055,81 @@ it('preserves a queued account admission failure that occurred before the user p
   expect(stopped).toMatchObject({ status: 'failed', interruptionReason: undefined })
   expect(stopped.error).toContain('synthetic account lookup failed')
   expect(await queued.done).toEqual(stopped)
+  expect(f.calls).toHaveLength(1)
+})
+
+it('returns an interrupt revision receipt before metadata completes and associates identical queued text by exact id', async () => {
+  const selectionGate = deferred(),
+    f = fixture({ selectionGate })
+  f.start()
+  await f.ready(1)
+  const older = f.queue('identical queued prompt'),
+    urgent = f.queue('identical queued prompt')
+  const receipt = JSON.parse(
+    await f.service.interruptQueuedFollowup(
+      'parent',
+      f.worker.id,
+      urgent.id,
+      f.worker.runId,
+      new AbortController().signal,
+    ),
+  ) as { queuedId: string; revision: number }
+  const accepted = f.runtime.snapshot('parent', f.worker.id)
+  expect(receipt.queuedId).toBe(urgent.id)
+  expect(receipt.revision).toBeLessThanOrEqual(accepted.revision)
+  expect(accepted.queuedFollowups?.[0]).toMatchObject({ id: urgent.id, state: 'sending' })
+  expect(accepted.timeline.some((row) => row.queuedFollowupId === urgent.id)).toBe(false)
+  expect(f.calls).toHaveLength(1)
+  selectionGate.resolve()
+  const priority = await f.ready(2)
+  const admitted = f.runtime.snapshot('parent', f.worker.id)
+  expect(admitted.timeline.filter((row) => row.kind === 'user' && row.text === urgent.prompt)).toMatchObject([
+    { queuedFollowupId: urgent.id },
+  ])
+  expect(f.storage.history(f.worker.id).filter((event) => event.queuedFollowupId === urgent.id)).toHaveLength(
+    1,
+  )
+  priority.finish()
+  const remaining = await f.ready(3)
+  expect(
+    f.runtime
+      .snapshot('parent', f.worker.id)
+      .timeline.filter((row) => row.kind === 'user' && row.text === urgent.prompt)
+      .map((row) => row.queuedFollowupId),
+  ).toEqual([urgent.id, older.id])
+  remaining.finish()
+})
+
+it('retains the selected queue item with a newer paused snapshot when permission fails after an interrupt receipt', async () => {
+  const selectionGate = deferred(),
+    f = fixture({ selectionGate })
+  f.start()
+  await f.ready(1)
+  const item = f.queue('recover after accepted interrupt')
+  const receipt = JSON.parse(
+    await f.service.interruptQueuedFollowup(
+      'parent',
+      f.worker.id,
+      item.id,
+      f.worker.runId,
+      new AbortController().signal,
+    ),
+  ) as { queuedId: string; revision: number }
+  f.service.assertExecution.mockImplementation(() => {
+    throw new Error('synthetic permission changed')
+  })
+  selectionGate.resolve()
+  await vi.waitFor(() => expect(f.items()[0]?.state).toBe('paused'))
+  const rejected = f.runtime.snapshot('parent', f.worker.id)
+  expect(rejected.revision).toBeGreaterThanOrEqual(receipt.revision)
+  expect(rejected.queuedFollowups).toMatchObject([
+    {
+      id: item.id,
+      state: 'paused',
+      prompt: item.prompt,
+      pauseReason: expect.stringContaining('permission changed'),
+    },
+  ])
+  expect(rejected.timeline.some((row) => row.queuedFollowupId === item.id)).toBe(false)
   expect(f.calls).toHaveLength(1)
 })

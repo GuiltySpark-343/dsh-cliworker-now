@@ -764,7 +764,11 @@ export class WorkerRuntime {
     worker.updatedAt = now
     worker.jobId = undefined
     this.storage.save(worker)
-    this.storage.append(worker, { kind: 'user', text: prompt })
+    this.storage.append(worker, {
+      kind: 'user',
+      text: prompt,
+      ...(queuedAdmission ? { queuedFollowupId: queuedAdmission.id } : {}),
+    })
     this.storage.append(worker, { kind: 'status', text: 'queued', state: 'queued' })
     let settle!: (worker: Worker) => void
     const done = new Promise<Worker>((resolve) => {
