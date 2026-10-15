@@ -57,6 +57,7 @@ function fixture(
     cleanupGate?: ReturnType<typeof deferred>
     cleanupStarted?: () => void
     selectionGate?: ReturnType<typeof deferred>
+    spawnReturnGate?: ReturnType<typeof deferred>
     cli?: 'pi' | 'omp'
     steer?: (message: string, requestId: string, signal?: AbortSignal) => Promise<void>
   } = {},
@@ -114,7 +115,7 @@ function fixture(
       })
       if (options.cli) stdout.write(JSON.stringify({ type: 'session', id: 'synthetic-session' }) + '\n')
       spec.signal?.addEventListener('abort', close, { once: true })
-      return {
+      const handle = {
         stdout,
         stderr,
         done: outcome.promise,
@@ -125,6 +126,9 @@ function fixture(
           return options.cleanup !== false
         },
       } as SubprocessHandle
+      return options.spawnReturnGate && calls.length === 2
+        ? options.spawnReturnGate.promise.then(() => handle)
+        : handle
     },
   }
   const runtime = new WorkerRuntime(storage, backend, DEFAULT_CONFIG)
@@ -624,7 +628,7 @@ it('prioritizes a selected card only after confirmed cleanup and preserves the r
   const sending = f.runtime.interruptQueuedFollowup('parent', f.worker.id, urgent.id, runId)
   await Promise.resolve()
   expect(f.calls).toHaveLength(1)
-  expect(f.items().map((item) => item.prompt)).toEqual(['older', 'urgent', 'later'])
+  expect(f.items().map((item) => item.prompt)).toEqual(['older', 'later'])
   expect(f.worker.status).toBe('stopping')
   cleanupGate.resolve()
   await sending
@@ -661,65 +665,92 @@ it('keeps previously paused messages paused when explicitly prioritizing one car
   expect(f.calls).toHaveLength(2)
 })
 
-it('stores a new interrupt message before stopping and deduplicates a retry during cleanup', async () => {
+it('accepts A/B/C immediately during cleanup, keeps cancelled history and runs only latest', async () => {
+  const cleanupGate = deferred(),
+    f = fixture({ cleanupGate }),
+    client = randomUUID()
+  f.start()
+  await f.ready(1)
+  const a = f.queue('A'),
+    ordinary = f.queue('ordinary'),
+    b = f.queue('B'),
+    c = f.queue('C')
+  const send = (item: typeof a, sequence: number) =>
+    f.runtime.interruptMessage('parent', f.worker.id, item.prompt, item.id, client, sequence)
+  send(a, 1)
+  send(b, 2)
+  send(c, 3)
+  expect(send(c, 3).state).toBe('pending')
+  expect(f.items().map((item) => item.id)).toEqual([ordinary.id])
+  expect(
+    f.runtime.snapshot('parent', f.worker.id).timeline.filter((row) => row.queuedFollowupId),
+  ).toMatchObject([
+    { text: 'A', deliveryState: 'superseded' },
+    { text: 'B', deliveryState: 'superseded' },
+    { text: 'C', deliveryState: 'pending' },
+  ])
+  expect(f.calls).toHaveLength(1)
+  cleanupGate.resolve()
+  const latest = await f.ready(2)
+  expect(latest.spec.argv.at(-1)).toBe('任务：\nC')
+  latest.finish()
+  expect((await f.ready(3)).spec.argv.at(-1)).toBe('任务：\nordinary')
+})
+
+it('deduplicates legacy running interrupt retries and allows replacing during cleanup', async () => {
   const cleanupGate = deferred(),
     f = fixture({ cleanupGate })
   f.storage.setRunningMessageMode(f.worker.project, 'antigravity', 'interrupt')
   f.start()
   await f.ready(1)
-  const requestId = randomUUID(),
+  const id = randomUUID(),
     runId = f.worker.runId
-  const send = () => f.runtime.sendRunningMessage('parent', f.worker.id, 'priority draft', runId, requestId)
-  const first = send(),
-    retry = send()
-  expect(f.items()).toMatchObject([{ id: requestId, prompt: 'priority draft', state: 'paused' }])
-  expect(f.calls).toHaveLength(1)
-  await expect(
-    f.runtime.sendRunningMessage('parent', f.worker.id, 'another interruption', runId, randomUUID()),
-  ).rejects.toThrow('已有消息正在插队')
-  cleanupGate.resolve()
-  await Promise.all([first, retry])
-  await f.ready(2)
+  await f.runtime.sendRunningMessage('parent', f.worker.id, 'old priority', runId, id)
+  await f.runtime.sendRunningMessage('parent', f.worker.id, 'old priority', runId, id)
+  await f.runtime.sendRunningMessage('parent', f.worker.id, 'new priority', runId, randomUUID())
   expect(f.items()).toEqual([])
+  cleanupGate.resolve()
+  expect((await f.ready(2)).spec.argv.at(-1)).toBe('任务：\nnew priority')
   expect(
-    f.storage
-      .history(f.worker.id)
-      .filter((event) => event.kind === 'user' && event.text === 'priority draft'),
-  ).toHaveLength(1)
+    f.runtime.snapshot('parent', f.worker.id).timeline.filter((row) => row.text === 'old priority'),
+  ).toMatchObject([{ deliveryState: 'superseded' }])
 })
 
-it.each(['stop', 'cancel', 'abort'] as const)(
-  'does not restart after %s wins the interrupt cleanup race',
-  async (action) => {
-    const cleanupGate = deferred(),
-      f = fixture({ cleanupGate })
-    f.start()
-    await f.ready(1)
-    const item = f.queue('must not restart'),
-      signal = new AbortController()
-    const sending = f.runtime.interruptQueuedFollowup(
-      'parent',
-      f.worker.id,
-      item.id,
-      f.worker.runId,
-      signal.signal,
-    )
-    const rejected = expect(sending).rejects.toThrow()
-    let stop: Promise<Worker> | undefined
-    if (action === 'stop') stop = f.runtime.stop('parent', f.worker.id)
-    else if (action === 'cancel') f.runtime.cancelQueuedFollowup('parent', f.worker.id, item.id)
-    else signal.abort(new Error('synthetic request disconnected'))
-    cleanupGate.resolve()
-    await rejected
-    await stop
-    expect(f.calls).toHaveLength(1)
-    if (action === 'cancel') expect(f.items()).toEqual([])
-    else expect(f.items()).toMatchObject([{ id: item.id, state: 'paused' }])
-  },
-)
+it('explicit Stop cancels accepted priority but transport abort does not revoke durable intent', async () => {
+  const cleanupGate = deferred(),
+    f = fixture({ cleanupGate }),
+    signal = new AbortController()
+  f.start()
+  await f.ready(1)
+  const id = randomUUID()
+  f.runtime.interruptMessage('parent', f.worker.id, 'durable', id, randomUUID(), 1, signal.signal)
+  signal.abort(new Error('synthetic transport disconnected'))
+  const stopping = f.runtime.stop('parent', f.worker.id)
+  const next = randomUUID()
+  f.runtime.interruptMessage('parent', f.worker.id, 'after explicit stop', next, randomUUID(), 1)
+  cleanupGate.resolve()
+  await stopping
+  expect((await f.ready(2)).spec.argv.at(-1)).toBe('任务：\nafter explicit stop')
+  expect(
+    f.runtime.snapshot('parent', f.worker.id).timeline.find((row) => row.queuedFollowupId === id),
+  ).toMatchObject({ deliveryState: 'cancelled' })
+  expect(f.items()).toEqual([])
+})
+
+it('continues an accepted priority after only its RPC signal aborts', async () => {
+  const cleanupGate = deferred(),
+    f = fixture({ cleanupGate }),
+    signal = new AbortController()
+  f.start()
+  await f.ready(1)
+  f.runtime.interruptMessage('parent', f.worker.id, 'accepted', randomUUID(), randomUUID(), 1, signal.signal)
+  signal.abort()
+  cleanupGate.resolve()
+  expect((await f.ready(2)).spec.argv.at(-1)).toBe('任务：\naccepted')
+})
 
 it.each(['cleanup', 'permission'] as const)(
-  'retains interrupted text when %s prevents restarting',
+  'keeps priority text in conversation when %s fails',
   async (failure) => {
     const cleanupGate = deferred(),
       f = fixture({ cleanupGate, cleanup: failure !== 'cleanup' })
@@ -730,27 +761,29 @@ it.each(['cleanup', 'permission'] as const)(
     f.runtime.setQueuedExecutionGuard(() => {
       if (!allowed) throw new Error('execution permission changed')
     })
-    const sending = f.runtime.interruptQueuedFollowup('parent', f.worker.id, item.id, f.worker.runId)
-    const rejected = expect(sending).rejects.toThrow(failure === 'cleanup' ? '清理' : 'permission')
+    await f.runtime.interruptQueuedFollowup('parent', f.worker.id, item.id, f.worker.runId)
     allowed = false
     cleanupGate.resolve()
-    await rejected
+    await vi.waitFor(() =>
+      expect(
+        f.runtime.snapshot('parent', f.worker.id).timeline.find((row) => row.queuedFollowupId === item.id)
+          ?.deliveryState,
+      ).toBe('failed'),
+    )
+    expect(f.items()).toEqual([])
     expect(f.calls).toHaveLength(1)
-    expect(f.items()).toMatchObject([{ id: item.id, prompt: 'retain priority text', state: 'paused' }])
   },
 )
 
-it('rejects an interrupt without a native session before mutating the queue or stopping', async () => {
+it('starts a fresh native session when the interrupted initial run never received a session id', async () => {
   const f = fixture()
-  f.storage.setRunningMessageMode(f.worker.project, 'antigravity', 'interrupt')
   f.start()
   await f.ready(1)
   f.worker.conversationId = undefined
-  await expect(
-    f.runtime.sendRunningMessage('parent', f.worker.id, 'retain draft', f.worker.runId, randomUUID()),
-  ).rejects.toThrow('会话标识')
-  expect(f.worker.status).toBe('running')
-  expect(f.items()).toEqual([])
+  f.runtime.interruptMessage('parent', f.worker.id, 'fresh after stop', randomUUID(), randomUUID(), 1)
+  const next = await f.ready(2)
+  expect(next.spec.argv).not.toContain('--conversation')
+  expect(next.spec.argv.at(-1)).toBe('任务：\nfresh after stop')
 })
 
 it.each(['send', 'card'] as const)(
@@ -1077,8 +1110,10 @@ it('returns an interrupt revision receipt before metadata completes and associat
   const accepted = f.runtime.snapshot('parent', f.worker.id)
   expect(receipt.queuedId).toBe(urgent.id)
   expect(receipt.revision).toBeLessThanOrEqual(accepted.revision)
-  expect(accepted.queuedFollowups?.[0]).toMatchObject({ id: urgent.id, state: 'sending' })
-  expect(accepted.timeline.some((row) => row.queuedFollowupId === urgent.id)).toBe(false)
+  expect(accepted.queuedFollowups?.map((item) => item.id)).toEqual([older.id])
+  expect(accepted.timeline.find((row) => row.queuedFollowupId === urgent.id)).toMatchObject({
+    deliveryState: 'pending',
+  })
   expect(f.calls).toHaveLength(1)
   selectionGate.resolve()
   const priority = await f.ready(2)
@@ -1086,9 +1121,11 @@ it('returns an interrupt revision receipt before metadata completes and associat
   expect(admitted.timeline.filter((row) => row.kind === 'user' && row.text === urgent.prompt)).toMatchObject([
     { queuedFollowupId: urgent.id },
   ])
-  expect(f.storage.history(f.worker.id).filter((event) => event.queuedFollowupId === urgent.id)).toHaveLength(
-    1,
-  )
+  expect(
+    f.storage
+      .history(f.worker.id)
+      .filter((event) => event.kind === 'user' && event.queuedFollowupId === urgent.id),
+  ).toHaveLength(1)
   priority.finish()
   const remaining = await f.ready(3)
   expect(
@@ -1100,7 +1137,7 @@ it('returns an interrupt revision receipt before metadata completes and associat
   remaining.finish()
 })
 
-it('retains the selected queue item with a newer paused snapshot when permission fails after an interrupt receipt', async () => {
+it('keeps the accepted priority in conversation when permission fails after its receipt', async () => {
   const selectionGate = deferred(),
     f = fixture({ selectionGate })
   f.start()
@@ -1119,17 +1156,248 @@ it('retains the selected queue item with a newer paused snapshot when permission
     throw new Error('synthetic permission changed')
   })
   selectionGate.resolve()
-  await vi.waitFor(() => expect(f.items()[0]?.state).toBe('paused'))
+  await vi.waitFor(() =>
+    expect(
+      f.runtime.snapshot('parent', f.worker.id).timeline.find((row) => row.queuedFollowupId === item.id)
+        ?.deliveryState,
+    ).toBe('failed'),
+  )
   const rejected = f.runtime.snapshot('parent', f.worker.id)
   expect(rejected.revision).toBeGreaterThanOrEqual(receipt.revision)
-  expect(rejected.queuedFollowups).toMatchObject([
-    {
-      id: item.id,
-      state: 'paused',
-      prompt: item.prompt,
-      pauseReason: expect.stringContaining('permission changed'),
-    },
-  ])
-  expect(rejected.timeline.some((row) => row.queuedFollowupId === item.id)).toBe(false)
+  expect(rejected.queuedFollowups).toEqual([])
+  expect(rejected.timeline.find((row) => row.queuedFollowupId === item.id)).toMatchObject({
+    text: item.prompt,
+    deliveryState: 'failed',
+    deliveryError: expect.stringContaining('permission changed'),
+  })
   expect(f.calls).toHaveLength(1)
+})
+
+it('replaces metadata preparation with the latest request after the old cleanup settles', async () => {
+  const f = fixture(),
+    gate = deferred(),
+    client = randomUUID(),
+    a = randomUUID(),
+    b = randomUUID(),
+    c = randomUUID()
+  f.start()
+  await f.ready(1)
+  const ordinary = f.queue('ordinary sibling')
+  f.service.querySelection.mockImplementationOnce(async () => {
+    await gate.promise
+    throw new Error('late old preparation rejection')
+  })
+  f.runtime.interruptMessage('parent', f.worker.id, 'prepare A', a, client, 1)
+  await vi.waitFor(() => expect(f.service.querySelection).toHaveBeenCalledTimes(1))
+  f.runtime.interruptMessage('parent', f.worker.id, 'prepare B', b, client, 2)
+  f.runtime.interruptMessage('parent', f.worker.id, 'prepare C', c, client, 3)
+  expect(f.service.querySelection).toHaveBeenCalledTimes(1)
+  expect(f.calls).toHaveLength(1)
+  gate.resolve()
+  expect((await f.ready(2)).spec.argv.at(-1)).toBe('任务：\nprepare C')
+  expect(f.service.querySelection).toHaveBeenCalledTimes(2)
+  expect(f.items()).toMatchObject([{ id: ordinary.id, state: 'pending' }])
+  expect(
+    f.runtime.snapshot('parent', f.worker.id).timeline.filter((row) => row.queuedFollowupId),
+  ).toMatchObject([
+    { queuedFollowupId: a, deliveryState: 'superseded' },
+    { queuedFollowupId: b, deliveryState: 'superseded' },
+    { queuedFollowupId: c, deliveryState: 'running' },
+  ])
+})
+
+it('supersedes an admitted run before native spawn even when its worker already says running', async () => {
+  const f = fixture(),
+    gate = deferred<string>(),
+    client = randomUUID(),
+    a = randomUUID(),
+    b = randomUUID()
+  f.start()
+  await f.ready(1)
+  const staleRun = f.worker.runId
+  vi.mocked(readCliAccountBinding).mockImplementationOnce(async () => gate.promise)
+  f.runtime.interruptMessage('parent', f.worker.id, 'admitted A', a, client, 1)
+  await vi.waitFor(() => {
+    expect(f.worker.status).toBe('running')
+    expect(f.worker.runId).not.toBe(staleRun)
+    expect(
+      f.runtime.snapshot('parent', f.worker.id).timeline.find((row) => row.queuedFollowupId === a)
+        ?.deliveryState,
+    ).toBe('admitted')
+  })
+  f.runtime.interruptMessage('parent', f.worker.id, 'latest B', b, client, 2)
+  expect(f.calls).toHaveLength(1)
+  gate.resolve('synthetic-account')
+  expect((await f.ready(2)).spec.argv.at(-1)).toBe('任务：\nlatest B')
+  expect(
+    f.runtime.snapshot('parent', f.worker.id).timeline.filter((row) => row.queuedFollowupId === a),
+  ).toMatchObject([{ text: 'admitted A', deliveryState: 'superseded' }])
+})
+
+it('preserves ordinary messages added after an earlier priority has started', async () => {
+  const f = fixture(),
+    client = randomUUID(),
+    a = randomUUID(),
+    b = randomUUID()
+  f.start()
+  await f.ready(1)
+  f.runtime.interruptMessage('parent', f.worker.id, 'running A', a, client, 1)
+  await f.ready(2)
+  const ordinary = f.queue('added while A running')
+  f.runtime.interruptMessage('parent', f.worker.id, 'running B', b, client, 2)
+  const latest = await f.ready(3)
+  expect(
+    f.runtime.snapshot('parent', f.worker.id).timeline.find((row) => row.queuedFollowupId === a),
+  ).toMatchObject({
+    deliveryState: 'cancelled',
+    deliveryError: '已停止',
+  })
+  expect(f.items()).toMatchObject([{ id: ordinary.id, state: 'pending' }])
+  latest.finish()
+  expect((await f.ready(4)).spec.argv.at(-1)).toBe('任务：\nadded while A running')
+})
+
+it('consumes local pending queue identities and prevents a late original queue RPC or old sequence from replacing latest', async () => {
+  const cleanupGate = deferred(),
+    f = fixture({ cleanupGate }),
+    client = randomUUID(),
+    a = randomUUID(),
+    b = randomUUID()
+  f.start()
+  await f.ready(1)
+  const staleRun = f.worker.runId
+  f.runtime.interruptMessage('parent', f.worker.id, 'late B', b, client, 2)
+  expect(f.runtime.interruptMessage('parent', f.worker.id, 'late A', a, client, 1).state).toBe('superseded')
+  f.runtime.queueFollowup('parent', f.worker.id, 'late A', staleRun, a)
+  f.runtime.queueFollowup('parent', f.worker.id, 'late B', staleRun, b)
+  expect(f.items()).toEqual([])
+  expect(() => f.runtime.interruptMessage('parent', f.worker.id, 'changed', b, client, 2)).toThrow('消息不同')
+  cleanupGate.resolve()
+  expect((await f.ready(2)).spec.argv.at(-1)).toBe('任务：\nlate B')
+  // A consumed identity remains recognized after the run changes.
+  f.runtime.queueFollowup('parent', f.worker.id, 'late A', staleRun, a)
+  expect(f.items()).toEqual([])
+  expect(
+    f.runtime.snapshot('parent', f.worker.id).timeline.filter((row) => row.queuedFollowupId),
+  ).toMatchObject([
+    { queuedFollowupId: b, deliveryState: 'running' },
+    { queuedFollowupId: a, deliveryState: 'superseded' },
+  ])
+})
+
+it('restores submission history across the append-before-outbox-consume crash window without resending', async () => {
+  const f = fixture(),
+    id = randomUUID(),
+    client = randomUUID()
+  const item = f.queue('synthetic durable intent', id)
+  // Simulate a process exit after durable append but before consume, without a live task.
+  f.storage.append(f.worker, {
+    kind: 'submission',
+    text: item.prompt,
+    queuedFollowupId: id,
+    deliveryState: 'pending',
+    submissionClientId: client,
+    submissionSequence: 2,
+  })
+  await f.runtime.close()
+  const storage = new WorkerStorage(f.directory)
+  const spawn = vi.fn(() => {
+    throw new Error('restart must not spawn')
+  })
+  const restarted = new WorkerRuntime(storage, { spawn } as unknown as ProcessBackend, DEFAULT_CONFIG)
+  cleanups.push(() => restarted.close())
+  const snapshot = restarted.snapshot('parent', f.worker.id)
+  expect(snapshot.queuedFollowups).toEqual([])
+  expect(snapshot.timeline.find((row) => row.queuedFollowupId === id)).toMatchObject({
+    text: item.prompt,
+    deliveryState: 'cancelled',
+    deliveryError: 'Host 已重启，本条消息未自动重发',
+  })
+  restarted.queueFollowup('parent', f.worker.id, item.prompt, f.worker.runId, id)
+  expect(restarted.snapshot('parent', f.worker.id).queuedFollowups).toEqual([])
+  expect(
+    restarted.interruptMessage('parent', f.worker.id, 'late earlier click', randomUUID(), client, 1).state,
+  ).toBe('superseded')
+  expect(spawn).not.toHaveBeenCalled()
+})
+
+it('waits for a pending native spawn handle and cleanup before replacing that executed priority', async () => {
+  const spawnReturnGate = deferred(),
+    f = fixture({ spawnReturnGate }),
+    client = randomUUID(),
+    a = randomUUID(),
+    b = randomUUID()
+  f.start()
+  await f.ready(1)
+  f.runtime.interruptMessage('parent', f.worker.id, 'spawn attempted A', a, client, 1)
+  await f.ready(2)
+  f.runtime.interruptMessage('parent', f.worker.id, 'latest B', b, client, 2)
+  expect(
+    f.runtime.snapshot('parent', f.worker.id).timeline.find((row) => row.queuedFollowupId === a)
+      ?.deliveryState,
+  ).toBe('admitted')
+  expect(f.calls).toHaveLength(2)
+  spawnReturnGate.resolve()
+  expect((await f.ready(3)).spec.argv.at(-1)).toBe('任务：\nlatest B')
+  expect(
+    f.runtime.snapshot('parent', f.worker.id).timeline.find((row) => row.queuedFollowupId === a),
+  ).toMatchObject({
+    deliveryState: 'cancelled',
+    deliveryError: '已停止',
+  })
+})
+
+it('keeps later priority blocked when superseded metadata cannot confirm cleanup', async () => {
+  const f = fixture(),
+    gate = deferred(),
+    client = randomUUID(),
+    a = randomUUID(),
+    b = randomUUID()
+  f.start()
+  await f.ready(1)
+  f.service.querySelection.mockImplementationOnce(async () => {
+    await gate.promise
+    throw new ProcessCleanupUnconfirmedError()
+  })
+  f.runtime.interruptMessage('parent', f.worker.id, 'old metadata', a, client, 1)
+  await vi.waitFor(() => expect(f.service.querySelection).toHaveBeenCalledTimes(1))
+  f.runtime.interruptMessage('parent', f.worker.id, 'must not spawn', b, client, 2)
+  gate.resolve()
+  await vi.waitFor(() =>
+    expect(
+      f.runtime.snapshot('parent', f.worker.id).timeline.find((row) => row.queuedFollowupId === b)
+        ?.deliveryState,
+    ).toBe('failed'),
+  )
+  expect(f.storage.cleanupBlockState()).not.toBe('none')
+  expect(f.calls).toHaveLength(1)
+  expect(
+    f.runtime.snapshot('parent', f.worker.id).timeline.find((row) => row.queuedFollowupId === a)
+      ?.deliveryState,
+  ).toBe('superseded')
+})
+
+it('promotes an ordinary admitted queue identity before spawn without duplicate conversation bubbles', async () => {
+  const f = fixture(),
+    gate = deferred<string>(),
+    client = randomUUID()
+  f.start()
+  await f.ready(1)
+  const queued = f.queue('ordinary becomes priority')
+  vi.mocked(readCliAccountBinding).mockImplementationOnce(async () => gate.promise)
+  f.calls[0]!.finish()
+  await vi.waitFor(() =>
+    expect(
+      f.storage
+        .history(f.worker.id)
+        .some((event) => event.kind === 'user' && event.queuedFollowupId === queued.id),
+    ).toBe(true),
+  )
+  f.runtime.interruptMessage('parent', f.worker.id, queued.prompt, queued.id, client, 1)
+  gate.resolve('synthetic-account')
+  expect((await f.ready(2)).spec.argv.at(-1)).toBe('任务：\nordinary becomes priority')
+  expect(
+    f.runtime.snapshot('parent', f.worker.id).timeline.filter((row) => row.queuedFollowupId === queued.id),
+  ).toMatchObject([{ kind: 'user', text: queued.prompt, deliveryState: 'running' }])
+  expect(f.items()).toEqual([])
 })

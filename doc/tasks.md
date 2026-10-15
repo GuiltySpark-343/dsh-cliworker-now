@@ -1236,3 +1236,17 @@
 - [x] macOS 已安装 DeepSeek Harness 0.2.0-rc.2：确认无活动 Worker/队列后正常退出并更新构建；使用原已选 Antigravity / gemini-3.8-flash-low / low，真实等待轮→卡片插队。点击后用户消息直接显示，待发送区域退出，未显示发送中提示，继续输入未发送测试草稿并清除；最终显示 SMOOTH_INTERRUPT_OK 一次且无错误。
 - [x] 原生证据核对：等待轮 interrupted / native ERROR interrupted；插队轮 completed / native SUCCESS，用户事件 queuedFollowupId 与被选卡片一致，未调用工具；同一原生会话、历史前缀不变、队列与活动 Worker 均为 0，测试 sleep 无残留；24 个账号/配置相关文件哈希未变。私有证据 `.cache/interrupt-feedback-v079/verification.json`，不入 Git。
 - [x] 同步中英文 README、设计与 OpenSpec；归档前严格校验 16/16、同步主规格 12/12、归档后严格校验 15/15 通过；本轮版本仍为 v0.7.9，不推送或发布 GitHub。未做 Windows Desktop、其他真实 CLI 和全量验收；失败/未知等异常路径使用自动回归，不额外消耗真实账号调用。
+
+
+### v0.7.9 补充：连续插队即时转移与后一次优先（2026-10-15）
+
+- OpenSpec：`replace-pending-interrupts-with-latest`。每次插队立即转气泡并移出卡片；Host 即时持久受理、后台处理停止和准备。连续请求按侧栏来源及点击序号防乱序，尚未发起原生进程的旧请求保留为“已被后续插队取消”，已启动前轮正常停止；最新请求和普通队列均等待实际清理确认。
+- 本地尚未回执或尚未 dispatch 的普通排队可直接转为插队，原 RPC 的晚成功、晚失败及过时快照不再恢复卡片或覆盖新草稿。稳定提交 ID 合并原生 user，覆盖 user 先于 submission 的转移情况。受理后的失败、取消、重启记录均留对话，重启不自动重发。
+- 显式 Stop 只作用于其捕获范围；后点插队先显示，RPC 等该次停止确认。停止回执未知时保留屏障，可再次停止确认；再次停止取消的等待消息不会在屏障释放后发出。输入框与单动作按钮不依赖旧插队 RPC 完成。
+- Host 关联回归：`pnpm --config.verifyDepsBeforeRun=false exec vitest run tests/followup-queue.test.ts tests/storage.test.ts tests/core.test.ts`，3 文件 94 项通过（56/10/28）。覆盖 A/B/C、metadata 晚拒绝、准入后未 spawn、spawn 异步窗口、其他普通消息顺序、请求乱序、迟到 queue、幂等、崩溃恢复与双向去重。
+- Client：`pnpm --config.verifyDepsBeforeRun=false exec vitest run tests/panel.test.tsx`，96 项通过；`tests/conversation-timeline.test.tsx` 12 项通过。停止与原生结果保护：`tests/agy-run-outcome.test.ts tests/runtime-metadata-cleanup.test.ts` 47 项通过。本次合计 249 项关联回归，未执行全套测试。
+- 隔离 `build:preview`、preview 和 root `typecheck`、最终 `build` 均通过；首次 preview 指出默认 UUID 推断类型过窄，显式标注 string 后通过。Desktop 构建前无活动 Worker/队列/账号终端，正常退出并确认主进程退出后更新。Host 和 Remote 声明与 preview 字节一致；Client 仅规范化构建路径 region 注释后相同。版本保持 0.7.9。
+- 实际 Panel 显式模拟验收 3 场景通过：连续 A/B/C 气泡数 1/2/3、取消数 0/1/2，普通 D 保持同一 DOM 节点；本地未 ACK 排队转移后迟到回执不回卡、新草稿不变；重挂载保留 3 气泡/2取消且不新增 RPC。单发送按钮，无横向溢出。使用最终源码、原生控件、Harness 主题及 mock Gateway，真实 CLI 调用 0；证据 `.cache/latest-interrupt-panel/verification.json` 和源码哈希。未重复此前已验收且本次未改动的纯动画用例。
+- macOS 已安装 Desktop 真实 AGY 验收：原 `Gemini 3.8 Flash · Low` 选型，等待轮 `d6a362dd-63e5-4f68-968b-2781470cf10a` 正常停止，原生结果 `ERROR/interrupted`；A 在准备阶段被 B 替换，A 原生 user 事件 0、持久气泡 1 且 superseded；B 原生 user 事件 1、气泡 1，轮 `ebb1df87-de90-4d90-b74e-d0aabb15e2da` 原生 SUCCESS，实际响应 `LATEST_INTERRUPT_OK`。两次点击即时退卡，A 取消文字留在实际对话，B 完成后无待发送卡片或“正在发送”。
+- 原生会话 ID 保持；测试结束活动 Worker 与队列均为 0，等待/任务进程已退出；历史前缀 hash 不变，33 个既有偏好、会话选型和账号绑定文件 hash 不变。实际事件读取并经 `foldEvents` 复核；私有证据 `.cache/latest-interrupt-v079/native-verification.json`。桌面随后正被其他工作流插件安装操作占用，未额外进行桌面重开；重挂载验收只归为上述显式模拟，不冒充真实重启。未做 Windows、其他 CLI 真实模型、全量验收或 GitHub 推送/发布。
+- OpenSpec 严格校验归档前 16/16、同步并归档后 15/15 通过；仅归档本次 `2026-10-15-replace-pending-interrupts-with-latest`，其余既有变更保持。主规格标题、Purpose 和其他需求未改。

@@ -22,7 +22,7 @@ const labels: Record<string, string> = {
   stopping: '正在停止',
 }
 const markdownLabels = { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' }
-const runOf = (item: TimelineItem) => item.id.split(':')[0]
+const runOf = (item: TimelineItem) => item.admittedRunId ?? item.id.split(':')[0]
 function completedEmptyReply(item: TimelineItem, worker?: Worker): boolean {
   return (
     item.kind === 'assistant' &&
@@ -188,7 +188,20 @@ export function ConversationTimeline({
                       <CopyText text={item.text} label="复制消息" iconOnly />
                     )}
                   </div>
-                  {messageFeedback?.[item.id]}
+                  {messageFeedback?.[item.id] ??
+                    (item.kind === 'user' &&
+                    item.deliveryState &&
+                    ['superseded', 'cancelled', 'failed'].includes(item.deliveryState) ? (
+                      <span role="status">
+                        {item.deliveryState === 'superseded'
+                          ? '已被后续插队取消'
+                          : item.deliveryState === 'cancelled'
+                            ? '已停止发送'
+                            : item.deliveryError?.includes('结果待确认')
+                              ? item.deliveryError
+                              : `发送失败：${item.deliveryError || '插队未完成'}`}
+                      </span>
+                    ) : null)}
                 </div>
               </article>
             )}

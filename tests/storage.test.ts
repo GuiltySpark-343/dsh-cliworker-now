@@ -151,3 +151,58 @@ it('restores exact outbox admission identity into the timeline after reopening p
   expect(events[0]?.queuedFollowupId).toBe(queuedFollowupId)
   expect(foldEvents(events)[0]).toMatchObject({ kind: 'user', queuedFollowupId })
 })
+
+it('persists submission states and merges native user identities regardless of append ordering', () => {
+  const f = fixture(),
+    id = randomUUID(),
+    other = randomUUID(),
+    client = randomUUID()
+  const store = new WorkerStorage(f.dir)
+  store.append(f.worker, { kind: 'user', text: 'same text', queuedFollowupId: id })
+  store.append(f.worker, {
+    kind: 'submission',
+    text: 'same text',
+    queuedFollowupId: id,
+    deliveryState: 'pending',
+    submissionClientId: client,
+    submissionSequence: 1,
+  })
+  store.append(f.worker, {
+    kind: 'submission',
+    text: 'same text',
+    queuedFollowupId: id,
+    deliveryState: 'superseded',
+    deliveryError: '已被后续插队取消',
+    submissionClientId: client,
+    submissionSequence: 1,
+  })
+  store.append(f.worker, {
+    kind: 'submission',
+    text: 'same text',
+    queuedFollowupId: other,
+    deliveryState: 'admitted',
+    admittedRunId: f.worker.runId,
+    submissionClientId: client,
+    submissionSequence: 2,
+  })
+  store.append(f.worker, { kind: 'user', text: 'same text', queuedFollowupId: other })
+  store.close()
+  const reopened = new WorkerStorage(f.dir)
+  cleanup.push(() => reopened.close())
+  const rows = foldEvents(reopened.history(f.worker.id)).filter((row) => row.kind === 'user')
+  expect(rows).toHaveLength(2)
+  expect(rows).toMatchObject([
+    {
+      id: `submission:${id}`,
+      queuedFollowupId: id,
+      deliveryState: 'superseded',
+      deliveryError: '已被后续插队取消',
+    },
+    {
+      id: `submission:${other}`,
+      queuedFollowupId: other,
+      deliveryState: 'admitted',
+      admittedRunId: f.worker.runId,
+    },
+  ])
+})

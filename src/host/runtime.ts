@@ -24,6 +24,7 @@ import {
   type CliId,
   type RoleSnapshot,
   type QueuedFollowup,
+  type DeliveryState,
 } from '../shared/types.ts'
 import {
   agentNameSchema,
@@ -60,6 +61,7 @@ interface Task {
   admission: Promise<string>
   admissionFailure?: { error: unknown }
   queuedFollowupId?: string
+  priority?: boolean
   steer?: (message: string, requestId: string, signal?: AbortSignal) => Promise<void>
   steering: Map<string, { prompt: string; done: Promise<void> }>
   steeringController: AbortController
@@ -78,7 +80,22 @@ export interface Submission {
 export interface QueuedAdmission {
   id: string
   expectedRunId: string
+  priority?: boolean
 }
+interface PriorityMessage {
+  id: string
+  prompt: string
+  createdAt: string
+  clientId: string
+  sequence: number
+  state: DeliveryState
+  error?: string
+  runId?: string
+  spawnAttempted?: boolean
+  controller: AbortController
+}
+const deliveryTerminal = (state: DeliveryState) =>
+  ['superseded', 'cancelled', 'failed', 'completed'].includes(state)
 
 export class WorkerRuntime {
   private agyContextReader = new AgyContextReader()
@@ -102,16 +119,11 @@ export class WorkerRuntime {
     signal: AbortSignal,
   ) => Promise<void>
   private queuedExecutionGuard?: (worker: Worker) => void
-  private stopEpochs = new Map<string, number>()
   private preparations = new Map<string, { id: string; controller: AbortController; done: Promise<void> }>()
-  private interruptions = new Map<
-    string,
-    {
-      id: string
-      controller: AbortController
-      done: Promise<QueuedFollowup>
-    }
-  >()
+  private priorityHistory = new Map<string, Map<string, PriorityMessage>>()
+  private latestPriority = new Map<string, PriorityMessage>()
+  private priorityRunners = new Map<string, Promise<void>>()
+  private priorityQueueStates = new Map<string, Map<string, QueuedFollowup>>()
   revision = 0
   constructor(
     readonly storage: WorkerStorage,
@@ -123,6 +135,38 @@ export class WorkerRuntime {
     } catch (error) {
       storage.close()
       throw error
+    }
+    // Submission events are authoritative even if a crash happened before the outbox write.
+    for (const worker of storage.workers.values()) {
+      const messages = new Map<string, PriorityMessage>()
+      for (const event of storage.history(worker.id)) {
+        if (
+          event.kind !== 'submission' ||
+          !event.queuedFollowupId ||
+          !event.deliveryState ||
+          !event.submissionClientId ||
+          event.submissionSequence === undefined
+        )
+          continue
+        const previous = messages.get(event.queuedFollowupId)
+        messages.set(event.queuedFollowupId, {
+          id: event.queuedFollowupId,
+          prompt: event.text,
+          createdAt: previous?.createdAt ?? event.time,
+          clientId: event.submissionClientId,
+          sequence: event.submissionSequence,
+          state: event.deliveryState,
+          error: event.deliveryError,
+          runId: event.admittedRunId,
+          controller: new AbortController(),
+        })
+      }
+      if (messages.size) this.priorityHistory.set(worker.id, messages)
+      for (const message of messages.values()) {
+        this.followups.consume(worker.id, message.prompt, message.id)
+        if (!deliveryTerminal(message.state))
+          this.updatePriority(worker, message, 'cancelled', 'Host 已重启，本条消息未自动重发')
+      }
     }
     const cleanup = storage.cleanupBlockState()
     if (cleanup !== 'none')
@@ -143,9 +187,10 @@ export class WorkerRuntime {
     id: string,
     signal: AbortSignal,
     prepare: (signal: AbortSignal, preparationId: string) => Promise<T>,
+    priorityId?: string,
   ): Promise<T> {
     const worker = this.get(parent, id)
-    this.assertManagedIdle(worker)
+    this.assertManagedIdle(worker, priorityId)
     this.assertCliEnabled(cliOf(worker.preference))
     signal.throwIfAborted()
     let settle!: () => void
@@ -180,6 +225,14 @@ export class WorkerRuntime {
   ): Promise<QueuedFollowup | undefined> {
     const worker = this.get(parent, id)
     this.assertCliEnabled(cliOf(worker.preference))
+    const mode = this.storage.runningMessageSettings(worker.project, cliOf(worker.preference)).mode
+    if (
+      mode === 'interrupt' &&
+      (this.priorityHistory.get(id)?.has(requestId) || !this.followups.receipt(id, prompt, requestId))
+    ) {
+      this.interruptMessage(parent, id, prompt, requestId, requestId, 1, signal)
+      return { id: requestId, prompt, createdAt: new Date().toISOString(), state: 'sending' }
+    }
     if (worker.runId !== expectedRunId) throw new Error('本轮状态已变化，请刷新后重新发送')
     signal?.throwIfAborted()
     const priorSteer = this.tasks.get(id)?.steering.get(requestId)
@@ -190,8 +243,6 @@ export class WorkerRuntime {
     }
     const receipt = this.followups.receipt(id, prompt, requestId)
     if (receipt) {
-      const interruption = this.interruptions.get(id)
-      if (interruption?.id === requestId) return interruption.done
       if (receipt.delivery === 'steer') {
         if (receipt.acknowledged) return
         throw new Error('该引导请求已提交，接收状态尚未确认，请核查本轮记录')
@@ -199,27 +250,8 @@ export class WorkerRuntime {
       if (!receipt.item) throw new Error('这条消息已经处理，请刷新会话')
       return receipt.item
     }
-    const mode = this.storage.runningMessageSettings(worker.project, cliOf(worker.preference)).mode
     if (mode === 'queue') return this.queueFollowup(parent, id, prompt, expectedRunId, requestId)
-    if (mode === 'interrupt') {
-      if (!worker.conversationId) throw new Error('尚未收到 CLI 会话标识，无法插队；请保留消息稍后重试')
-      const existing = this.interruptions.get(id)
-      if (existing && existing.id !== requestId) throw new Error('已有消息正在插队，请稍后再试')
-      // The outbox persists before stopping. A failed cleanup or launch cannot lose the text.
-      const item = existing
-        ? this.followups.add(id, prompt, requestId)
-        : this.addInterruptMessage(worker, prompt, requestId)
-      return this.interruptQueuedFollowup(parent, id, item.id, expectedRunId, signal)
-    }
     await this.steerRunningMessage(worker, prompt, requestId, signal)
-  }
-  private addInterruptMessage(worker: Worker, prompt: string, requestId: string): QueuedFollowup {
-    if (worker.status === 'stopping') throw new Error('本轮正在停止，请保留消息稍后重试')
-    if (!this.storage.accountBinding(worker.id)) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
-    this.queuedExecutionGuard?.(worker)
-    const item = this.followups.add(worker.id, prompt, requestId)
-    this.changed()
-    return item
   }
   private async steerRunningMessage(
     worker: Worker,
@@ -288,60 +320,177 @@ export class WorkerRuntime {
     task.steering.set(requestId, { prompt, done })
     await done
   }
+  /** Accepted intent survives transport cancellation; only an explicit Stop revokes it. */
+  interruptMessage(
+    parent: string,
+    id: string,
+    prompt: string,
+    requestId: string,
+    clientId: string,
+    sequence: number,
+    signal?: AbortSignal,
+  ): { messageId: string; revision: number; state: DeliveryState } {
+    const worker = this.get(parent, id)
+    this.assertCliEnabled(cliOf(worker.preference))
+    signal?.throwIfAborted()
+    z.uuid().parse(requestId)
+    z.uuid().parse(clientId)
+    z.number().int().nonnegative().safe().parse(sequence)
+    if (!prompt.trim() || prompt.length > 100_000) throw new Error('消息须包含 1–100000 个字符')
+    const messages = this.priorityHistory.get(id) ?? new Map<string, PriorityMessage>()
+    const duplicate = messages.get(requestId)
+    if (duplicate) {
+      if (duplicate.prompt !== prompt) throw new Error('重复提交标识对应的消息不同')
+      return { messageId: requestId, revision: this.revision, state: duplicate.state }
+    }
+    if (
+      !this.tasks.has(id) &&
+      !this.storage.accountBinding(id) &&
+      !(!worker.conversationId && isUserInterrupted(worker))
+    )
+      throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
+    this.queuedExecutionGuard?.(worker)
+    const receipt = this.followups.receipt(id, prompt, requestId)
+    if (receipt?.delivery === 'steer' || (receipt && !receipt.item))
+      throw new Error('这条消息已经处理，请刷新会话')
+    const lastSequence = Math.max(
+      -1,
+      ...[...messages.values()].filter((item) => item.clientId === clientId).map((item) => item.sequence),
+    )
+    const message: PriorityMessage = {
+      id: requestId,
+      prompt,
+      clientId,
+      sequence,
+      createdAt: new Date().toISOString(),
+      state: sequence <= lastSequence ? 'superseded' : 'pending',
+      controller: new AbortController(),
+    }
+    this.updatePriority(
+      worker,
+      message,
+      message.state,
+      message.state === 'superseded' ? '已被后续插队取消' : undefined,
+    )
+    messages.set(requestId, message)
+    this.priorityHistory.set(id, messages)
+    try {
+      this.followups.consume(id, prompt, requestId)
+    } catch (error) {
+      this.updatePriority(worker, message, 'failed', `待发送消息状态保存失败：${String(error)}`)
+      this.blocked = message.error
+      throw error
+    }
+    if (message.state === 'pending') {
+      const queueStates = this.priorityQueueStates.get(id) ?? new Map<string, QueuedFollowup>()
+      for (const item of this.followups.list(id))
+        if (!queueStates.has(item.id)) queueStates.set(item.id, item)
+      this.priorityQueueStates.set(id, queueStates)
+      const previous = this.latestPriority.get(id)
+      if (previous && !deliveryTerminal(previous.state)) {
+        if (!previous.spawnAttempted) this.updatePriority(worker, previous, 'superseded', '已被后续插队取消')
+        previous.controller.abort(new UserStoppedError())
+      }
+      this.latestPriority.set(id, message)
+      if (this.priorityRunners.has(id)) {
+        // Stop owns the process/preparation cleanup; newer callers never await an older RPC.
+        void this.stopCurrent(parent, id).catch(() => undefined)
+      } else this.startPriorityRunner(worker)
+    }
+    this.changed()
+    return { messageId: requestId, revision: this.revision, state: message.state }
+  }
+  private updatePriority(
+    worker: Worker,
+    message: PriorityMessage,
+    state: DeliveryState,
+    error?: string,
+  ): void {
+    this.storage.append(worker, {
+      kind: 'submission',
+      text: message.prompt,
+      queuedFollowupId: message.id,
+      deliveryState: state,
+      deliveryError: error,
+      admittedRunId: message.runId,
+      submissionClientId: message.clientId,
+      submissionSequence: message.sequence,
+    })
+    message.state = state
+    message.error = error
+    this.changed()
+  }
+  private startPriorityRunner(worker: Worker): void {
+    const operation = (async () => {
+      while (this.latestPriority.has(worker.id)) {
+        let message = this.latestPriority.get(worker.id)!
+        try {
+          await this.stopCurrent(worker.parentSessionId, worker.id)
+          const latest = this.latestPriority.get(worker.id)
+          if (!latest) break
+          message = latest
+          message.controller.signal.throwIfAborted()
+          this.assertCliEnabled(cliOf(worker.preference))
+          this.queuedExecutionGuard?.(worker)
+          if (!this.followupLauncher) throw new Error('续聊通路尚未准备好')
+          this.followups.restoreStates(worker.id, [
+            ...(this.priorityQueueStates.get(worker.id)?.values() ?? []),
+          ])
+          await this.followupLauncher(
+            structuredClone(worker),
+            {
+              id: message.id,
+              prompt: message.prompt,
+              createdAt: message.createdAt,
+              state: 'sending',
+            },
+            { id: message.id, expectedRunId: worker.runId, priority: true },
+            message.controller.signal,
+          )
+          const task = this.tasks.get(worker.id)
+          if (task?.queuedFollowupId === message.id) await task.done
+        } catch (error) {
+          if (!deliveryTerminal(message.state))
+            this.updatePriority(
+              worker,
+              message,
+              message.controller.signal.aborted && !this.blocked ? 'cancelled' : 'failed',
+              this.blocked ?? (message.controller.signal.aborted ? '已停止发送' : String(error)),
+            )
+          if (this.latestPriority.get(worker.id) === message)
+            this.pauseFollowups(worker.id, message.error ?? '插队未完成，请确认后继续发送')
+        } finally {
+          if (this.latestPriority.get(worker.id) === message) this.latestPriority.delete(worker.id)
+        }
+      }
+    })().finally(() => {
+      this.priorityRunners.delete(worker.id)
+      if (this.latestPriority.has(worker.id) && !this.disposed) this.startPriorityRunner(worker)
+      else {
+        this.priorityQueueStates.delete(worker.id)
+        if (worker.status === 'completed') this.dispatchFollowup(worker)
+      }
+    })
+    this.priorityRunners.set(worker.id, operation)
+    void operation.catch(() => undefined)
+  }
   interruptQueuedFollowup(
     parent: string,
     id: string,
     queuedId: string,
-    expectedRunId: string,
+    _expectedRunId: string,
     signal?: AbortSignal,
   ): Promise<QueuedFollowup> {
     const worker = this.get(parent, id)
-    this.assertCliEnabled(cliOf(worker.preference))
-    if (worker.runId !== expectedRunId) throw new Error('本轮状态已变化，请刷新后重新发送')
-    signal?.throwIfAborted()
-    const existing = this.interruptions.get(id)
-    if (existing) {
-      if (existing.id !== queuedId) throw new Error('已有消息正在插队，请稍后再试')
-      return existing.done
-    }
-    if (worker.status === 'stopping') throw new Error('本轮正在停止，请稍后再试')
-    const freshAfterStop = !worker.conversationId && isUserInterrupted(worker)
-    if (!worker.conversationId && !freshAfterStop) throw new Error('尚未收到 CLI 会话标识，无法插队')
-    if (!this.storage.accountBinding(id) && !freshAfterStop) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
-    if (this.tasks.get(id)?.queuedFollowupId === queuedId) throw new Error('消息已开始执行，请使用停止操作')
-    this.queuedExecutionGuard?.(worker)
-    const previous = this.followups.list(id)
-    if (!previous.some((item) => item.id === queuedId)) throw new Error('消息已发送或已取消，请刷新会话')
-    const epoch = this.stopEpochs.get(id) ?? 0
-    const controller = new AbortController()
-    const control = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
-    const operation = { id: queuedId, controller, done: undefined! as Promise<QueuedFollowup> }
-    this.interruptions.set(id, operation)
-    operation.done = (async () => {
-      await this.stopCurrent(parent, id)
-      control.throwIfAborted()
-      if ((this.stopEpochs.get(id) ?? 0) !== epoch) throw new Error('插队已因停止操作取消，请确认后重试')
-      this.assertManagedIdle(worker)
-      this.assertCliEnabled(cliOf(worker.preference))
-      if (worker.runId !== expectedRunId) throw new Error('本轮状态已变化，请刷新后重试')
-      this.queuedExecutionGuard?.(worker)
-      const item = this.followups.promote(id, queuedId, previous)
-      this.interruptions.delete(id)
-      this.changed()
-      this.dispatchFollowup(worker, true)
-      return item
-    })()
-      .catch((error) => {
-        if (this.followups.list(id).some((entry) => entry.id === queuedId)) {
-          this.pauseFollowups(id, `插队已暂停：${error instanceof Error ? error.message : String(error)}`)
-          this.changed()
-        }
-        throw error
-      })
-      .finally(() => {
-        if (this.interruptions.get(id) === operation) this.interruptions.delete(id)
-      })
-    return operation.done
+    const known = this.priorityHistory.get(id)?.get(queuedId)
+    const item =
+      this.followups.list(id).find((entry) => entry.id === queuedId) ??
+      (known
+        ? { id: known.id, prompt: known.prompt, createdAt: known.createdAt, state: 'sending' as const }
+        : undefined)
+    if (!item) throw new Error('消息已发送或已取消，请刷新会话')
+    this.interruptMessage(parent, worker.id, item.prompt, item.id, item.id, 1, signal)
+    return Promise.resolve({ ...item, state: 'sending' })
   }
   queueFollowup(
     parent: string,
@@ -352,6 +501,11 @@ export class WorkerRuntime {
   ): QueuedFollowup {
     const worker = this.get(parent, id)
     this.assertCliEnabled(cliOf(worker.preference))
+    const priority = this.priorityHistory.get(id)?.get(requestId)
+    if (priority) {
+      if (priority.prompt !== prompt) throw new Error('重复提交标识对应的消息不同')
+      return { id: requestId, prompt, createdAt: priority.createdAt, state: 'sending' }
+    }
     if (!this.tasks.has(id) && !this.storage.accountBinding(id)) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
     if (worker.runId !== expectedRunId) throw new Error('本轮状态已变化，请刷新后重新发送')
     if (
@@ -370,8 +524,6 @@ export class WorkerRuntime {
     if (this.tasks.get(id)?.queuedFollowupId === queuedId)
       throw new Error('消息已进入执行队列，请使用停止操作')
     this.followups.remove(id, queuedId)
-    const interruption = this.interruptions.get(id)
-    if (interruption?.id === queuedId) interruption.controller.abort(new Error('待发送消息已取消'))
     const dispatch = this.followupDispatches.get(id)
     if (dispatch?.id === queuedId) dispatch.controller.abort(new Error('待发送消息已取消'))
     this.changed()
@@ -403,7 +555,8 @@ export class WorkerRuntime {
       !this.followupLauncher ||
       this.followupDispatches.has(worker.id) ||
       this.preparations.has(worker.id) ||
-      this.interruptions.has(worker.id)
+      this.latestPriority.has(worker.id) ||
+      this.priorityRunners.has(worker.id)
     )
       return
     if (
@@ -489,7 +642,8 @@ export class WorkerRuntime {
     if (
       [...this.storage.workers.values()].some(
         (worker) =>
-          (active(worker.status) || this.preparations.has(worker.id)) && cliOf(worker.preference) === cli,
+          (active(worker.status) || this.preparations.has(worker.id) || this.latestPriority.has(worker.id)) &&
+          cliOf(worker.preference) === cli,
       )
     )
       throw new Error('此 CLI 还有运行或排队中的任务，请等待结束后再修改此 CLI 设置或管理账号')
@@ -563,10 +717,15 @@ export class WorkerRuntime {
     this.changed()
   }
   /** Management cannot hide an in-flight task or a process whose cleanup is unresolved. */
-  private assertManagedIdle(worker: Worker): void {
+  private assertManagedIdle(worker: Worker, priorityId?: string): void {
     if (this.disposed) throw new Error('CLI Worker is shutting down')
     if (this.blocked) throw new Error(this.blocked)
-    if (active(worker.status) || this.tasks.has(worker.id) || this.preparations.has(worker.id))
+    if (
+      active(worker.status) ||
+      this.tasks.has(worker.id) ||
+      this.preparations.has(worker.id) ||
+      (this.latestPriority.has(worker.id) && this.latestPriority.get(worker.id)!.id !== priorityId)
+    )
       throw new Error('请等待任务结束并完成进程清理后再管理此任务')
   }
   assertLegacyRestart(parent: string, id: string): Worker {
@@ -677,7 +836,7 @@ export class WorkerRuntime {
     if (this.disposed) throw new Error('CLI Worker is shutting down')
     const worker = this.get(parent, id)
     if (isRetiredCli(cliOf(worker.preference))) throw new Error(RETIRED_HARNESS_NOTICE)
-    if (active(worker.status) || this.preparations.has(id))
+    if (active(worker.status) || this.preparations.has(id) || this.latestPriority.has(id))
       throw new Error('请等待本轮结束后再修改模型与强度')
     if (cliOf(worker.preference) !== cliOf(preference)) throw new Error('已有会话不能切换 CLI')
     this.assertCliEnabled(cliOf(preference))
@@ -723,7 +882,23 @@ export class WorkerRuntime {
       throw new Error('Cannot resume a worker in another workspace')
     if (cliOf(effective) === 'kimi' && (previous?.mode ?? mode) === 'plan')
       throw new Error('Kimi 非交互模式不支持只读派遣')
-    if (queuedAdmission) {
+    if (
+      previous &&
+      this.latestPriority.has(previous.id) &&
+      (!queuedAdmission?.priority || this.latestPriority.get(previous.id)!.id !== queuedAdmission.id)
+    )
+      throw new Error('此会话正在处理插队消息，请稍后再试')
+    if (queuedAdmission?.priority) {
+      const message = previous && this.latestPriority.get(previous.id)
+      if (
+        !message ||
+        message.id !== queuedAdmission.id ||
+        message.controller.signal.aborted ||
+        message.state !== 'pending' ||
+        previous!.runId !== queuedAdmission.expectedRunId
+      )
+        throw new Error('插队消息已取消或已被替换')
+    } else if (queuedAdmission) {
       const dispatch = previous && this.followupDispatches.get(previous.id)
       if (
         !previous ||
@@ -787,6 +962,7 @@ export class WorkerRuntime {
       settle,
       admission,
       queuedFollowupId: queuedAdmission?.id,
+      priority: queuedAdmission?.priority,
       steering: new Map(),
       steeringController: new AbortController(),
     }
@@ -797,6 +973,11 @@ export class WorkerRuntime {
         this.drain()
       }
     })
+    if (task.priority) {
+      const message = this.latestPriority.get(worker.id)!
+      message.runId = worker.runId
+      this.updatePriority(worker, message, 'admitted')
+    }
     this.tasks.set(worker.id, task)
     this.queue.push(task)
     this.changed()
@@ -816,8 +997,14 @@ export class WorkerRuntime {
   }
   stop(parent: string, id: string): Promise<Worker> {
     this.get(parent, id)
-    this.stopEpochs.set(id, (this.stopEpochs.get(id) ?? 0) + 1)
-    this.interruptions.get(id)?.controller.abort(new Error('插队已因停止操作取消，请确认后重试'))
+    this.priorityQueueStates.delete(id)
+    const message = this.latestPriority.get(id)
+    if (message) {
+      message.controller.abort(new UserStoppedError())
+      if (!message.spawnAttempted && !deliveryTerminal(message.state))
+        this.updatePriority(this.get(parent, id), message, 'cancelled', '已停止发送')
+      this.latestPriority.delete(id)
+    }
     return this.stopCurrent(parent, id)
   }
   private stopCurrent(parent: string, id: string): Promise<Worker> {
@@ -899,6 +1086,21 @@ export class WorkerRuntime {
     worker.interruptionReason = interruptionReason
     worker.updatedAt = new Date().toISOString()
     try {
+      if (task.priority) {
+        const message = this.priorityHistory.get(worker.id)?.get(task.queuedFollowupId!)
+        if (message && !deliveryTerminal(message.state))
+          this.updatePriority(
+            worker,
+            message,
+            status === 'completed' ? 'completed' : interruptionReason === 'user' ? 'cancelled' : 'failed',
+            error ??
+              (interruptionReason === 'user'
+                ? message.spawnAttempted
+                  ? '已停止'
+                  : '已停止发送'
+                : undefined),
+          )
+      }
       this.storage.save(worker)
       this.storage.append(worker, {
         kind: 'status',
@@ -1073,6 +1275,13 @@ export class WorkerRuntime {
       controller.signal.throwIfAborted()
       if (task.queuedFollowupId) this.queuedExecutionGuard?.(worker)
       this.storage.bindAccount(worker.id, binding)
+      if (task.priority) {
+        const message = this.latestPriority.get(worker.id)
+        if (!message || message.id !== task.queuedFollowupId || message.controller.signal.aborted)
+          throw new UserStoppedError()
+        // No await separates this ownership check from the native spawn attempt.
+        message.spawnAttempted = true
+      }
       handle = await spawnManagedAgent(this.backend, {
         argv: launch.argv,
         env: 'env' in launch ? launch.env : undefined,
@@ -1081,13 +1290,17 @@ export class WorkerRuntime {
         graceMs: this.config.graceMs,
         signal: controller.signal,
       })
+      if (task.priority) {
+        const message = this.priorityHistory.get(worker.id)!.get(task.queuedFollowupId!)!
+        this.updatePriority(worker, message, 'running')
+      }
       // Observe spawn rejection immediately even while draining protocol streams.
       void handle.done.catch(() => undefined)
       controller.signal.throwIfAborted()
       if ('steer' in launch && typeof launch.steer === 'function') task.steer = launch.steer
       // Before a CLI process is actually launched, a rejected account/model or
       // permission check must leave the original outbox message recoverable.
-      if (task.queuedFollowupId) {
+      if (task.queuedFollowupId && !task.priority) {
         this.followups.remove(worker.id, task.queuedFollowupId)
         this.changed()
       }
@@ -1189,8 +1402,12 @@ export class WorkerRuntime {
     this.disposed = true
     for (const worker of this.storage.workers.values())
       this.pauseFollowups(worker.id, 'Host 已关闭，请确认后继续发送')
-    const workers = new Set([...this.tasks.keys(), ...this.preparations.keys()])
-    const interruptions = [...this.interruptions.values()].map((operation) => operation.done)
+    const workers = new Set([
+      ...this.tasks.keys(),
+      ...this.preparations.keys(),
+      ...this.latestPriority.keys(),
+    ])
+    const interruptions = [...this.priorityRunners.values()]
     await Promise.allSettled(
       [...workers].map((id) => {
         const worker = this.storage.workers.get(id)!

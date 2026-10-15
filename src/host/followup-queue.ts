@@ -189,6 +189,37 @@ export class FollowupQueue {
     this.save(workerId, queue)
     return structuredClone(item)
   }
+  /** Moving a message to durable conversation history consumes its outbox identity. */
+  consume(workerId: string, prompt: string, requestId: string): void {
+    const prior = this.receipt(workerId, prompt, requestId)
+    if (prior?.delivery === 'steer') throw new Error('这条引导消息已经提交，请核查本轮记录')
+    const queue = structuredClone(
+      this.queues.get(workerId) ?? { policy: 1 as const, items: [], receipts: [] },
+    )
+    queue.items = queue.items.filter((item) => item.id !== requestId)
+    if (!queue.receipts.some((receipt) => receipt.id === requestId))
+      queue.receipts = [
+        ...queue.receipts,
+        { id: requestId, digest: createHash('sha256').update(prompt).digest('hex') },
+      ].slice(-200)
+    this.save(workerId, queue)
+  }
+  restoreStates(workerId: string, previous: QueuedFollowup[]): void {
+    const queue = structuredClone(this.queues.get(workerId))
+    if (!queue) return
+    const originals = new Map(previous.map((item) => [item.id, item]))
+    queue.items = queue.items.map((item) => {
+      const prior = originals.get(item.id)
+      return prior
+        ? {
+            ...item,
+            state: prior.state === 'sending' ? ('pending' as const) : prior.state,
+            pauseReason: prior.state === 'paused' ? prior.pauseReason : undefined,
+          }
+        : item
+    })
+    this.save(workerId, queue)
+  }
   remove(workerId: string, id: string): void {
     const queue = structuredClone(this.queues.get(workerId))
     if (!queue || !queue.items.some((item) => item.id === id))

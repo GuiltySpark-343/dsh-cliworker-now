@@ -138,11 +138,19 @@ export const isUserInterrupted = (worker: Pick<Worker, 'status' | 'error' | 'int
     ['Error: 用户已停止任务', '用户已取消排队任务'].includes(worker.error ?? ''))
 /** Stable, non-mutating name for histories created before named workers. */
 export const workerName = (worker: Worker): string => worker.agentName || `智能体-${worker.id.slice(0, 6)}`
+export type DeliveryState =
+  | 'pending'
+  | 'admitted'
+  | 'running'
+  | 'superseded'
+  | 'cancelled'
+  | 'failed'
+  | 'completed'
 export interface WorkerEvent {
   seq: number
   runId: string
   time: string
-  kind: 'user' | 'assistant' | 'reasoning' | 'tool' | 'status' | 'diagnostic' | 'result'
+  kind: 'user' | 'assistant' | 'reasoning' | 'tool' | 'status' | 'diagnostic' | 'result' | 'submission'
   text: string
   observedModel?: string
   step?: number
@@ -150,6 +158,12 @@ export interface WorkerEvent {
   detail?: string
   /** Exact persisted outbox item admitted into this run; admission is not native delivery. */
   queuedFollowupId?: string
+  /** Submission intent is distinct from a native run. */
+  deliveryState?: DeliveryState
+  deliveryError?: string
+  admittedRunId?: string
+  submissionClientId?: string
+  submissionSequence?: number
 }
 export interface TimelineItem {
   usage?: TokenUsage
@@ -164,6 +178,9 @@ export interface TimelineItem {
   state?: string
   detail?: string
   queuedFollowupId?: string
+  deliveryState?: DeliveryState
+  deliveryError?: string
+  admittedRunId?: string
   /** Run ended without a final tool status; the observed CLI state stays intact. */
   runStatus?: WorkerStatus
   runStartedAt?: string
@@ -213,6 +230,10 @@ export function foldEvents(
 ): TimelineItem[] {
   const rows: TimelineItem[] = []
   const steps = new Map<string, TimelineItem>()
+  const submissions = new Map<string, TimelineItem>()
+  const submissionIds = new Set(
+    events.filter((event) => event.kind === 'submission').map((event) => event.queuedFollowupId),
+  )
   const markEnded = (runId: string, status: WorkerStatus) => {
     for (const row of rows) {
       if (
@@ -224,6 +245,24 @@ export function foldEvents(
     }
   }
   for (const event of events) {
+    if (event.kind === 'submission' && event.queuedFollowupId) {
+      const row = submissions.get(event.queuedFollowupId) ?? {
+        id: `submission:${event.queuedFollowupId}`,
+        kind: 'user' as const,
+        text: event.text,
+        time: event.time,
+        queuedFollowupId: event.queuedFollowupId,
+      }
+      if (!submissions.has(event.queuedFollowupId)) rows.push(row)
+      Object.assign(row, {
+        deliveryState: event.deliveryState,
+        deliveryError: event.deliveryError,
+        admittedRunId: event.admittedRunId,
+      })
+      submissions.set(event.queuedFollowupId, row)
+      continue
+    }
+    if (event.kind === 'user' && event.queuedFollowupId && submissionIds.has(event.queuedFollowupId)) continue
     if (event.kind === 'status') {
       const terminal = event.state ?? event.text
       if (
@@ -309,7 +348,7 @@ export function foldEvents(
     }
     timing.set(event.runId, run)
   }
-  for (const row of rows) Object.assign(row, timing.get(row.id.split(':')[0]!))
+  for (const row of rows) Object.assign(row, timing.get(row.admittedRunId ?? row.id.split(':')[0]!))
   if (endedRun) markEnded(endedRun.runId, endedRun.status)
   return rows
 }

@@ -218,8 +218,18 @@ export class CliWorkerService extends TypertRemoteService {
       const agent = await this.parent(worker.parentSessionId)
       const control = AbortSignal.any([signal, this.disposed.signal])
       control.throwIfAborted()
-      await this.launch(agent, worker.title, item.prompt, worker.preference, worker.mode, worker.id,
-        undefined, control, undefined, admission)
+      await this.launch(
+        agent,
+        worker.title,
+        item.prompt,
+        worker.preference,
+        worker.mode,
+        worker.id,
+        undefined,
+        control,
+        undefined,
+        admission,
+      )
     })
     this.runtime.setQueuedExecutionGuard((worker) => {
       const agent = this.ctx.agents.get(worker.parentSessionId as Agent['id'])
@@ -445,24 +455,29 @@ export class CliWorkerService extends TypertRemoteService {
     identity?: { agentName?: string; role?: RoleSnapshot },
     signal: AbortSignal = this.disposed.signal,
     restartSourceId?: string,
-    queuedAdmission?: { id: string; expectedRunId: string },
+    queuedAdmission?: { id: string; expectedRunId: string; priority?: boolean },
     preparationId?: string,
   ): Promise<string> {
     if (workerId && !preparationId)
-      return this.runtime.prepareFollowup(agent.id, workerId, signal, (control, id) =>
-        this.launch(
-          agent,
-          title,
-          prompt,
-          preference,
-          mode,
-          workerId,
-          identity,
-          control,
-          restartSourceId,
-          queuedAdmission,
-          id,
-        ),
+      return this.runtime.prepareFollowup(
+        agent.id,
+        workerId,
+        signal,
+        (control, id) =>
+          this.launch(
+            agent,
+            title,
+            prompt,
+            preference,
+            mode,
+            workerId,
+            identity,
+            control,
+            restartSourceId,
+            queuedAdmission,
+            id,
+          ),
+        queuedAdmission?.priority ? queuedAdmission.id : undefined,
       )
     this.assertExecution(agent)
     this.runtime.assertCliEnabled(cliOf(preference))
@@ -767,19 +782,28 @@ export class CliWorkerService extends TypertRemoteService {
     try {
       const agent = await this.parent(parentSessionId)
       signal.throwIfAborted()
-      return JSON.stringify(this.runtime.storage.runningMessageSettings(this.project(agent), validate.enum(CLI_IDS).parse(cli)))
+      return JSON.stringify(
+        this.runtime.storage.runningMessageSettings(this.project(agent), validate.enum(CLI_IDS).parse(cli)),
+      )
     } catch (error) {
       throw failure(error)
     }
   }
   /** @param parentSessionId - Active parent. @param cli - Explicit CLI. @param mode - Running submission preference. @param signal - Save lifetime. @returns Saved preference; never starts a CLI. */
   @Remote('saveRunningMessageMode')
-  async saveRunningMessageMode(parentSessionId: string, cli: string, mode: string, signal: AbortSignal): Promise<string> {
+  async saveRunningMessageMode(
+    parentSessionId: string,
+    cli: string,
+    mode: string,
+    signal: AbortSignal,
+  ): Promise<string> {
     try {
       const agent = await this.parent(parentSessionId)
       signal.throwIfAborted()
       const result = this.runtime.storage.setRunningMessageMode(
-        this.project(agent), validate.enum(CLI_IDS).parse(cli), validate.enum(RUNNING_MESSAGE_MODES).parse(mode),
+        this.project(agent),
+        validate.enum(CLI_IDS).parse(cli),
+        validate.enum(RUNNING_MESSAGE_MODES).parse(mode),
       )
       this.runtime.changed()
       return JSON.stringify(result)
@@ -1160,11 +1184,18 @@ export class CliWorkerService extends TypertRemoteService {
           project: worker.project,
           signal: control,
           binding: async () => {
-            const current = await readCliAccountBinding(cli, this.backend, this.options, worker.project, control)
+            const current = await readCliAccountBinding(
+              cli,
+              this.backend,
+              this.options,
+              worker.project,
+              control,
+            )
             if (current !== expected) throw new Error(ACCOUNT_CHANGED)
             return current
           },
-          discover: () => this.queryCatalog(cli, this.backend, this.options, worker.project, control, expected),
+          discover: () =>
+            this.queryCatalog(cli, this.backend, this.options, worker.project, control, expected),
         })
         catalog = result.catalog
       }
@@ -1290,8 +1321,12 @@ export class CliWorkerService extends TypertRemoteService {
   /** @param parentSessionId - Owning parent. @param workerId - Active Worker. @param prompt - New message. @param expectedRunId - Observed run. @param requestId - Stable submission UUID. @param signal - Admission lifetime. @returns Accepted submission using the saved mode. */
   @Remote('sendRunningMessage')
   async sendRunningMessage(
-    parentSessionId: string, workerId: string, prompt: string, expectedRunId: string,
-    requestId: string, signal: AbortSignal,
+    parentSessionId: string,
+    workerId: string,
+    prompt: string,
+    expectedRunId: string,
+    requestId: string,
+    signal: AbortSignal,
   ): Promise<string> {
     try {
       const agent = await this.parent(parentSessionId)
@@ -1301,9 +1336,39 @@ export class CliWorkerService extends TypertRemoteService {
       if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目继续')
       if (this.accounts.isBusy(cliOf(worker.preference))) throw new Error('请先关闭账号终端')
       const receipt = await this.runtime.sendRunningMessage(
-        agent.id, workerId, prompt, expectedRunId, requestId, signal,
+        agent.id,
+        workerId,
+        prompt,
+        expectedRunId,
+        requestId,
+        signal,
       )
       return JSON.stringify(receipt ?? { accepted: true })
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param workerId - Current Worker. @param prompt - Message text. @param requestId - Stable message UUID, including a local queue item. @param clientId - Panel source UUID. @param sequence - Increasing click order for this source. @param signal - Admission transport lifetime. @returns JSON durable acceptance receipt; execution proceeds independently of this RPC. */
+  @Remote('interruptMessage')
+  async interruptMessage(
+    parentSessionId: string,
+    workerId: string,
+    prompt: string,
+    requestId: string,
+    clientId: string,
+    sequence: number,
+    signal: AbortSignal,
+  ): Promise<string> {
+    try {
+      const agent = await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      this.assertExecution(agent)
+      const worker = this.runtime.get(agent.id, workerId)
+      if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目继续')
+      if (this.accounts.isBusy(cliOf(worker.preference))) throw new Error('请先关闭账号终端')
+      return JSON.stringify(
+        this.runtime.interruptMessage(agent.id, workerId, prompt, requestId, clientId, sequence, signal),
+      )
     } catch (error) {
       throw failure(error)
     }
@@ -1311,7 +1376,11 @@ export class CliWorkerService extends TypertRemoteService {
   /** @param parentSessionId - Owning parent. @param workerId - Worker with pending messages. @param queuedId - Explicit priority message. @param expectedRunId - Observed run. @param signal - Admission lifetime. @returns JSON priority request receipt with queuedId and snapshot revision; not confirmation of native delivery. */
   @Remote('interruptQueuedFollowup')
   async interruptQueuedFollowup(
-    parentSessionId: string, workerId: string, queuedId: string, expectedRunId: string, signal: AbortSignal,
+    parentSessionId: string,
+    workerId: string,
+    queuedId: string,
+    expectedRunId: string,
+    signal: AbortSignal,
   ): Promise<string> {
     try {
       const agent = await this.parent(parentSessionId)
@@ -1328,7 +1397,12 @@ export class CliWorkerService extends TypertRemoteService {
   }
   /** @param parentSessionId - Owning parent. @param workerId - Owning Worker. @param queuedId - Unsent item identity. @param signal - Mutation lifetime. @returns Completion; already admitted messages cannot be cancelled here. */
   @Remote('cancelQueuedFollowup')
-  async cancelQueuedFollowup(parentSessionId: string, workerId: string, queuedId: string, signal: AbortSignal): Promise<void> {
+  async cancelQueuedFollowup(
+    parentSessionId: string,
+    workerId: string,
+    queuedId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
     try {
       const agent = await this.parent(parentSessionId)
       signal.throwIfAborted()
@@ -1339,7 +1413,12 @@ export class CliWorkerService extends TypertRemoteService {
   }
   /** @param parentSessionId - Owning parent. @param workerId - Idle Worker with paused messages. @param expectedRunId - Current run identity. @param signal - Mutation lifetime. @returns Explicit queue reactivation; each turn rechecks native authorization. */
   @Remote('retryQueuedFollowups')
-  async retryQueuedFollowups(parentSessionId: string, workerId: string, expectedRunId: string, signal: AbortSignal): Promise<void> {
+  async retryQueuedFollowups(
+    parentSessionId: string,
+    workerId: string,
+    expectedRunId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
     try {
       const agent = await this.parent(parentSessionId)
       signal.throwIfAborted()

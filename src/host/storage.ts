@@ -93,12 +93,14 @@ const storedCliSchema = z.enum([...CLI_IDS, 'harness'])
 const storedPreferenceSchema = preferenceSchema.extend({ cli: storedCliSchema.optional() })
 const cliSettingsSchema = z.object({ enabled: z.partialRecord(storedCliSchema, z.boolean()) })
 const enabledByDefault = () => Object.fromEntries(CLI_IDS.map((cli) => [cli, true])) as CliSettings['enabled']
-const runningMessageSchema = z.object({
-  policy: z.literal(1),
-  project: z.string().min(1),
-  cli: z.enum(CLI_IDS),
-  mode: z.enum(RUNNING_MESSAGE_MODES),
-}).strict()
+const runningMessageSchema = z
+  .object({
+    policy: z.literal(1),
+    project: z.string().min(1),
+    cli: z.enum(CLI_IDS),
+    mode: z.enum(RUNNING_MESSAGE_MODES),
+  })
+  .strict()
 const workerSchema = z.object({
   id: z.uuid(),
   parentSessionId: z.string().min(1),
@@ -126,13 +128,20 @@ const eventSchema = z.object({
   seq: z.number().int().positive(),
   runId: z.uuid(),
   time: z.string(),
-  kind: z.enum(['user', 'assistant', 'reasoning', 'tool', 'status', 'diagnostic', 'result']),
+  kind: z.enum(['user', 'assistant', 'reasoning', 'tool', 'status', 'diagnostic', 'result', 'submission']),
   text: z.string(),
   observedModel: z.string().optional(),
   step: z.number().optional(),
   state: z.string().optional(),
   detail: z.string().optional(),
   queuedFollowupId: z.uuid().optional(),
+  deliveryState: z
+    .enum(['pending', 'admitted', 'running', 'superseded', 'cancelled', 'failed', 'completed'])
+    .optional(),
+  deliveryError: z.string().optional(),
+  admittedRunId: z.uuid().optional(),
+  submissionClientId: z.uuid().optional(),
+  submissionSequence: z.number().int().nonnegative().optional(),
 })
 
 export function atomicJSON(path: string, value: unknown): void {
