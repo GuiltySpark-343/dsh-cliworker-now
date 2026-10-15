@@ -23,6 +23,7 @@ import {
   cliOf,
   workerName,
   effortLabel,
+  isUserInterrupted,
   LEGACY_ACCOUNT_RECORD_NOTICE,
   EFFORTS,
   type CliId,
@@ -445,7 +446,24 @@ export class CliWorkerService extends TypertRemoteService {
     signal: AbortSignal = this.disposed.signal,
     restartSourceId?: string,
     queuedAdmission?: { id: string; expectedRunId: string },
+    preparationId?: string,
   ): Promise<string> {
+    if (workerId && !preparationId)
+      return this.runtime.prepareFollowup(agent.id, workerId, signal, (control, id) =>
+        this.launch(
+          agent,
+          title,
+          prompt,
+          preference,
+          mode,
+          workerId,
+          identity,
+          control,
+          restartSourceId,
+          queuedAdmission,
+          id,
+        ),
+      )
     this.assertExecution(agent)
     this.runtime.assertCliEnabled(cliOf(preference))
     if (this.accounts.isBusy(cliOf(preference)))
@@ -456,7 +474,10 @@ export class CliWorkerService extends TypertRemoteService {
     const expected = workerId
       ? this.runtime.storage.accountBinding(workerId)
       : this.selectionBindings?.get(preference)
-    if (workerId && !expected) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
+    if (workerId && !expected) {
+      const worker = this.runtime.get(agent.id, workerId)
+      if (worker.conversationId || !isUserInterrupted(worker)) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
+    }
     const { binding, preference: authorizedPreference } = await this.querySelection(
       preference,
       this.backend,
@@ -490,6 +511,7 @@ export class CliWorkerService extends TypertRemoteService {
           identity,
           binding,
           queuedAdmission,
+          preparationId,
         )
         submission = submitted
         return {

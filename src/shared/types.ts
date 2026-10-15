@@ -126,9 +126,16 @@ export interface Worker {
   runId: string
   jobId?: string
   error?: string
+  /** User-requested stop confirmed after the owned process range exited. */
+  interruptionReason?: 'user'
   observedModel?: string
   lastResult?: string
 }
+/** Exact legacy stop messages are compatible; other interrupted outcomes stay diagnostic. */
+export const isUserInterrupted = (worker: Pick<Worker, 'status' | 'error' | 'interruptionReason'>) =>
+  worker.status === 'interrupted' &&
+  ((worker.interruptionReason === 'user' && !worker.error) ||
+    ['Error: 用户已停止任务', '用户已取消排队任务'].includes(worker.error ?? ''))
 /** Stable, non-mutating name for histories created before named workers. */
 export const workerName = (worker: Worker): string => worker.agentName || `智能体-${worker.id.slice(0, 6)}`
 export interface WorkerEvent {

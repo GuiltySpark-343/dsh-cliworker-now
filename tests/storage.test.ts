@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { WorkerStorage } from '../src/host/storage.ts'
-import { CLI_IDS, type Worker } from '../src/shared/types.ts'
+import { CLI_IDS, isUserInterrupted, type Worker } from '../src/shared/types.ts'
 
 // Explicitly synthetic persisted legacy state; no user accounts or logs are read.
 const cleanup: (() => void)[] = []
@@ -92,4 +92,41 @@ describe('Hermes migration preserves retired Harness history', () => {
     expect(store.history(f.worker.id)).toHaveLength(2)
     expect(store.history(f.worker.id)[1]?.state).toBe('interrupted')
   })
+})
+
+it.each(['Error: 用户已停止任务', '用户已取消排队任务'])(
+  'normalizes the exact legacy user stop %s without rewriting its history',
+  (error) => {
+    const f = fixture('interrupted')
+    f.worker.preference.cli = 'antigravity'
+    f.worker.error = error
+    f.worker.conversationId = undefined
+    writeFileSync(f.workerPath, JSON.stringify(f.worker))
+    const history = readFileSync(f.eventPath, 'utf8')
+    const store = new WorkerStorage(f.dir)
+    cleanup.push(() => store.close())
+    const restored = store.workers.get(f.worker.id)!
+    expect(restored).toMatchObject({ status: 'interrupted', interruptionReason: 'user', error: undefined })
+    expect(isUserInterrupted(restored)).toBe(true)
+    expect(JSON.parse(readFileSync(f.workerPath, 'utf8'))).toMatchObject({ interruptionReason: 'user' })
+    expect(readFileSync(f.eventPath, 'utf8')).toBe(history)
+  },
+)
+
+it.each([
+  ['interrupted', 'Error: 任务超时'],
+  ['interrupted', '上次 Harness 运行中断；可继续原会话'],
+  ['interrupted', 'Error: 用户已停止任务：清理未确认'],
+  ['failed', 'Error: 用户已停止任务'],
+] as const)('preserves a diagnostic %s outcome: %s', (status, error) => {
+  const f = fixture(status)
+  f.worker.preference.cli = 'antigravity'
+  f.worker.error = error
+  writeFileSync(f.workerPath, JSON.stringify(f.worker))
+  const store = new WorkerStorage(f.dir)
+  cleanup.push(() => store.close())
+  const restored = store.workers.get(f.worker.id)!
+  expect(restored).toMatchObject({ status, error })
+  expect(restored.interruptionReason).toBeUndefined()
+  expect(isUserInterrupted(restored)).toBe(false)
 })

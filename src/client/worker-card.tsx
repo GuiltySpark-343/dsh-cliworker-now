@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
-import { active, effortLabel, workerName, type Worker, type WorkerStatus } from '../shared/types.ts'
+import {
+  active,
+  effortLabel,
+  isUserInterrupted,
+  workerName,
+  type Worker,
+  type WorkerStatus,
+} from '../shared/types.ts'
 import { displayModelName } from '../shared/model-presentation.ts'
 import { Glyph } from './icons.tsx'
 import { NameCopy } from './name-copy.tsx'
@@ -112,7 +119,7 @@ export function WorkerCard({
                 <span className="cwn-worker-title">{worker.title}</span>
                 <span className={`cwn-worker-status ${worker.status}`}>
                   <span className={`cwn-dot ${worker.status}`} />
-                  {status[worker.status]}
+                  {isUserInterrupted(worker) ? '已停止' : status[worker.status]}
                 </span>
               </span>
             </button>

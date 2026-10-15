@@ -297,6 +297,9 @@ describe('AGY runtime outcomes', () => {
       if (scenario === 'cancel') await f.runtime.stop('parent', task.worker.id)
       const worker = await task.done
       expect(worker).toMatchObject({ status: 'interrupted', lastResult: '本轮实际回复' })
+      expect(worker.interruptionReason).toBe(scenario === 'cancel' ? 'user' : undefined)
+      if (scenario === 'cancel') expect(worker.error).toBeUndefined()
+      else expect(worker.error).toContain('任务超时')
     },
   )
 

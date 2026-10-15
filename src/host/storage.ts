@@ -44,6 +44,7 @@ import {
   cliOf,
   workerName,
   isRetiredCli,
+  isUserInterrupted,
   RETIRED_HARNESS_NOTICE,
   type CliId,
   type Preference,
@@ -117,6 +118,7 @@ const workerSchema = z.object({
   runId: z.uuid(),
   jobId: z.string().optional(),
   error: z.string().optional(),
+  interruptionReason: z.literal('user').optional(),
   observedModel: z.string().optional(),
   lastResult: z.string().optional(),
 })
@@ -270,12 +272,19 @@ export class WorkerStorage {
         this.workers.set(worker.id, worker)
         if (active(worker.status)) {
           worker.status = 'interrupted'
+          worker.interruptionReason = undefined
           worker.error =
             worker.preference.cli === 'harness'
               ? RETIRED_HARNESS_NOTICE
               : '上次 Harness 运行中断；可继续原会话'
           this.save(worker)
           this.append(worker, { kind: 'status', text: worker.error, state: 'interrupted' })
+        } else if (isUserInterrupted(worker) && worker.error) {
+          // Normalize only the exact stop receipts from older plugin versions.
+          // Keep the original event log intact as evidence of that older run.
+          worker.error = undefined
+          worker.interruptionReason = 'user'
+          this.save(worker)
         }
       }
       this.migrateAutomaticNames()

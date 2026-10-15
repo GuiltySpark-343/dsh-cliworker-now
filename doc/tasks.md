@@ -1208,3 +1208,19 @@
 - 最终 25 个 Worker、活动 0、待发 0，本次桥接与 sleep 进程 0。更新前 4633 份文件中最终 4622 份未变；153 份 profile、账号绑定/凭据及设置文件哈希未变，Codex 原有事件日志前缀也匹配原哈希。变化为本次 Codex 会话、宿主两份对话日志、host.lock 及 OMP 目录查询的数据库/日志；OMP 自身保留最近 5 份日志的轮转移除了 10月9日调试日志，不能宣称全部原始文件不变。测试记录和新 Pi 对话保留，已返回原“用AGY进行问候对话”及 CLI Worker 总览。
 - 私有核查结果位于 `.cache/desktop-v079/`，含 build-verification、state-before/after-restart/final、cleanup、codex-run-audit、pi-run-audit 和 verification JSON；屏幕与辅助功能核查记录在本次工具轨迹。部分 Codex 原生日志有 MCP 502 和中断后的缺失前一工具输出诊断，未阻止上述成功轮完成，本轮不扩大排查范围。
 - 只补正式构建、安装界面和相关真实交互验收，没有重跑全量测试；未做 OMP 真实模型引导、Windows Desktop 或跨模型上下文验收。保持 v0.7.9，不推送 GitHub、不发布。
+
+## 2026-10-15：v0.7.9 正常停止、即时提交与待发送外观最小验收
+
+- OpenSpec：`fix-conversation-stop-and-send-feedback`。版本保持 `0.7.9`，未推送或发布 GitHub。
+- Host：正常停止及插队停止记录 `interruptionReason: user`，不再把取消原因写成错误；已有会话沿原 ID 续聊，会话建立前正常停止允许原 Worker 新建原生会话；真实失败、超时、结果待核实及清理隔离保留。准备阶段纳入 Runtime 停止等待和同 Worker 互斥，并防止准备期间改选模型。
+- Client：按 Worker 保存待确认消息，提交即显示并清空当次草稿，不等待 metadata；连续提交串行且对账不重复，失败不覆盖新草稿，正常停止不归入异常。普通续聊的运输结果未知时保留待确认内容并禁止盲目重发，只有 Host 停止确认未准入后才恢复。
+- 关联 Host 回归：`pnpm --config.verifyDepsBeforeRun=false exec vitest run tests/followup-queue.test.ts tests/agy-run-outcome.test.ts tests/runtime-metadata-cleanup.test.ts tests/storage.test.ts`，4 文件 101 项通过，含准备阶段取消清理、晚到查询、改选互斥、先失败后停止、无 ID 恢复与真实 AGY 协议终态保护。
+- 时间线回归：`pnpm --config.verifyDepsBeforeRun=false exec vitest run tests/conversation-timeline.test.tsx`，12 项通过。
+- 样式：复用输入框主题，标题线全宽、内部线内缩、操作居中。Tabbit 实际渲染的是明确标注的模拟队列 DOM，使用真实原生 Button 和 Harness 主题：960/360px × 浅/深色四组合半径均 28px、背景/阴影/描边完全一致，标题线与外框左右边缘重合，按钮与内容中心差 0px，无横向溢出；折叠 220/180ms，高度归零且 inert，减少动效为 0s。证据 `.cache/queue-surface-check/verification.json`，不当作真实 CLI 或 Desktop 验收。
+- Panel 回归：`pnpm --config.verifyDepsBeforeRun=false exec vitest run tests/panel.test.tsx`，86 项通过（新增 11 项行为回归）。本次关联自动回归共 199 项，未运行全套测试。
+- `pnpm --config.verifyDepsBeforeRun=false typecheck`、`build:preview` 和最终 `build` 通过。最后运输未知草稿修复后重新执行以上三项；正式构建前确认 25 个 Worker 无活动任务，正常退出 Desktop，主进程退出后再更新链接包。最终 lib 376 文件，Host 与 preview 字节一致，Client 去掉构建目录 region 注释后一致；差异仅 region 注释、source map 和 TypeScript build info。
+- 已安装 macOS Desktop 真实验收：沿当前 AGY `Gemini 3.8 Flash · Low` 选型，共四轮（2 次正常停止、2 次完成），每轮恰好一个 user 事件。停止和插队均显示“已停止”且无错误横幅，原生结果的 interrupted 保留为过程证据；插队消息返回 `AGY_INTERRUPT_OK`，其后普通续聊返回 `AGY_AFTER_STOP_OK`，两轮原生 `SUCCESS`。四轮沿同一原生 conversation_id，无重复执行已取消的队列文本。使用等待命令的两轮被停止，检查无残留 sleep 进程。
+- Desktop UI 核对：提交尚在准备时立即显示“正在发送…”且输入已清空；运行中输入草稿可编辑，单按钮随有无文本在发送/停止间切换；两条长短卡片圆角、背景和阴影匹配，标题线贯穿左右、内部线内缩、操作居中；折叠只留标题和数量，再展开可操作；卡片取消及插队成功。工具观察与本地原生审计 `.cache/stop-send-v079/verification.json` 相互核对，不以主 Agent 的完成描述作为证据。
+- 保留性核对：4669 个基线文件中 4662 未变、7 个预期变化、无丢失；变化为 AGY Worker/事件/待发送记录、原生 AGY session、host.lock，以及两份旧正常停止 Worker 的精确迁移。337 个匹配账号/认证/偏好/配置的基线文件均未变化；原事件文件前缀哈希保持。结束时活动 Worker 0、待发消息 0，Desktop 保留在最新 AGY 结果。
+- 边界：本轮未执行 Windows Desktop、其他 CLI 真实执行、新无ID真实会话（由自动回归覆盖）、全量验收或 GitHub 推送/发布。真实 Desktop 验证只覆盖现有 AGY 选型；模拟主题渲染不冒充真实 CLI 验证。
+- OpenSpec 严格校验通过；归档前后复核主规格与增量一致，保留上述未测边界。历史文档/assets的既有未提交修改保持原样，仅提交本次修复范围。

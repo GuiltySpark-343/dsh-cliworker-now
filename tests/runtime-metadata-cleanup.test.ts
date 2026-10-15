@@ -221,7 +221,8 @@ describe('metadata preparation cleanup admission, isolated synthetic fixtures', 
 
     expect(await stopped).toMatchObject({
       status: 'interrupted',
-      error: expect.stringContaining('用户已停止任务'),
+      interruptionReason: 'user',
+      error: undefined,
     })
     expect(release).toHaveBeenCalledTimes(1)
     expect(await next.done).toMatchObject({
@@ -246,7 +247,8 @@ describe('metadata preparation cleanup admission, isolated synthetic fixtures', 
 
     expect(await stopped).toMatchObject({
       status: 'interrupted',
-      error: expect.stringContaining('用户已停止任务'),
+      interruptionReason: 'user',
+      error: undefined,
     })
     expect((await next.done).status).toBe('completed')
     expect(backend.spawn).toHaveBeenCalledTimes(1)

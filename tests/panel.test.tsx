@@ -368,7 +368,7 @@ it('retains a rejected queued draft and reuses its request identity on retry', a
   expect(t.input().props.value).toBe('send after the first turn')
   expect(t.text()).toContain('模拟连接中断')
   await t.submit()
-  expect(sendRunningMessage.mock.calls[1]).toEqual(sendRunningMessage.mock.calls[0])
+  expect(sendRunningMessage.mock.calls[1]!.slice(0, 5)).toEqual(sendRunningMessage.mock.calls[0]!.slice(0, 5))
   expect(t.input().props.value).toBe('')
 })
 it('shows host queued messages with cancel and explicit resume after failure, without automatic client dispatch', async () => {
@@ -449,7 +449,7 @@ it('late submission success clears only its originating draft', async () => {
     done.resolve({ ok: true, value: '{}' })
   })
   expect(t.input().props.value).toBe('keep B')
-  expect(t.followup).toHaveBeenCalledWith('parent', 'a', 'submit A')
+  expect(t.followup).toHaveBeenCalledWith('parent', 'a', 'submit A', expect.any(AbortSignal))
   await t.select('a')
   await t.push('a')
   expect(t.input().props.value).toBe('')
@@ -463,7 +463,7 @@ it('late errors belong to the original worker and preserve its draft', async () 
   await t.select('b')
   await t.push('b')
   await act(async () => {
-    done.reject(new Error('fixture submission failed'))
+    done.resolve({ ok: false, error: { message: 'fixture submission failed' } })
   })
   expect(t.text()).not.toContain('fixture submission failed')
   await t.select('a')
@@ -1284,7 +1284,12 @@ it.each([{}, { ctrlKey: true }, { metaKey: true }])(
       })
     })
     expect(preventDefault).toHaveBeenCalledOnce()
-    expect(t.followup).toHaveBeenCalledExactlyOnceWith('parent', 'a', 'keyboard followup')
+    expect(t.followup).toHaveBeenCalledExactlyOnceWith(
+      'parent',
+      'a',
+      'keyboard followup',
+      expect.any(AbortSignal),
+    )
     expect(t.input().props.value).toBe('')
   },
 )
@@ -1295,7 +1300,7 @@ it('keeps keyboard submission on the current worker and preserves failed drafts'
   await t.select('b')
   await t.push('b')
   await t.edit('draft b')
-  t.followup.mockRejectedValueOnce(new Error('synthetic failure'))
+  t.followup.mockResolvedValueOnce({ ok: false, error: { message: 'synthetic failure' } })
   await act(async () => {
     t.input().props.onKeyDown({
       key: 'Enter',
@@ -1304,7 +1309,7 @@ it('keeps keyboard submission on the current worker and preserves failed drafts'
       nativeEvent: {},
     })
   })
-  expect(t.followup).toHaveBeenCalledExactlyOnceWith('parent', 'b', 'draft b')
+  expect(t.followup).toHaveBeenCalledExactlyOnceWith('parent', 'b', 'draft b', expect.any(AbortSignal))
   expect(t.input().props.value).toBe('draft b')
   await t.select('a')
   await t.push('a')
@@ -1815,4 +1820,256 @@ it('folds the pending list per worker without changing Host messages, and keeps 
   await t.click('展开待发送消息')
   expect(body().props['aria-hidden']).toBe(false)
   expect(body().props.inert).toBeUndefined()
+})
+
+it('immediately shows a pending user message and clears the composer before slow preparation', async () => {
+  const done = deferred()
+  const t = await setup()
+  t.followup.mockReturnValueOnce(done.promise)
+  await t.edit('slow preparation message')
+  await t.submit()
+  expect(t.input().props.value).toBe('')
+  expect(t.input().props.disabled).toBe(false)
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
+  expect(t.text()).toContain('正在发送…')
+  const actions = t.r.root.findAllByType('button').filter((button) => button.props.className === 'cwn-send')
+  expect(actions).toHaveLength(1)
+  expect(actions[0]!.props['aria-label']).toBe('停止')
+  expect(actions[0]!.props.disabled).toBe(false)
+  await t.edit('newer draft')
+  await act(async () => done.resolve({ ok: false, error: { message: 'synthetic preflight rejected' } }))
+  expect(t.input().props.value).toBe('newer draft')
+  expect(t.text()).toContain('synthetic preflight rejected')
+  expect(t.text()).toContain('slow preparation message')
+  await t.click('重试发送 slow preparation message')
+  expect(t.followup.mock.calls[1]![2]).toBe('slow preparation message')
+  expect(t.input().props.value).toBe('newer draft')
+})
+
+it('serializes preparation and sends a second draft against the admitted run without locking another worker', async () => {
+  const done = deferred()
+  const sendRunningMessage = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
+  const t = await setup(true, undefined, workers, { sendRunningMessage })
+  t.followup.mockReturnValueOnce(done.promise)
+  await t.edit('first preparation')
+  await t.submit()
+  await t.edit('second instruction')
+  await t.submit()
+  expect(t.input().props.value).toBe('')
+  expect(t.followup).toHaveBeenCalledOnce()
+  expect(sendRunningMessage).not.toHaveBeenCalled()
+  await t.select('b')
+  await t.push('b')
+  await t.edit('independent B')
+  await t.submit()
+  expect(t.followup.mock.calls[1]!.slice(0, 3)).toEqual(['parent', 'b', 'independent B'])
+  await act(async () => done.resolve({ ok: true, value: JSON.stringify({ runId: 'admitted-a' }) }))
+  expect(sendRunningMessage.mock.calls[0]!.slice(0, 4)).toEqual([
+    'parent',
+    'a',
+    'second instruction',
+    'admitted-a',
+  ])
+  expect(t.text()).not.toContain('second instruction')
+})
+
+it('keeps one pending queue card until its actual Host identity appears and never duplicates it', async () => {
+  const done = deferred()
+  const sendRunningMessage = vi.fn().mockReturnValue(done.promise)
+  const t = await setup(true, undefined, workers, { sendRunningMessage })
+  await t.push('a', 2, { status: 'running' })
+  await t.edit('queued immediately')
+  await t.submit()
+  expect(t.input().props.value).toBe('')
+  expect(t.text()).toContain('正在加入待发送…')
+  expect(t.r.root.findAllByProps({ className: 'cwn-followup-content' })).toHaveLength(1)
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(0)
+  const id = sendRunningMessage.mock.calls[0]![4]
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 3, { status: 'running' }),
+      queuedFollowups: [{ id, prompt: 'queued immediately', createdAt: '', state: 'pending' }],
+    }),
+  )
+  expect(t.r.root.findAllByProps({ className: 'cwn-followup-content' })).toHaveLength(1)
+  await act(async () => done.reject(new Error('transport failure after acceptance')))
+  expect(t.input().props.value).toBe('')
+  expect(t.text()).not.toContain('transport failure after acceptance')
+})
+
+it('matches identical optimistic steering messages to distinct actual events one at a time', async () => {
+  const first = deferred(),
+    second = deferred()
+  const sendRunningMessage = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+  const t = await setup(true, undefined, workers, { sendRunningMessage })
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), runningMessageMode: 'steer' }),
+  )
+  await t.edit('same guidance')
+  await t.submit()
+  await t.edit('same guidance')
+  await t.submit()
+  expect(sendRunningMessage).toHaveBeenCalledOnce()
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(2)
+  const host = t.snapshot('a', 3, { status: 'running' })
+  host.runningMessageMode = 'steer'
+  host.timeline.push({ id: 'run-a:first', kind: 'user', text: 'same guidance', time: '' })
+  await act(async () => t.streams.at(-1)!.push(host))
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(2)
+  expect(t.text().match(/正在发送…/g)).toHaveLength(1)
+  await act(async () => first.resolve({ ok: true, value: '{}' }))
+  expect(sendRunningMessage).toHaveBeenCalledTimes(2)
+  expect(sendRunningMessage.mock.calls[0]![4]).not.toBe(sendRunningMessage.mock.calls[1]![4])
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...host,
+      revision: 4,
+      timeline: [...host.timeline, { id: 'run-a:second', kind: 'user', text: 'same guidance', time: '' }],
+    }),
+  )
+  await act(async () => second.resolve({ ok: true, value: '{}' }))
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(2)
+  expect(t.text()).not.toContain('正在发送…')
+})
+
+it('cancels preparation but keeps Stop disabled until the Host confirms cleanup', async () => {
+  const stopDone = deferred()
+  const stop = vi.fn().mockReturnValue(stopDone.promise)
+  const t = await setup(true, undefined, workers, { stop })
+  t.followup.mockImplementationOnce(
+    (_parent, _worker, _prompt, signal: AbortSignal) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      }),
+  )
+  await t.edit('cancel during preparation')
+  await t.submit()
+  await t.click('停止')
+  expect(t.followup.mock.calls[0]![3].aborted).toBe(true)
+  expect(t.input().props.disabled).toBe(true)
+  expect(t.r.root.findAllByProps({ className: 'cwn-send' }).at(-1)!.props.disabled).toBe(true)
+  await act(async () => stopDone.resolve({ ok: true, value: '{}' }))
+  expect(t.input().props.disabled).toBe(false)
+  expect(t.input().props.value).toBe('cancel during preparation')
+  expect(t.text()).toContain('已停止发送')
+  expect(t.text()).not.toContain('未发送：')
+})
+
+it('normal Stop without a native ID permits a fresh conversation and leaves paused cards explicit', async () => {
+  const queueFollowup = vi.fn()
+  const t = await setup(true, undefined, workers, { queueFollowup })
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 2, { status: 'interrupted', interruptionReason: 'user', conversationId: undefined }),
+      queuedFollowups: [{ id: 'old-pending', prompt: 'old queued message', state: 'paused', createdAt: '' }],
+    }),
+  )
+  expect(t.input().props.disabled).toBe(false)
+  expect(t.text()).toContain('再次发送将开始新会话')
+  expect(t.text()).toContain('已停止')
+  await t.edit('explicit new instruction')
+  await t.submit()
+  expect(t.followup.mock.calls[0]!.slice(0, 3)).toEqual(['parent', 'a', 'explicit new instruction'])
+  expect(queueFollowup).not.toHaveBeenCalled()
+  expect(t.text()).toContain('old queued message')
+})
+
+it('keeps real resume blocks after a normal Stop and excludes only normal Stop from attention', async () => {
+  const t = await setup(false, undefined, [
+    { ...workers[0]!, status: 'interrupted', interruptionReason: 'user' },
+    { ...workers[1]!, status: 'interrupted', error: '真实进程故障' },
+  ])
+  await t.click('异常')
+  expect(t.r.root.findAllByProps({ 'data-worker-id': 'a' })).toHaveLength(0)
+  expect(t.r.root.findAllByProps({ 'data-worker-id': 'b' })).toHaveLength(1)
+  await t.click('全部')
+  expect(t.text()).toContain('已停止')
+  await t.select('a')
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 2),
+      resumeBlockedReason: '无法确认进程清理',
+    }),
+  )
+  expect(t.input().props.disabled).toBe(true)
+  await t.edit('must not dispatch')
+  await t.submit()
+  expect(t.followup).not.toHaveBeenCalled()
+})
+
+it('does not replay an uncertain ordinary followup until Stop confirms the original run never advanced', async () => {
+  const stop = vi.fn().mockResolvedValue({
+    ok: true,
+    value: JSON.stringify({ ...workers[0], status: 'interrupted', interruptionReason: 'user' }),
+  })
+  const t = await setup(true, undefined, workers, { stop })
+  t.followup.mockRejectedValueOnce(new Error('transport failure'))
+  await t.edit('unknown admission')
+  await t.submit()
+  expect(t.input().props.value).toBe('')
+  expect(t.text()).toContain('发送结果待确认')
+  await t.edit('new draft while checking')
+  await t.submit()
+  expect(t.followup).toHaveBeenCalledOnce()
+  expect(
+    t.r.root.findAllByType('button').filter((button) => button.props.className === 'cwn-send')[0]!.props[
+      'aria-label'
+    ],
+  ).toBe('停止')
+  await t.click('停止')
+  await t.submit()
+  expect(t.followup).toHaveBeenCalledTimes(2)
+})
+
+it('does not use an old accepted receipt after a later queued run has completed', async () => {
+  const sendRunningMessage = vi.fn()
+  const t = await setup(true, undefined, workers, { sendRunningMessage })
+  t.followup.mockResolvedValueOnce({ ok: true, value: JSON.stringify({ runId: 'first-admitted' }) })
+  await t.edit('first accepted')
+  await t.submit()
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 2, { status: 'completed', runId: 'later-queued-run' }),
+      timeline: [{ id: 'first-admitted:user', kind: 'user', text: 'first accepted', time: '' }],
+    }),
+  )
+  await t.edit('fresh followup after queue')
+  await t.submit()
+  expect(t.followup).toHaveBeenCalledTimes(2)
+  expect(t.followup.mock.calls[1]![2]).toBe('fresh followup after queue')
+  expect(sendRunningMessage).not.toHaveBeenCalled()
+})
+
+it('retries a rejected running message with its stable identity against the current observed run', async () => {
+  const sendRunningMessage = vi
+    .fn()
+    .mockResolvedValueOnce({ ok: false, error: { message: '本轮状态已变化，请刷新后重新发送' } })
+    .mockResolvedValue({ ok: true, value: '{}' })
+  const t = await setup(true, undefined, workers, { sendRunningMessage })
+  await t.push('a', 2, { status: 'running' })
+  await t.edit('retry current run')
+  await t.submit()
+  await t.push('a', 3, { status: 'running', runId: 'next-observed-run' })
+  await t.submit()
+  expect(sendRunningMessage.mock.calls[1]![3]).toBe('next-observed-run')
+  expect(sendRunningMessage.mock.calls[1]![4]).toBe(sendRunningMessage.mock.calls[0]![4])
+})
+
+it('clears uncertain feedback when the actual user event arrives without restoring already sent text', async () => {
+  const t = await setup()
+  t.followup.mockRejectedValueOnce(new Error('transport failure after admission'))
+  await t.edit('accepted but receipt lost')
+  await t.submit()
+  expect(t.input().props.value).toBe('')
+  expect(t.text()).toContain('发送结果待确认')
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 2, { runId: 'actually-admitted', status: 'completed' }),
+      timeline: [{ id: 'actually-admitted:user', kind: 'user', text: 'accepted but receipt lost', time: '' }],
+    }),
+  )
+  expect(t.text()).not.toContain('发送结果待确认')
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
+  expect(t.input().props.value).toBe('')
+  expect(t.followup).toHaveBeenCalledOnce()
 })

@@ -1,6 +1,13 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useState, type ReactNode } from 'react'
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
-import { CLI_LABELS, cliOf, active, type TimelineItem, type Worker } from '../shared/types.ts'
+import {
+  CLI_LABELS,
+  cliOf,
+  active,
+  isUserInterrupted,
+  type TimelineItem,
+  type Worker,
+} from '../shared/types.ts'
 import { messageClock } from '../shared/telemetry.ts'
 import { UsageIndicator } from './telemetry.tsx'
 import { CopyText } from './copy-text.tsx'
@@ -39,7 +46,9 @@ function ProcessRow({ item }: { item: TimelineItem }) {
       <pre>{item.detail}</pre>
     </details>
   ) : (
-    <div className="cwn-process-event">{labels[item.state ?? item.text] ?? item.text}</div>
+    <div className="cwn-process-event">
+      {item.text === '已停止' ? item.text : (labels[item.state ?? item.text] ?? item.text)}
+    </div>
   )
 }
 function Progress({ rows, item, worker }: { rows: TimelineItem[]; item: TimelineItem; worker?: Worker }) {
@@ -57,7 +66,11 @@ function Progress({ rows, item, worker }: { rows: TimelineItem[]; item: Timeline
   const end = item.runEndedAt ? Date.parse(item.runEndedAt) : isRunning ? now : NaN
   const seconds =
     Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, Math.floor((end - start) / 1000)) : undefined
-  const label = labels[item.runOutcome ?? ''] ?? (isRunning ? labels[worker!.status] : '工作过程')
+  const label =
+    (worker && worker.runId === runOf(item) && isUserInterrupted(worker)) ||
+    rows.some((row) => row.kind === 'status' && row.text === '已停止')
+      ? '已停止'
+      : (labels[item.runOutcome ?? ''] ?? (isRunning ? labels[worker!.status] : '工作过程'))
   return (
     <details className="cwn-progress">
       <summary>
@@ -105,10 +118,12 @@ export function ConversationTimeline({
   items,
   latestItems = items,
   worker,
+  messageFeedback,
 }: {
   items: TimelineItem[]
   latestItems?: TimelineItem[]
   worker?: Worker
+  messageFeedback?: Record<string, ReactNode>
 }) {
   // Match rc.2 UserMessageNodeView / TurnTailNodeView. A newer user turn
   // hides the preceding assistant tail; a history page is never the live end.
@@ -173,6 +188,7 @@ export function ConversationTimeline({
                       <CopyText text={item.text} label="复制消息" iconOnly />
                     )}
                   </div>
+                  {messageFeedback?.[item.id]}
                 </div>
               </article>
             )}

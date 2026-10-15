@@ -10,6 +10,7 @@ import {
   CLI_SHORT_NAMES,
   LEGACY_ACCOUNT_RECORD_NOTICE,
   isRetiredCli,
+  isUserInterrupted,
   RETIRED_HARNESS_NOTICE,
   cliOf,
   workerName,
@@ -57,10 +58,17 @@ interface Task {
   done: Promise<Worker>
   settle: (worker: Worker) => void
   admission: Promise<string>
+  admissionFailure?: { error: unknown }
   queuedFollowupId?: string
   steer?: (message: string, requestId: string, signal?: AbortSignal) => Promise<void>
   steering: Map<string, { prompt: string; done: Promise<void> }>
   steeringController: AbortController
+}
+/** Internal identity distinguishes deliberate cancellation from timeouts and failures. */
+class UserStoppedError extends Error {
+  constructor() {
+    super('用户已停止任务')
+  }
 }
 export interface Submission {
   worker: Worker
@@ -95,6 +103,7 @@ export class WorkerRuntime {
   ) => Promise<void>
   private queuedExecutionGuard?: (worker: Worker) => void
   private stopEpochs = new Map<string, number>()
+  private preparations = new Map<string, { id: string; controller: AbortController; done: Promise<void> }>()
   private interruptions = new Map<
     string,
     {
@@ -127,6 +136,39 @@ export class WorkerRuntime {
   }
   setQueuedExecutionGuard(guard: (worker: Worker) => void): void {
     this.queuedExecutionGuard = guard
+  }
+  /** RPC cancellation can settle at the client before native metadata exits. Stop owns this wait. */
+  async prepareFollowup<T>(
+    parent: string,
+    id: string,
+    signal: AbortSignal,
+    prepare: (signal: AbortSignal, preparationId: string) => Promise<T>,
+  ): Promise<T> {
+    const worker = this.get(parent, id)
+    this.assertManagedIdle(worker)
+    this.assertCliEnabled(cliOf(worker.preference))
+    signal.throwIfAborted()
+    let settle!: () => void
+    const entry = {
+      id: randomUUID(),
+      controller: new AbortController(),
+      done: new Promise<void>((resolve) => {
+        settle = resolve
+      }),
+    }
+    this.preparations.set(id, entry)
+    try {
+      return await prepare(AbortSignal.any([signal, entry.controller.signal]), entry.id)
+    } catch (error) {
+      if (error instanceof ProcessCleanupUnconfirmedError) {
+        this.markCleanupBlocked(error)
+        this.drain()
+      }
+      throw error
+    } finally {
+      if (this.preparations.get(id) === entry) this.preparations.delete(id)
+      settle()
+    }
   }
   async sendRunningMessage(
     parent: string,
@@ -263,8 +305,9 @@ export class WorkerRuntime {
       return existing.done
     }
     if (worker.status === 'stopping') throw new Error('本轮正在停止，请稍后再试')
-    if (!worker.conversationId) throw new Error('尚未收到 CLI 会话标识，无法插队')
-    if (!this.storage.accountBinding(id)) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
+    const freshAfterStop = !worker.conversationId && isUserInterrupted(worker)
+    if (!worker.conversationId && !freshAfterStop) throw new Error('尚未收到 CLI 会话标识，无法插队')
+    if (!this.storage.accountBinding(id) && !freshAfterStop) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
     if (this.tasks.get(id)?.queuedFollowupId === queuedId) throw new Error('消息已开始执行，请使用停止操作')
     this.queuedExecutionGuard?.(worker)
     const previous = this.followups.list(id)
@@ -338,7 +381,8 @@ export class WorkerRuntime {
     this.assertManagedIdle(worker)
     this.assertCliEnabled(cliOf(worker.preference))
     if (worker.runId !== expectedRunId) throw new Error('本轮状态已变化，请刷新后重试')
-    if (!worker.conversationId) throw new Error('尚未收到 CLI 会话标识，无法继续发送')
+    if (!worker.conversationId && !isUserInterrupted(worker))
+      throw new Error('尚未收到 CLI 会话标识，无法继续发送')
     if (this.followupDispatches.has(id)) throw new Error('消息正在准备发送，请稍后再试')
     this.followups.update(id, 'pending')
     this.changed()
@@ -358,6 +402,7 @@ export class WorkerRuntime {
       this.blocked ||
       !this.followupLauncher ||
       this.followupDispatches.has(worker.id) ||
+      this.preparations.has(worker.id) ||
       this.interruptions.has(worker.id)
     )
       return
@@ -443,7 +488,8 @@ export class WorkerRuntime {
     if (this.blocked) throw new Error(this.blocked)
     if (
       [...this.storage.workers.values()].some(
-        (worker) => active(worker.status) && cliOf(worker.preference) === cli,
+        (worker) =>
+          (active(worker.status) || this.preparations.has(worker.id)) && cliOf(worker.preference) === cli,
       )
     )
       throw new Error('此 CLI 还有运行或排队中的任务，请等待结束后再修改此 CLI 设置或管理账号')
@@ -520,7 +566,7 @@ export class WorkerRuntime {
   private assertManagedIdle(worker: Worker): void {
     if (this.disposed) throw new Error('CLI Worker is shutting down')
     if (this.blocked) throw new Error(this.blocked)
-    if (active(worker.status) || this.tasks.has(worker.id))
+    if (active(worker.status) || this.tasks.has(worker.id) || this.preparations.has(worker.id))
       throw new Error('请等待任务结束并完成进程清理后再管理此任务')
   }
   assertLegacyRestart(parent: string, id: string): Worker {
@@ -631,7 +677,8 @@ export class WorkerRuntime {
     if (this.disposed) throw new Error('CLI Worker is shutting down')
     const worker = this.get(parent, id)
     if (isRetiredCli(cliOf(worker.preference))) throw new Error(RETIRED_HARNESS_NOTICE)
-    if (active(worker.status)) throw new Error('请等待本轮结束后再修改模型与强度')
+    if (active(worker.status) || this.preparations.has(id))
+      throw new Error('请等待本轮结束后再修改模型与强度')
     if (cliOf(worker.preference) !== cliOf(preference)) throw new Error('已有会话不能切换 CLI')
     this.assertCliEnabled(cliOf(preference))
     const updated = { ...worker, preference: { ...preference } }
@@ -650,6 +697,7 @@ export class WorkerRuntime {
     identity?: { agentName?: string; role?: RoleSnapshot },
     authorizedBinding?: string,
     queuedAdmission?: QueuedAdmission,
+    preparationId?: string,
   ): Submission {
     if (this.disposed) throw new Error('CLI Worker is shutting down')
     if (this.blocked) throw new Error(this.blocked)
@@ -658,11 +706,19 @@ export class WorkerRuntime {
     const previous = previousId ? this.get(parent, previousId) : undefined
     const effective = previous?.preference ?? preference
     this.assertCliEnabled(cliOf(effective))
+    if (
+      previous &&
+      this.preparations.has(previous.id) &&
+      this.preparations.get(previous.id)!.id !== preparationId
+    )
+      throw new Error('此会话正在准备发送，请稍后再试')
     if (previous && active(previous.status))
       throw new Error('This CLI conversation already has a running or queued turn')
-    if (previous && !previous.conversationId)
+    const freshAfterStop = previous && !previous.conversationId && isUserInterrupted(previous)
+    if (previous && !previous.conversationId && !freshAfterStop)
       throw new Error('No CLI conversation_id was received; start a new worker')
-    if (previous && !this.storage.accountBinding(previous.id)) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
+    if (previous && !this.storage.accountBinding(previous.id) && !freshAfterStop)
+      throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
     if (previous && previous.project !== canonical)
       throw new Error('Cannot resume a worker in another workspace')
     if (cliOf(effective) === 'kimi' && (previous?.mode ?? mode) === 'plan')
@@ -702,6 +758,7 @@ export class WorkerRuntime {
     worker.runId = randomUUID()
     worker.status = 'queued'
     worker.error = undefined
+    worker.interruptionReason = undefined
     worker.lastResult = undefined
     worker.observedModel = undefined
     worker.updatedAt = now
@@ -718,12 +775,6 @@ export class WorkerRuntime {
     const admission = authorizedBinding
       ? Promise.resolve(authorizedBinding)
       : readCliAccountBinding(cliOf(effective), this.backend, this.config, canonical, controller.signal)
-    void admission.catch((error) => {
-      if (error instanceof ProcessCleanupUnconfirmedError) {
-        this.markCleanupBlocked(error)
-        this.drain()
-      }
-    })
     const task: Task = {
       worker,
       prompt: promptForWorker(worker, prompt),
@@ -735,6 +786,13 @@ export class WorkerRuntime {
       steering: new Map(),
       steeringController: new AbortController(),
     }
+    void admission.catch((error) => {
+      if (!controller.signal.aborted) task.admissionFailure = { error }
+      if (error instanceof ProcessCleanupUnconfirmedError) {
+        this.markCleanupBlocked(error)
+        this.drain()
+      }
+    })
     this.tasks.set(worker.id, task)
     this.queue.push(task)
     this.changed()
@@ -760,25 +818,28 @@ export class WorkerRuntime {
   }
   private stopCurrent(parent: string, id: string): Promise<Worker> {
     const worker = this.get(parent, id)
+    const preparation = this.preparations.get(id)
+    preparation?.controller.abort(new UserStoppedError())
     const dispatch = this.followupDispatches.get(id)?.done
     this.pauseFollowups(id, '任务已停止，请确认后继续发送')
     this.changed()
     const task = this.tasks.get(id)
     if (!task)
-      return dispatch
-        ? dispatch.then(() => structuredClone(worker))
-        : Promise.resolve(structuredClone(worker))
+      return Promise.all([preparation?.done, dispatch]).then(() => {
+        if (preparation && this.blocked) throw new Error(this.blocked)
+        return structuredClone(worker)
+      })
     if (worker.status !== 'stopping') {
       worker.status = 'stopping'
       this.storage.save(worker)
-      task.controller.abort(new Error('用户已停止任务'))
+      task.controller.abort(new UserStoppedError())
       this.changed()
       if (!this.running.has(task)) {
         this.queue = this.queue.filter((t) => t !== task)
         void this.finishQueued(task, 'interrupted', '用户已取消排队任务')
       }
     }
-    return dispatch ? Promise.all([task.done, dispatch]).then(([result]) => result) : task.done
+    return Promise.all([task.done, preparation?.done, dispatch]).then(([result]) => result)
   }
   /** A queued task may already own a native account-query process. */
   private async finishQueued(task: Task, status: 'failed' | 'interrupted', reason: string): Promise<void> {
@@ -788,7 +849,15 @@ export class WorkerRuntime {
     } catch (error) {
       if (error instanceof ProcessCleanupUnconfirmedError) this.markCleanupBlocked(error)
     }
-    this.finish(task, this.blocked ? 'failed' : status, this.blocked ?? reason)
+    const priorFailure = task.admissionFailure
+    const stopped =
+      status === 'interrupted' && !priorFailure && task.controller.signal.reason instanceof UserStoppedError
+    this.finish(
+      task,
+      this.blocked || priorFailure ? 'failed' : status,
+      this.blocked ?? (priorFailure ? String(priorFailure.error) : stopped ? undefined : reason),
+      stopped && !this.blocked ? 'user' : undefined,
+    )
   }
   private drain(): void {
     if (this.disposed) return
@@ -814,17 +883,28 @@ export class WorkerRuntime {
       })
     }
   }
-  private finish(task: Task, status: Worker['status'], error?: string): void {
+  private finish(
+    task: Task,
+    status: Worker['status'],
+    error?: string,
+    interruptionReason?: Worker['interruptionReason'],
+  ): void {
     const worker = task.worker
     worker.status = status
     worker.error = error
+    worker.interruptionReason = interruptionReason
     worker.updatedAt = new Date().toISOString()
     try {
       this.storage.save(worker)
-      this.storage.append(worker, { kind: 'status', text: error ?? status, state: status })
+      this.storage.append(worker, {
+        kind: 'status',
+        text: error ?? (interruptionReason === 'user' ? '已停止' : status),
+        state: status,
+      })
     } catch (error) {
       worker.status = 'failed'
       worker.error = `状态持久化失败：${String(error)}`
+      worker.interruptionReason = undefined
       this.blocked = worker.error
     } finally {
       this.tasks.delete(worker.id)
@@ -832,7 +912,11 @@ export class WorkerRuntime {
       if (worker.status !== 'completed')
         this.pauseFollowups(
           worker.id,
-          worker.status === 'uncertain' ? '结果待核实，请核查后继续发送' : '前轮未正常完成，请确认后继续发送',
+          isUserInterrupted(worker)
+            ? '任务已停止，请确认后继续发送'
+            : worker.status === 'uncertain'
+              ? '结果待核实，请核查后继续发送'
+              : '前轮未正常完成，请确认后继续发送',
         )
       this.changed()
       // A later followup mutates the live worker. Completion consumers must retain
@@ -870,6 +954,8 @@ export class WorkerRuntime {
       worker.preference.model,
     )
     let failure: unknown
+    let failureBeforeStop = false
+    let releaseFailed = false
     let summaryConflict: string | undefined
     let release: (() => void | Promise<void>) | undefined
     let quiescent = false
@@ -1036,6 +1122,7 @@ export class WorkerRuntime {
         )
     } catch (error) {
       failure = error
+      failureBeforeStop = !!task.admissionFailure || !controller.signal.aborted
       if (error instanceof ProcessCleanupUnconfirmedError) this.markCleanupBlocked(error)
     } finally {
       clearTimeout(timeout)
@@ -1065,39 +1152,47 @@ export class WorkerRuntime {
     try {
       if ((!handle || quiescent) && !this.blocked) await release?.()
     } catch (error) {
-      failure ??= error
+      failure = error
+      releaseFailed = true
       if (error instanceof ProcessCleanupUnconfirmedError) this.markCleanupBlocked(error)
     }
     if (stderr.trim()) this.storage.append(worker, { kind: 'diagnostic', text: 'CLI 诊断', detail: stderr })
-    const error =
-      this.blocked ??
-      (controller.signal.aborted
-        ? String(controller.signal.reason)
-        : failure
-          ? String(failure)
-          : summaryConflict)
-    this.finish(
-      task,
-      this.blocked
-        ? 'failed'
-        : failure || controller.signal.aborted
-          ? controller.signal.aborted
-            ? 'interrupted'
-            : 'failed'
-          : summaryConflict
-            ? 'uncertain'
-            : 'completed',
-      error,
-    )
+    let status: Worker['status'] = 'completed'
+    let error: string | undefined
+    let interruptionReason: Worker['interruptionReason']
+    if (this.blocked) {
+      status = 'failed'
+      error = this.blocked
+    } else if (failureBeforeStop || releaseFailed) {
+      status = 'failed'
+      error = String(failure)
+    } else if (summaryConflict) {
+      status = 'uncertain'
+      error = summaryConflict
+    } else if (controller.signal.aborted) {
+      status = 'interrupted'
+      if (controller.signal.reason instanceof UserStoppedError) interruptionReason = 'user'
+      else error = String(controller.signal.reason)
+    } else if (failure) {
+      status = 'failed'
+      error = String(failure)
+    }
+    this.finish(task, status, error, interruptionReason)
   }
+
   async close(): Promise<void> {
     if (this.disposed) return
     this.disposed = true
     for (const worker of this.storage.workers.values())
       this.pauseFollowups(worker.id, 'Host 已关闭，请确认后继续发送')
-    const tasks = [...this.tasks.values()]
+    const workers = new Set([...this.tasks.keys(), ...this.preparations.keys()])
     const interruptions = [...this.interruptions.values()].map((operation) => operation.done)
-    await Promise.all(tasks.map((task) => this.stop(task.worker.parentSessionId, task.worker.id)))
+    await Promise.allSettled(
+      [...workers].map((id) => {
+        const worker = this.storage.workers.get(id)!
+        return this.stop(worker.parentSessionId, id)
+      }),
+    )
     await Promise.allSettled(interruptions)
     await Promise.allSettled([...this.followupRuns])
     this.listeners.clear()

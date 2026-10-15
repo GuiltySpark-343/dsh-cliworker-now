@@ -55,6 +55,7 @@ function fixture(
   options: {
     cleanup?: boolean
     cleanupGate?: ReturnType<typeof deferred>
+    cleanupStarted?: () => void
     selectionGate?: ReturnType<typeof deferred>
     cli?: 'pi' | 'omp'
     steer?: (message: string, requestId: string, signal?: AbortSignal) => Promise<void>
@@ -119,6 +120,7 @@ function fixture(
         done: outcome.promise,
         terminate: close,
         waitForExit: async () => {
+          options.cleanupStarted?.()
           await options.cleanupGate?.promise
           return options.cleanup !== false
         },
@@ -616,7 +618,11 @@ it('prioritizes a selected card only after confirmed cleanup and preserves the r
   expect(f.worker.status).toBe('stopping')
   cleanupGate.resolve()
   await sending
-  expect((await first.done).status).toBe('interrupted')
+  expect(await first.done).toMatchObject({
+    status: 'interrupted',
+    interruptionReason: 'user',
+    error: undefined,
+  })
   const priority = await f.ready(2)
   expect(priority.spec.argv.at(-1)).toBe('任务：\nurgent')
   expect(priority.spec.argv).toContain('synthetic-session')
@@ -885,4 +891,159 @@ it('keeps pending queue IDs deduplicated even when bounded delivery receipts rot
   )
   expect(duplicate).toEqual(original)
   expect(f.items()).toHaveLength(1)
+})
+
+it('treats a confirmed user stop as normal and resumes the same native conversation', async () => {
+  const f = fixture(),
+    first = f.start()
+  await f.ready(1)
+  const runId = f.worker.runId
+  const stopped = await f.runtime.stop('parent', f.worker.id)
+  expect(stopped).toMatchObject({ status: 'interrupted', interruptionReason: 'user', error: undefined })
+  expect(await first.done).toEqual(stopped)
+  expect(f.storage.history(f.worker.id).at(-1)).toMatchObject({
+    kind: 'status',
+    state: 'interrupted',
+    text: '已停止',
+  })
+  await f.service.followup('parent', f.worker.id, 'after stop', new AbortController().signal)
+  const next = await f.ready(2)
+  expect(next.spec.argv).toContain('synthetic-session')
+  expect(f.worker.runId).not.toBe(runId)
+  expect(f.worker.interruptionReason).toBeUndefined()
+  next.finish()
+})
+
+it('reopens a normally stopped worker without a native id as a fresh native session', async () => {
+  const f = fixture(),
+    first = f.start()
+  await f.ready(1)
+  f.worker.conversationId = undefined
+  await f.runtime.stop('parent', f.worker.id)
+  await first.done
+  const originalId = f.worker.id
+  await f.service.followup('parent', f.worker.id, 'new native session', new AbortController().signal)
+  const next = await f.ready(2)
+  expect(f.worker.id).toBe(originalId)
+  expect(next.spec.argv).not.toContain('--conversation')
+  expect(f.storage.history(originalId).filter((event) => event.kind === 'user')).toHaveLength(2)
+  next.finish()
+})
+
+it('can start again after cancellation before native account binding, without bypassing fresh selection', async () => {
+  const f = fixture()
+  f.worker.conversationId = undefined
+  f.worker.status = 'interrupted'
+  f.worker.interruptionReason = 'user'
+  rmSync(join(f.directory, `${f.worker.id}.account-binding.json`))
+  await f.service.followup('parent', f.worker.id, 'new after preparation stop', new AbortController().signal)
+  const next = await f.ready(1)
+  expect(f.service.querySelection).toHaveBeenCalled()
+  expect(next.spec.argv).not.toContain('--conversation')
+  expect(f.storage.accountBinding(f.worker.id)).toBe('synthetic-account')
+  next.finish()
+})
+
+it.each([
+  ['ERROR', 'failed', 'synthetic failure'],
+  ['UNCERTAIN', 'uncertain', '结果待核实'],
+])(
+  'preserves an observed %s result when Stop arrives during cleanup',
+  async (nativeStatus, status, error) => {
+    const cleanupGate = deferred(),
+      cleanupStarted = vi.fn(),
+      f = fixture({ cleanupGate, cleanupStarted }),
+      first = f.start()
+    const call = await f.ready(1)
+    call.finish(nativeStatus)
+    await vi.waitFor(() => expect(cleanupStarted).toHaveBeenCalled())
+    const stopping = f.runtime.stop('parent', f.worker.id)
+    cleanupGate.resolve()
+    const result = await stopping
+    expect(result).toMatchObject({ status, interruptionReason: undefined })
+    expect(result.error).toContain(error)
+    expect(await first.done).toEqual(result)
+  },
+)
+
+it('waits for cancelled Gateway preparation cleanup before Stop completes or another message starts', async () => {
+  const selectionGate = deferred(),
+    f = fixture({ selectionGate }),
+    signal = new AbortController()
+  const send = f.service.followup('parent', f.worker.id, 'cancel preparation', signal.signal)
+  const rejected = expect(send).rejects.toThrow()
+  await vi.waitFor(() => expect(f.service.querySelection).toHaveBeenCalledTimes(1))
+  signal.abort(new Error('synthetic client disconnected'))
+  let stopped = false
+  const stop = f.runtime.stop('parent', f.worker.id).then(() => {
+    stopped = true
+  })
+  await Promise.resolve()
+  expect(stopped).toBe(false)
+  expect(f.calls).toHaveLength(0)
+  expect(() => f.runtime.assertAccountIdle('antigravity')).toThrow('运行或排队')
+  expect(() =>
+    f.runtime.configureWorker('parent', f.worker.id, {
+      ...f.worker.preference,
+      model: 'different-model',
+    }),
+  ).toThrow('结束后再修改')
+  await expect(
+    f.service.followup('parent', f.worker.id, 'too early', new AbortController().signal),
+  ).rejects.toThrow('清理')
+  selectionGate.resolve()
+  await rejected
+  await stop
+  expect(stopped).toBe(true)
+  expect(f.calls).toHaveLength(0)
+  await f.service.followup('parent', f.worker.id, 'after cleanup', new AbortController().signal)
+  ;(await f.ready(1)).finish()
+})
+
+it('blocks later messages if cancelled Gateway preparation cannot confirm cleanup', async () => {
+  const gate = deferred(),
+    f = fixture()
+  f.service.querySelection.mockImplementation(async () => {
+    await gate.promise
+    throw new ProcessCleanupUnconfirmedError()
+  })
+  const send = f.service.followup(
+    'parent',
+    f.worker.id,
+    'cancel unsafe preparation',
+    new AbortController().signal,
+  )
+  const rejected = expect(send).rejects.toThrow(ProcessCleanupUnconfirmedError)
+  await vi.waitFor(() => expect(f.service.querySelection).toHaveBeenCalledTimes(1))
+  const stop = f.runtime.stop('parent', f.worker.id)
+  const stopRejected = expect(stop).rejects.toThrow('清理')
+  gate.resolve()
+  await rejected
+  await stopRejected
+  expect(f.calls).toHaveLength(0)
+  await expect(
+    f.service.followup('parent', f.worker.id, 'blocked', new AbortController().signal),
+  ).rejects.toThrow('清理')
+})
+
+it('preserves a queued account admission failure that occurred before the user pressed Stop', async () => {
+  const f = fixture()
+  f.start()
+  await f.ready(1)
+  vi.mocked(readCliAccountBinding).mockRejectedValueOnce(new Error('synthetic account lookup failed'))
+  const queued = f.runtime.submit(
+    'parent',
+    f.worker.project,
+    'queued synthetic writer',
+    'synthetic queued prompt',
+    f.worker.preference,
+    'accept-edits',
+  )
+  await Promise.resolve()
+  expect(queued.worker.status).toBe('queued')
+  const stopped = await f.runtime.stop('parent', queued.worker.id)
+  expect(stopped).toMatchObject({ status: 'failed', interruptionReason: undefined })
+  expect(stopped.error).toContain('synthetic account lookup failed')
+  expect(await queued.done).toEqual(stopped)
+  expect(f.calls).toHaveLength(1)
 })
