@@ -45,6 +45,7 @@ import { authorizeSelection, ACCOUNT_CHANGED } from './authorized-catalog.ts'
 import { readCliAccountBinding } from './cli-account-binding.ts'
 import { assertFirstPartyConfiguration, firstPartyEnvironment } from './first-party-models.ts'
 import { agyBackgroundEnvironment } from './agy-background-environment.ts'
+import { AgyProtocol } from './protocol.ts'
 
 interface Task {
   worker: Worker
@@ -253,6 +254,7 @@ export class WorkerRuntime {
         telemetry || context
           ? {
               usage: telemetry?.usage,
+              sessionDurationSeconds: telemetry?.sessionDurationSeconds,
               contextUsed: telemetry?.contextUsed,
               contextCapacity: telemetry?.contextCapacity,
               ...context,
@@ -274,6 +276,7 @@ export class WorkerRuntime {
     const rows = foldEvents(
       this.storage.history(worker.id),
       active(worker.status) ? undefined : { runId: worker.runId, status: worker.status },
+      cliOf(worker.preference),
     )
     for (const runId of new Set(rows.map((row) => row.id.split(':')[0]!)))
       attachTelemetry(rows, runId, this.runTelemetry(worker, runId))
@@ -512,6 +515,7 @@ export class WorkerRuntime {
       worker.preference.model,
     )
     let failure: unknown
+    let summaryConflict: string | undefined
     let release: (() => void | Promise<void>) | undefined
     let quiescent = false
     try {
@@ -654,11 +658,18 @@ export class WorkerRuntime {
           `CLI exited with ${outcome.exitCode}: ${stderr || protocol.result?.response || 'no diagnostic'}`,
         )
       if (!protocol.result) throw new Error('CLI exited without a final result')
-      if (protocol.result.status !== 'SUCCESS')
+      if (
+        protocol instanceof AgyProtocol &&
+        expectedConversation &&
+        protocol.result.conversationId === expectedConversation &&
+        protocol.result.status === 'ERROR' &&
+        protocol.result.completedStepResponse
+      )
+        summaryConflict = `CLI 汇总状态冲突，结果待核实：本轮回复及已观察步骤均为 DONE，但 CLI 最终报告 ERROR。请核查本轮输出和实际产物，不要自动重试。原始汇总错误：${protocol.result.error || '未提供错误详情'}`
+      else if (protocol.result.status !== 'SUCCESS')
         throw new Error(
           `CLI ${protocol.result.status}: ${protocol.result.error || protocol.result.response || stderr || '请检查 CLI 认证及模型/强度兼容性'}`,
         )
-      worker.lastResult = protocol.result.response
     } catch (error) {
       failure = error
       if (error instanceof ProcessCleanupUnconfirmedError) this.markCleanupBlocked(error)
@@ -675,6 +686,14 @@ export class WorkerRuntime {
         }
         await Promise.allSettled([...readers, handle.done])
       }
+      // Preserve only this process's observed AGY text when its aggregate is
+      // unsuccessful or absent. Native result text can include older turns.
+      if (protocol instanceof AgyProtocol)
+        worker.lastResult =
+          protocol.result?.status === 'SUCCESS'
+            ? protocol.result.response
+            : protocol.currentTurnResponse || undefined
+      else if (protocol.result) worker.lastResult = protocol.result.response
     }
     try {
       if ((!handle || quiescent) && !this.blocked) await release?.()
@@ -685,7 +704,11 @@ export class WorkerRuntime {
     if (stderr.trim()) this.storage.append(worker, { kind: 'diagnostic', text: 'CLI 诊断', detail: stderr })
     const error =
       this.blocked ??
-      (controller.signal.aborted ? String(controller.signal.reason) : failure ? String(failure) : undefined)
+      (controller.signal.aborted
+        ? String(controller.signal.reason)
+        : failure
+          ? String(failure)
+          : summaryConflict)
     this.finish(
       task,
       this.blocked
@@ -694,7 +717,9 @@ export class WorkerRuntime {
           ? controller.signal.aborted
             ? 'interrupted'
             : 'failed'
-          : 'completed',
+          : summaryConflict
+            ? 'uncertain'
+            : 'completed',
       error,
     )
   }

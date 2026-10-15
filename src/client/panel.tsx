@@ -39,6 +39,7 @@ const status: Record<WorkerStatus, string> = {
   stopping: '正在停止',
   completed: '已完成',
   failed: '失败',
+  uncertain: '结果待核实',
   interrupted: '已中断',
 }
 interface PanelProps {
@@ -210,7 +211,7 @@ function SessionPanel({
         (filter === 'active'
           ? active(w.status)
           : filter === 'attention'
-            ? w.status === 'failed' || w.status === 'interrupted'
+            ? w.status === 'failed' || w.status === 'interrupted' || w.status === 'uncertain'
             : w.status === 'completed'))
     )
   })
@@ -596,7 +597,7 @@ function SessionPanel({
         </div>
       )}
       {worker?.error && (
-        <div role="status" className="cwn-error">
+        <div role="status" className={worker.status === 'uncertain' ? 'cwn-notice cwn-warning' : 'cwn-error'}>
           {worker.error}
         </div>
       )}

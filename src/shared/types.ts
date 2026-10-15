@@ -63,7 +63,14 @@ export const effortLabel = (effort: string) =>
   effort === 'default' ? '默认' : effort.charAt(0).toUpperCase() + effort.slice(1)
 export const LEGACY_ACCOUNT_RECORD_NOTICE = '此历史任务缺少账号记录，请新建任务'
 export type Effort = (typeof EFFORTS)[number]
-export type WorkerStatus = 'queued' | 'running' | 'stopping' | 'completed' | 'failed' | 'interrupted'
+export type WorkerStatus =
+  | 'queued'
+  | 'running'
+  | 'stopping'
+  | 'completed'
+  | 'failed'
+  | 'interrupted'
+  | 'uncertain'
 export type TaskMode = 'plan' | 'accept-edits'
 export interface Preference {
   /** Missing in v0.1.x data means Antigravity. */
@@ -136,6 +143,10 @@ export interface WorkerEvent {
 }
 export interface TimelineItem {
   usage?: TokenUsage
+  /** Duration reported for this individual response step; never added to session totals. */
+  durationSeconds?: number
+  /** Upstream AGY conversation total, distinct from the locally timed run. */
+  sessionDurationSeconds?: number
   id: string
   kind: WorkerEvent['kind']
   text: string
@@ -176,6 +187,7 @@ export const active = (status: WorkerStatus) =>
 export function foldEvents(
   events: readonly WorkerEvent[],
   endedRun?: { runId: string; status: WorkerStatus },
+  cli?: CliId,
 ): TimelineItem[] {
   const rows: TimelineItem[] = []
   const steps = new Map<string, TimelineItem>()
@@ -192,10 +204,28 @@ export function foldEvents(
   for (const event of events) {
     if (event.kind === 'status') {
       const terminal = event.state ?? event.text
-      if (terminal === 'completed' || terminal === 'failed' || terminal === 'interrupted')
+      if (
+        terminal === 'completed' ||
+        terminal === 'failed' ||
+        terminal === 'interrupted' ||
+        terminal === 'uncertain'
+      )
         markEnded(event.runId, terminal)
     }
     if (event.kind === 'result') {
+      // A failed aggregate is diagnostic evidence, not a replacement for
+      // already observed text (including histories written by older versions).
+      if (cli === 'antigravity' && event.state && event.state !== 'SUCCESS') {
+        rows.push({
+          id: `${event.runId}:event:${event.seq}`,
+          kind: 'diagnostic',
+          text: 'CLI 最终汇总',
+          time: event.time,
+          state: event.state,
+          detail: event.detail ?? event.text,
+        })
+        continue
+      }
       const lastAssistant = rows.findLast(
         (row) => row.kind === 'assistant' && row.id.startsWith(event.runId + ':'),
       )
@@ -246,7 +276,7 @@ export function foldEvents(
     if (event.kind === 'user' && !run.runStartedAt) run.runStartedAt = event.time
     if (
       event.kind === 'status' &&
-      ['completed', 'failed', 'interrupted'].includes(event.state ?? event.text)
+      ['completed', 'failed', 'interrupted', 'uncertain'].includes(event.state ?? event.text)
     ) {
       run.runEndedAt = event.time
       run.runOutcome = (event.state ?? event.text) as WorkerStatus

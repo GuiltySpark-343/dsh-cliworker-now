@@ -11,6 +11,7 @@ const status: Record<WorkerStatus, string> = {
   stopping: '正在停止',
   completed: '已完成',
   failed: '失败',
+  uncertain: '结果待核实',
   interrupted: '已中断',
 }
 export type WorkerManagementAction = 'title' | 'name' | 'delete'

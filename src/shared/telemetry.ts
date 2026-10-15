@@ -7,6 +7,8 @@ export interface TokenUsage {
   scope: 'response' | 'run' | 'session' | 'reported'
 }
 export interface Telemetry {
+  /** Upstream AGY conversation duration, not the duration of the current invocation. */
+  sessionDurationSeconds?: number
   contextEstimated?: boolean
   contextSource?: string
   usage?: TokenUsage

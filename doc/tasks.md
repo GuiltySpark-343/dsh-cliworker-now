@@ -1154,3 +1154,14 @@
 - Windows 合成对照中，相同环境和 cmd，100 字符 cwd 可正常启动，实际存在的 299 字符 cwd 则 spawn ENOENT 且管道不可读；该目录明确为模拟，不是已被安装器删除的原失败现场。仅将本轮隔离根及缓存移至较短路径、保持依赖/构建脚本和包管理器版本不变后，原生命令退出 0，prepack 完成，357 个 lib 文件及 Host/Client/协议/辅助资产齐备，bundle 原生登记成功。长路径是结合对照与复验支持的原因判断，不把合成探针写成原现场直接证据。成功与失败记录位于 `.test-data/github-source-078/windows/`。安装后的真实 Desktop profile 三项配置哈希保持不变，顶层安装器 close/exit 0 已确认；最后 SSH 超时导致额外 exports 导入探针未上传、未执行，最终全进程退出观测未完成，不能声明 Windows 完整加载或全部后代清理通过。远端隔离安装及缓存保留。
 - 双语 README 和发布模板补齐 Desktop/Web 命令、Node/pnpm 前置条件、精确构建授权、固定 commit、旧 v0.7.8 Tag 限制及 Windows 路径注意事项。主规格同步 GitHub 源码安装需求；`pnpm spec:check` 严格校验通过，相关差异检查通过。
 - 本次仅最小构建/安装验收，真实账号查询、登录和模型调用为 0。未运行全量回归、Web profile 独立实装、全部 CLI 生成或 Windows 完整 Host/UI 生命周期；用户实际 Desktop profile 与全局构建保护未修改。默认 npm @latest 年龄等待后的升级仍保持原待办。
+
+## 2026-10-15：v0.7.9 GitHub #1/#2 AGY 修复（最小验收）
+
+- 用户本轮明确定位开发版本 v0.7.9，正式提交 GitHub 前不额外升号；bug 修复只做最小验收，全量验收留在获准正式提交 GitHub 之前。包清单、AGENTS、OpenSpec 配置/流程和双语 README 已同步；已发布 v0.7.8 下载地址保持有效版本。
+- [Issue #1](https://github.com/SuperWheel/dsh-cliworker-now/issues/1)：保存本轮实际回复与独立汇总错误；AGY 续聊仅在退出、会话身份、完整 DONE 步骤、非空 DONE 回复和无本轮错误/清理异常等证据同时满足时显示 uncertain（结果待核实），不宣称成功或已证明旧 EOF。宿主 job 外层仍保守 failed，JSON 独立返回 response/error/guidance。旧 AGY ERROR 汇总读取时不覆盖实际正文，其他 CLI 折叠规则不变。
+- [Issue #2](https://github.com/SuperWheel/dsh-cliworker-now/issues/2)：完成的空/纯空白 assistant 不生成消息块，过程区保留其 Token、时间、步骤耗时；活动流式、工具和错误保留。最后可见回复功能条跳过隐藏空步骤，本轮时间与 CLI 会话累计耗时/用量分别展示，不重复相加。
+- 最小回归（命令均加 `pnpm --config.verifyDepsBeforeRun=false`，避免现有 pnpm 环境触发依赖重装）：`test tests/agy-run-outcome.test.ts tests/core.test.ts tests/adapters.test.ts` 85/85；`test tests/telemetry.test.ts` 10/10；`test tests/conversation-timeline.test.tsx` 10/10；`test tests/panel.test.tsx -t 'uncertain AGY|keeps .* filtering|leaves the recycle view'` 8/8（53 项名称过滤未执行）；Panel 原生历史/streaming tail 两项定向 2/2（59 项过滤未执行）。合计 115 个不同的相关用例通过，没有运行全量测试。
+- Host/Client `typecheck` 通过；最终 `build:preview` 通过，preview 的 139 个源文件与当前 src 字节一致，版本 0.7.9。Host SHA-256 `95cd82fd8ce63381fdae3229eafc90f233f8a019f6ff04d403a447a7612653c0`；Client `1f93222f6c95b57670c902f34983541588c74d3a40ed393f7b2c497f464b537f`。仅隔离包 `.cache/preview-package`，未运行正式 build。
+- Tabbit 实际渲染使用真实 ConversationTimeline、MarkdownText、UsageIndicator 和生产样式，输入全部明确标注模拟。六模式覆盖完成空步骤、空流式、正文流式、失败空输出、结果待核实、历史页：完成模式 2 个 article/0 空 assistant、过程 3 个统计行；步骤 Token 23/11/7 可查看，本轮 5 秒与累计 4100 秒独立，最终总用量保持 410 tok；末条 tail=always，流式及历史 tail=hover。截图逐张视觉核查通过。证据 `.cache/agy-issues-v079/{verification.json,completed.png,process.png}`；可复现夹具 `.cache/issue-2-ui/`。
+- 中间检查如实保留：pnpm 初次自动检查依赖因无 TTY 中止，改为既有配置开关，无安装/清理依赖；新测试初跑两处断言使用不当已修正（undefined 的 not.toContain 和两个同类统计控件的选择范围），重跑通过；隔离 UI 初次 bundle 缺少 automatic JSX 导致 React is not defined，修正夹具构建并补齐生产样式后刷新，无脚本错误。独立审查发现空/纯空白 result 会话 ID 可能进入 uncertain，已在 parser 严格拒绝并在 runtime 二次比对，补协议及运行时回归，复审无剩余确定问题。
+- `spec:check` 归档前后均 15/15 通过，差异检查通过；本 change 的规格、实现和最小验收完成后同步归档，既有三个未完成 change 保持原状态。没有 Windows 实机、真实 CLI/模型、正式 Desktop 更新、全量验收、GitHub 推送/评论/关闭 issue 或发布；浏览器模拟不等同于这些实机验收。既有图标归档、宣传资料与历史文档改动保留。

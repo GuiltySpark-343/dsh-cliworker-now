@@ -19,7 +19,11 @@ Choose a CLI, model and role, dispatch a named agent, follow its work in the sid
 
 </div>
 
-The current version is **v0.7.8**. Routine changes use focused verification; full acceptance runs during an approved release.
+The development version is **v0.7.9 (unreleased)** and stays fixed until the formal GitHub submission. Bug fixes use focused verification; full acceptance runs before an approved GitHub submission. Download links below still point to the published v0.7.8 package.
+
+When a resumed AGY turn has a complete reply but its final aggregate reports ERROR, sufficient conflicting evidence produces an `uncertain` outcome. The current reply and original error remain available; this does not establish success or prove that the error is historical. Verify actual results before retrying writes. Harness jobs support only completed/failed/killed, so the outer job remains failed with an explicit uncertainty notice and structured outcome. Current errors, nonzero exits, partial output and cancellation retain their failure or interruption outcome.
+
+Finished empty intermediate replies appear in the expandable work process with their usage, timestamps and reported duration. Task duration uses local timing for this run; upstream AGY duration and usage are labelled as conversation totals and are never added to step values. Streaming replies, tools and errors remain visible.
 
 **On this page**
 
@@ -380,7 +384,7 @@ The project uses **TypeScript ESM and React**. The Host manages processes and pe
 ```sh
 pnpm install --frozen-lockfile
 pnpm --config.verify-deps-before-run=false typecheck
-pnpm --config.verify-deps-before-run=false test
+pnpm --config.verify-deps-before-run=false test <affected-test-files>
 pnpm --config.verify-deps-before-run=false build:preview
 ```
 

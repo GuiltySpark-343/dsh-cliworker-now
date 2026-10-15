@@ -378,12 +378,18 @@ Desktop 不会读取你的 `.zshrc`。插件会识别部分常见安装位置；
 
 ## 8. 开发与验证
 
+当前开发版本为 **v0.7.9（未发布）**，正式提交 GitHub 前不额外升号。修复阶段只做相关最小验收，全量验收在获准的正式 GitHub 提交之前执行；上方下载链接仍指向已发布的 v0.7.8。
+
+AGY 续聊若本轮已完整返回但最终汇总为 ERROR，会在证据充分时显示「结果待核实」，保留本轮回复和原始错误；这不代表任务成功或已证实错误来自历史。请先核查实际结果，避免重复写入。宿主后台任务仅有成功/失败/中断三类，其外层仍显示失败，但详情及回传结果会明确区分 `uncertain`。真实本轮错误、非零退出、部分输出和取消仍保留失败或中断状态。
+
+已结束且无正文的中间回复收纳在「工作过程」，可展开查看步骤用量、时间及 CLI 报告的耗时。任务时长采用本轮本地计时，AGY 上游耗时和用量标注为会话累计，不与步骤统计重复相加；正在流式输出的回复、工具和错误记录继续展示。
+
 项目使用 **TypeScript ESM + React**：Host 管理进程与持久化，Client 通过 Harness 原生 Gateway 访问 Host，共享协议负责两侧的数据约定。
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm --config.verify-deps-before-run=false typecheck
-pnpm --config.verify-deps-before-run=false test
+pnpm --config.verify-deps-before-run=false test <关联测试文件>
 pnpm --config.verify-deps-before-run=false build:preview
 ```
 

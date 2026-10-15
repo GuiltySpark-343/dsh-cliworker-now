@@ -8,6 +8,7 @@ import { Glyph } from './icons.tsx'
 const labels: Record<string, string> = {
   completed: '已完成',
   failed: '失败',
+  uncertain: '结果待核实',
   interrupted: '已中断',
   running: '运行中',
   queued: '排队中',
@@ -15,6 +16,16 @@ const labels: Record<string, string> = {
 }
 const markdownLabels = { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' }
 const runOf = (item: TimelineItem) => item.id.split(':')[0]
+function completedEmptyReply(item: TimelineItem, worker?: Worker): boolean {
+  return (
+    item.kind === 'assistant' &&
+    !item.text.trim() &&
+    (item.state === 'DONE' ||
+      !!item.runEndedAt ||
+      (!!item.runOutcome && !active(item.runOutcome)) ||
+      (worker?.runId === runOf(item) && !active(worker.status)))
+  )
+}
 function ProcessRow({ item }: { item: TimelineItem }) {
   return item.kind === 'tool' || item.kind === 'diagnostic' ? (
     <details className="cwn-tool">
@@ -58,11 +69,26 @@ function Progress({ rows, item, worker }: { rows: TimelineItem[]; item: Timeline
       </summary>
       <div className="cwn-process-body">
         <p className="cwn-process-note">以下为 CLI 公开的工作记录；未公开的思考内容无法展示。</p>
+        {item.sessionDurationSeconds !== undefined && (
+          <p className="cwn-process-note">CLI 会话累计耗时：{item.sessionDurationSeconds}秒</p>
+        )}
         {rows
-          .filter((row) => !['user', 'assistant'].includes(row.kind))
-          .map((row) => (
-            <ProcessRow key={row.id} item={row} />
-          ))}
+          .filter((row) => !['user', 'assistant'].includes(row.kind) || completedEmptyReply(row, worker))
+          .map((row) =>
+            row.kind === 'assistant' ? (
+              <div key={row.id} className="cwn-process-event" data-empty-reply-id={row.id}>
+                <span>无正文回复 · </span>
+                <UsageIndicator usage={row.usage} reply />
+                {row.durationSeconds !== undefined && <span> · CLI 报告耗时：{row.durationSeconds}秒</span>}
+                <span> · </span>
+                <time dateTime={row.time} title={new Date(row.time).toLocaleString('zh-CN')}>
+                  {messageClock(row.time)}
+                </time>
+              </div>
+            ) : (
+              <ProcessRow key={row.id} item={row} />
+            ),
+          )}
       </div>
     </details>
   )
@@ -79,7 +105,9 @@ export function ConversationTimeline({
   // Match rc.2 UserMessageNodeView / TurnTailNodeView. A newer user turn
   // hides the preceding assistant tail; a history page is never the live end.
   const latestUser = latestItems.findLast((item) => item.kind === 'user')?.id
-  const lastContent = latestItems.findLast((item) => ['user', 'assistant', 'tool'].includes(item.kind))
+  const lastContent = latestItems.findLast(
+    (item) => ['user', 'assistant', 'tool'].includes(item.kind) && !completedEmptyReply(item, worker),
+  )
   const latestReply =
     lastContent?.kind === 'assistant' &&
     lastContent.text.trim() &&
@@ -101,7 +129,7 @@ export function ConversationTimeline({
         return (
           <Fragment key={item.id}>
             {first && <Progress rows={runs.get(id)!} item={item} worker={worker} />}
-            {(item.kind === 'user' || item.kind === 'assistant') && (
+            {(item.kind === 'user' || (item.kind === 'assistant' && !completedEmptyReply(item, worker))) && (
               <article
                 className={`cwn-message ${item.kind}`}
                 data-message-id={item.id}

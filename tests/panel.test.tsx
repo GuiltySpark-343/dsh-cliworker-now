@@ -486,6 +486,29 @@ it('preserves the overview filters and each draft across back navigation', async
   await t.push('a')
   expect(t.input().props.value).toBe('draft remains')
 })
+it('shows uncertain AGY results as attention warnings, preserves replies and never retries automatically', async () => {
+  const uncertain: Worker = {
+    ...workers[0]!, status: 'uncertain', lastResult: 'AGY_READY',
+    error: '本轮已返回，但 CLI 汇总状态异常；结果待核实，请勿自动重试。',
+  }
+  const t = await setup(false, undefined, [uncertain, workers[1]!])
+  await t.click('已完成')
+  expect(t.r.root.findAllByProps({ 'data-open-worker-id': 'a' })).toHaveLength(0)
+  await t.click('异常')
+  expect(t.r.root.findAllByProps({ 'data-open-worker-id': 'a' })).toHaveLength(1)
+  expect(t.text()).toContain('结果待核实')
+  await t.select('a')
+  await act(async () => t.streams.at(-1)!.push({
+    ...t.snapshot('a'),
+    timeline: [{ id: 'run-a:assistant:45', kind: 'assistant', text: 'AGY_READY', state: 'DONE', time: '2026-10-15T00:00:00Z' }],
+  }))
+  expect(t.r.root.findByProps({ className: 'cwn-notice cwn-warning' }).children).toContain(uncertain.error)
+  expect(t.r.root.findAllByProps({ className: 'cwn-error' })).toHaveLength(0)
+  expect(t.text()).toContain('AGY_READY')
+  expect(t.input().props.disabled).toBeFalsy()
+  expect(t.followup).not.toHaveBeenCalled()
+  expect(t.api.cliworker.restartWorker).not.toHaveBeenCalled()
+})
 it.each([
   ['进行中', 'running'],
   ['已完成', 'completed'],

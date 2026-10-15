@@ -7,6 +7,8 @@ const obj = (v: unknown): Record<string, any> =>
   v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, any>) : {}
 const count = (v: unknown): number | undefined =>
   typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : undefined
+const duration = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined
 function usage(v: unknown, scope: TokenUsage['scope'], cacheSeparate = false): TokenUsage | undefined {
   const u = obj(v),
     input = count(u.input_tokens),
@@ -24,6 +26,7 @@ function usage(v: unknown, scope: TokenUsage['scope'], cacheSeparate = false): T
 }
 export interface RunTelemetry extends Telemetry {
   replies: Record<string, TokenUsage>
+  replyDurations?: Record<string, number>
   finalReply?: TokenUsage
 }
 /** Only public, observed CLI envelopes; no model-name capacity guesses. */
@@ -41,8 +44,14 @@ export function extractTelemetry(cli: CliId, records: readonly unknown[]): RunTe
       ) {
         const u = usage(step.usage, 'response')
         if (u) result.replies[String(step.step_index)] = u
+        const seconds = duration(step.duration_seconds)
+        if (seconds !== undefined) (result.replyDurations ??= {})[String(step.step_index)] = seconds
       }
-      if (v.event === 'result') result.usage = usage(obj(v.result).usage, 'session') ?? result.usage
+      if (v.event === 'result') {
+        result.usage = usage(obj(v.result).usage, 'session') ?? result.usage
+        const seconds = duration(obj(v.result).duration_seconds)
+        if (seconds !== undefined) result.sessionDurationSeconds = seconds
+      }
     } else if (cli === 'codex' && v.type === 'turn.completed') {
       // CLI's receipt does not reliably distinguish resumed-thread vs turn counters.
       result.usage = usage(v.usage, 'reported') ?? result.usage
@@ -117,13 +126,21 @@ export class TelemetryReader {
           const v = JSON.parse(line),
             step = obj(v.step_update)
           // Retain only metric envelopes, not conversation text/tool output.
-          if (v.event === 'step_update' && step.usage)
+          if (v.event === 'step_update' && (step.usage || step.duration_seconds !== undefined))
             entry.records.push({
               event: v.event,
-              step_update: { step_type: step.step_type, step_index: step.step_index, usage: step.usage },
+              step_update: {
+                step_type: step.step_type,
+                step_index: step.step_index,
+                usage: step.usage,
+                duration_seconds: step.duration_seconds,
+              },
             })
           else if (v.event === 'result')
-            entry.records.push({ event: v.event, result: { usage: obj(v.result).usage } })
+            entry.records.push({
+              event: v.event,
+              result: { usage: obj(v.result).usage, duration_seconds: obj(v.result).duration_seconds },
+            })
           else if (v.type === 'result' || v.type === 'turn.completed')
             entry.records.push({ type: v.type, usage: v.usage, modelUsage: v.modelUsage, tokens: v.tokens })
           else if (v.type === 'step_finish') entry.records.push({ type: v.type, part: v.part })
@@ -148,10 +165,15 @@ export class TelemetryReader {
   }
 }
 export function attachTelemetry(rows: TimelineItem[], runId: string, telemetry: RunTelemetry) {
-  const replies = rows.filter((row) => row.kind === 'assistant' && row.id.startsWith(`${runId}:`))
+  const runRows = rows.filter((row) => row.id.startsWith(`${runId}:`))
+  if (telemetry.sessionDurationSeconds !== undefined)
+    for (const row of runRows) row.sessionDurationSeconds = telemetry.sessionDurationSeconds
+  const replies = runRows.filter((row) => row.kind === 'assistant')
   for (const row of replies) {
     const step = row.id.split(':')[1] === 'assistant' ? row.id.split(':')[2] : undefined
     if (step !== undefined && telemetry.replies[step]) row.usage = telemetry.replies[step]
+    if (step !== undefined && telemetry.replyDurations?.[step] !== undefined)
+      row.durationSeconds = telemetry.replyDurations[step]
   }
   const last = replies.at(-1)
   if (last && !last.usage) last.usage = telemetry.finalReply

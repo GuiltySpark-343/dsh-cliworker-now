@@ -656,3 +656,12 @@ Cordis patch id `cliworker-now`、Gateway `cliworker`、工具 `cliworker_*`、�
 新增 `github:SuperWheel/dsh-cliworker-now` 安装入口，开发清单以 `prepack` 复用完整构建；Git 源码没有 lib 时由原生安装器在获准后安装开发依赖并构建。普通 `pnpm install` 不因此重建 Desktop 链接；本地 `pnpm pack` 会触发构建，必须在隔离副本或确认无活动任务后执行。
 
 源码安装需要 Node.js >=22.19，且 PATH 中可直接调用项目指定的 pnpm 11.25.0；Harness 内置安装器不保证为嵌套构建提供 pnpm 命令。安装器继续管理构建授权，按当次错误中完整来源标识向目标 profile 的 `allowBuilds` 追加规则；插件不修改用户规则、不放开所有脚本。不带引用解析默认分支，固定完整 commit 可复现来源，已有锁文件可能保留旧提交。Git 源安装与 npm/Release 冻结预构建包分开；公开打包清单仍删除 scripts，本次保持 0.7.8 和已发布资产不变。
+
+## 2026-10-15：v0.7.9 AGY 本轮结果与空回复修复
+
+- 对应 GitHub #1/#2。本轮开发版本定位 v0.7.9，正式提交 GitHub 前不再升号；日常只执行关联最小验收，全量验收在获准的正式 GitHub 提交之前执行。已发布 v0.7.8 的下载地址和历史记录不改为不存在的版本。
+- AGY result 是上游汇总。parser 独立收集本次进程实际收到的回复与步骤状态；续聊会话一致、退出码为零、观察到的步骤均 DONE、至少有非空 DONE 回复、没有本轮错误/未知证据且清理确认后，ERROR 汇总进入 uncertain（结果待核实）。不能据此宣称成功或证明 EOF 来自历史；单独工具 DONE、部分文本、无正文、真实错误、异常退出、取消/超时和清理失败仍按实际失败/中断边界收尾。
+- 本轮回复与错误独立保留和回传；错误汇总只作过程证据，不能覆盖本轮 streamed 正文。新轮清空旧 lastResult；历史记录只在读取时折叠，不重写原始日志或重跑任务。宿主 jobs 缺少 uncertain 枚举，因此外层保持 failed，但 detail 与 JSON 状态、response/error 和 guidance 明确要求先核查实际产物、不要自动重试。
+- Client 将 uncertain 归入异常筛选，显示警示色与“结果待核实”；存储恢复、后续续聊和本轮时长支持新终态，保持原有账号、权限和进程生命周期边界。
+- 已结束且正文为空/纯空白的 assistant 不再生成聊天 article，原步骤仍留在可展开过程内，保留独立用量、时间及报告耗时。活动流式、正文、工具与错误保持；末条可见回复功能条跳过隐藏空步骤，仍遵守历史页及后续 user/tool 边界。
+- AGY 步骤耗时按 step_index 的最新有效报告覆盖，result 耗时标注为 CLI 会话累计；步骤与累计用量不相加，本轮时长继续来自本地 user/status 时间。缺少指标不猜测。最小验收和未执行边界见本日 doc/tasks.md；本轮不更新正式 Desktop、不调用真实模型、不上传 GitHub。

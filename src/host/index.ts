@@ -488,7 +488,12 @@ export class CliWorkerService extends TypertRemoteService {
               runId: worker.runId,
               task: prompt.slice(0, 300),
               status: worker.status,
-              response: worker.lastResult ?? worker.error,
+              response: worker.lastResult,
+              error: worker.error,
+              guidance:
+                worker.status === 'uncertain'
+                  ? '结果待核实；请先核查本轮输出和实际产物，不要自动重试。'
+                  : undefined,
             }),
           })),
         }

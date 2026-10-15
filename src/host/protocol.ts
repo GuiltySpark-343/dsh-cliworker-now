@@ -8,6 +8,10 @@ export interface ProtocolResult {
   status: string
   response: string
   error?: string
+  /** AGY text observed in this process, independent of its conversation-wide result. */
+  currentTurnResponse?: string
+  /** Evidence of DONE steps only; this does not establish task success. */
+  completedStepResponse?: string
 }
 export type EventInput = Omit<WorkerEvent, 'seq' | 'runId' | 'time'>
 
@@ -17,6 +21,12 @@ export class AgyProtocol {
   private pending = ''
   result?: ProtocolResult
   conversationId?: string
+  private responses = new Map<number | undefined, string>()
+  private steps = new Map<number, { type: string; state?: string }>()
+  private unclassifiedOrFailed = false
+  get currentTurnResponse(): string {
+    return [...this.responses.values()].filter((text) => text.trim()).join('\n')
+  }
   constructor(
     private emit: (event: EventInput) => void,
     private identify: (id: string) => void,
@@ -56,6 +66,11 @@ export class AgyProtocol {
       throw new Error('Missing Antigravity event discriminator')
     if (this.result) throw new Error('Unexpected event after CLI result')
     this.id(value.conversation_id)
+    if (
+      (value.error !== undefined && value.error !== null && value.error !== '' && value.error !== false) ||
+      value.is_error === true
+    )
+      this.unclassifiedOrFailed = true
     if (value.event === 'init') {
       this.emit({
         kind: 'status',
@@ -70,12 +85,30 @@ export class AgyProtocol {
       this.id(step.conversation_id)
       const number = typeof step.step_index === 'number' ? step.step_index : undefined
       const state = typeof step.state === 'string' ? step.state : undefined
+      const knownType = step.step_type === 'agent_response' || step.step_type === 'tool'
+      if (!knownType || number === undefined || !Number.isSafeInteger(number) || number < 0) {
+        this.unclassifiedOrFailed = true
+      } else {
+        const previous = this.steps.get(number)
+        if (previous && previous.type !== step.step_type) this.unclassifiedOrFailed = true
+        this.steps.set(number, { type: String(step.step_type), state: state ?? previous?.state })
+      }
+      if (
+        (state && !['PENDING', 'QUEUED', 'ACTIVE', 'RUNNING', 'IN_PROGRESS', 'DONE'].includes(state)) ||
+        (step.state !== undefined && typeof step.state !== 'string') ||
+        (step.text_delta !== undefined && typeof step.text_delta !== 'string') ||
+        (step.error !== undefined && step.error !== null && step.error !== '' && step.error !== false) ||
+        step.is_error === true
+      )
+        this.unclassifiedOrFailed = true
       if (step.step_type === 'agent_response') {
+        const text = typeof step.text_delta === 'string' ? step.text_delta : ''
+        this.responses.set(number, (this.responses.get(number) ?? '') + text)
         this.emit({
           kind: 'assistant',
           step: number,
           state,
-          text: typeof step.text_delta === 'string' ? step.text_delta : '',
+          text,
         })
       } else if (step.step_type === 'tool') {
         this.emit({
@@ -91,6 +124,7 @@ export class AgyProtocol {
       if (
         !record(result) ||
         typeof result.conversation_id !== 'string' ||
+        !result.conversation_id.trim() ||
         typeof result.status !== 'string' ||
         typeof result.response !== 'string'
       )
@@ -101,9 +135,30 @@ export class AgyProtocol {
         status: result.status,
         response: result.response,
         error: typeof result.error === 'string' ? result.error : undefined,
+        currentTurnResponse: this.currentTurnResponse || undefined,
+        completedStepResponse:
+          !this.unclassifiedOrFailed &&
+          this.steps.size > 0 &&
+          [...this.steps.values()].every((step) => step.state === 'DONE') &&
+          [...this.responses].some(
+            ([index, text]) => index !== undefined && this.steps.get(index)?.state === 'DONE' && text.trim(),
+          ) &&
+          (result.error === undefined || typeof result.error === 'string')
+            ? this.currentTurnResponse
+            : undefined,
       }
-      this.emit({ kind: 'result', text: result.response, state: result.status })
+      // ERROR may aggregate older conversation text. Keep it as evidence, never
+      // present it as a response observed in the current process.
+      if (result.status !== 'SUCCESS')
+        this.emit({
+          kind: 'diagnostic',
+          text: 'CLI 最终汇总',
+          state: result.status,
+          detail: JSON.stringify(result, null, 2),
+        })
+      else this.emit({ kind: 'result', text: result.response, state: result.status })
     } else {
+      this.unclassifiedOrFailed = true
       this.emit({ kind: 'diagnostic', text: `未识别事件：${value.event}`, detail: line })
     }
   }

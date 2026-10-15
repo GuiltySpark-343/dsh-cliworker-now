@@ -98,7 +98,7 @@ const workerSchema = z.object({
   preference: storedPreferenceSchema,
   mode: z.enum(['plan', 'accept-edits']),
   conversationId: z.string().optional(),
-  status: z.enum(['queued', 'running', 'stopping', 'completed', 'failed', 'interrupted']),
+  status: z.enum(['queued', 'running', 'stopping', 'completed', 'failed', 'interrupted', 'uncertain']),
   createdAt: z.string(),
   updatedAt: z.string(),
   runId: z.uuid(),

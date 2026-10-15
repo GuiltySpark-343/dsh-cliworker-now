@@ -20,6 +20,54 @@ const final = {
   result: { usage: { input_tokens: 400, output_tokens: 10, total_tokens: 410 } },
 }
 describe('CLI telemetry without invented accounting', () => {
+  it('keeps empty-step receipts and durations distinct from cumulative AGY totals across runs', () => {
+    const receipt = {
+      ...step(25),
+      step_update: { ...step(25).step_update, state: 'DONE', text_delta: '', duration_seconds: 7.3332851 },
+    }
+    const aggregate = { ...final, result: { ...final.result, duration_seconds: 1350.3886868 } }
+    const t = extractTelemetry('antigravity', [receipt, receipt, aggregate, aggregate])
+    const rows = foldEvents([
+      { runId: 'a', kind: 'user', text: 'synthetic turn', time: '2026-10-15T00:00:00Z', seq: 1 },
+      { runId: 'a', kind: 'assistant', step: 2, state: 'DONE', text: '  ', time: '2026-10-15T00:00:01Z', seq: 2 },
+      { runId: 'a', kind: 'status', text: 'failed', state: 'failed', time: '2026-10-15T00:00:08Z', seq: 3 },
+      { runId: 'b', kind: 'assistant', step: 2, text: 'other run', time: '2026-10-15T00:00:10Z', seq: 4 },
+    ])
+    attachTelemetry(rows, 'a', t)
+    expect(t.usage).toEqual({ total: 410, input: 400, output: 10, cacheRead: undefined, scope: 'session' })
+    expect(rows[1]).toMatchObject({
+      text: '  ', usage: { total: 30, scope: 'response' }, durationSeconds: 7.3332851,
+      sessionDurationSeconds: 1350.3886868,
+      runStartedAt: '2026-10-15T00:00:00Z', runEndedAt: '2026-10-15T00:00:08Z',
+    })
+    expect(rows.slice(1, 2)[0]?.durationSeconds).toBe(7.3332851)
+    expect(rows[3]?.usage).toBeUndefined()
+    expect(rows[3]?.durationSeconds).toBeUndefined()
+    expect(rows[3]?.sessionDurationSeconds).toBeUndefined()
+  })
+  it('reads duration-only AGY steps from private raw logs without inventing usage', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cwn-telemetry-duration-'))
+    const path = join(dir, 'synthetic.raw.jsonl')
+    try {
+      writeFileSync(path, [
+        { event: 'step_update', step_update: { step_index: 2, step_type: 'agent_response', duration_seconds: 0 } },
+        { event: 'step_update', step_update: { step_index: 2, step_type: 'agent_response', duration_seconds: 3.5 } },
+        { event: 'step_update', step_update: { step_index: 2, step_type: 'agent_response', duration_seconds: -1 } },
+        { event: 'result', result: { duration_seconds: 40.5 } },
+      ].map((v) => JSON.stringify(v)).join('\n') + '\n')
+      const reader = new TelemetryReader()
+      const result = reader.read(path, 'antigravity')
+      expect(result).toMatchObject({ replies: {}, replyDurations: { '2': 3.5 }, sessionDurationSeconds: 40.5 })
+      expect(result.usage).toBeUndefined()
+      expect(reader.read(path, 'antigravity')).toEqual(result)
+      expect(extractTelemetry('antigravity', [
+        { event: 'result', result: { duration_seconds: Infinity } },
+        { event: 'result', result: { duration_seconds: '40' } },
+      ]).sessionDurationSeconds).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
   it('separates response snapshots from session totals, deduplicates step updates', () => {
     const t = extractTelemetry('antigravity', [step(20), step(25), final])
     expect(t.replies['2']?.total).toBe(30)
