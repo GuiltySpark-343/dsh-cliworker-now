@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import {
   mkdtempSync,
   realpathSync,
+  readFileSync,
   rmSync,
   statSync,
   renameSync,
@@ -352,7 +353,8 @@ it('restores private pending text as paused after Host restart without replay', 
   await f.ready(1)
   f.queue('survive restart')
   await f.runtime.close()
-  expect(statSync(join(f.directory, `${f.worker.id}.followups.json`)).mode & 0o777).toBe(0o600)
+  if (process.platform !== 'win32')
+    expect(statSync(join(f.directory, `${f.worker.id}.followups.json`)).mode & 0o777).toBe(0o600)
   const storage = new WorkerStorage(f.directory)
   const backend = { resolveExecutable: vi.fn(), spawn: vi.fn() } as unknown as ProcessBackend
   const runtime = new WorkerRuntime(storage, backend, DEFAULT_CONFIG)
@@ -432,6 +434,8 @@ it.each(['hardlink', 'symlink'] as const)(
       external = join(f.worker.project, 'external.json')
     renameSync(path, external)
     chmodSync(external, 0o644)
+    const originalMode = statSync(external).mode & 0o777
+    const originalContent = readFileSync(external)
     if (kind === 'hardlink') linkSync(external, path)
     else symlinkSync(external, path)
     const storage = new WorkerStorage(f.directory)
@@ -443,7 +447,8 @@ it.each(['hardlink', 'symlink'] as const)(
           DEFAULT_CONFIG,
         ),
     ).toThrow('无法核验')
-    expect(statSync(external).mode & 0o777).toBe(0o644)
+    expect(statSync(external).mode & 0o777).toBe(originalMode)
+    expect(readFileSync(external)).toEqual(originalContent)
   },
 )
 
