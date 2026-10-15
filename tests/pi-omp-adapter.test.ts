@@ -149,17 +149,28 @@ const path=join(agent,'sessions','fixture.jsonl');const resumed=process.argv.inc
 if(resumed&&!existsSync(path))process.exit(2);
 writeFileSync(path,'SIMULATED SESSION\\n',{mode:0o600});
 writeFileSync(join(agent,'observed-argv.json'),JSON.stringify(process.argv.slice(2)),{mode:0o600});
-let model=${JSON.stringify(model)},thinkingLevel=scenario==='no-reasoning'?'off':'low';
+let model=${JSON.stringify(model)},thinkingLevel=scenario==='no-reasoning'?'off':'low',streaming=false,steers=[],steerIds=[];
 writeFileSync(join(agent,'observed-auth.json'),JSON.stringify({cnPresent:!!process.env.ZAI_CODING_CN_API_KEY,nativeFixture:process.env.ZHIPU_API_KEY==='SYNTHETIC_NATIVE_PROVIDER_ENV',unexpectedNativeKey:!!process.env.ZHIPU_API_KEY&&process.env.ZHIPU_API_KEY!=='SYNTHETIC_NATIVE_PROVIDER_ENV'&&process.env.ZHIPU_API_KEY!==${JSON.stringify(fixtureKey)}}),{mode:0o600});
-const state=()=>({sessionId:scenario==='identity'&&resumed?'changed':'fixture-id',sessionFile:path,model:scenario==='wrong-model'?{...model,id:'changed-native-model'}:model,thinkingLevel,isStreaming:false,pendingMessageCount:0});
+const state=()=>({sessionId:scenario==='identity'&&resumed?'changed':'fixture-id',sessionFile:path,model:scenario==='wrong-model'?{...model,id:'changed-native-model'}:model,thinkingLevel,isStreaming:streaming,pendingMessageCount:0});
 const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
+const finishSteer=()=>{streaming=false;send({type:'message_end',message:{role:'assistant',provider:model.provider,model:model.id,content:[{type:'text',text:'GUIDED'}],stopReason:'stop'}});send({type:'agent_end'});if(cli==='pi')send({type:'agent_settled'})};
 if(cli==='omp')send({type:'ready'});
 const input=createInterface({input:process.stdin});
 input.on('line',line=>{const cmd=JSON.parse(line);if(cmd.type==='get_state'){send({id:cmd.id,type:'response',command:cmd.type,success:true,data:state()});return}
 if(cmd.type==='set_model'){model={provider:cmd.provider,id:cmd.modelId};send({id:cmd.id,type:'response',command:cmd.type,success:true,data:model});return}
 if(cmd.type==='set_thinking_level'){thinkingLevel=cmd.level;send({id:cmd.id,type:'response',command:cmd.type,success:true});return}
 if(cmd.type==='get_available_models'){send({id:cmd.id,type:'response',command:cmd.type,success:true,data:{models:[model]}});return}
+if(cmd.type==='steer'){
+steers.push(cmd.message);writeFileSync(join(agent,'observed-steers.json'),JSON.stringify(steers));
+steerIds.push(cmd.id);writeFileSync(join(agent,'observed-steer-ids.json'),JSON.stringify(steerIds));
+if(scenario==='steer-close'){process.exit(1);return}
+if(scenario==='steer-race'){finishSteer();setTimeout(()=>send({id:cmd.id,type:'response',command:'steer',success:true}),30);return}
+const rejected=scenario==='steer-reject'||(scenario==='steer-retry'&&steers.length===1);
+send({id:cmd.id,type:'response',command:'steer',success:!rejected,...(rejected?{error:'SIMULATED REFUSAL'}:cli==='pi'?{data:{disposition:'queued'}}:{})});
+if(scenario==='steer-retry'&&rejected)return;
+setTimeout(finishSteer,80);return}
 if(cmd.type==='prompt'){
+streaming=true;
 send({id:cmd.id,type:'response',command:'prompt',success:true});send({type:'message_start',message:{role:'assistant'}});
 send({type:'message_update',assistantMessageEvent:{type:'thinking_delta',delta:'SECRET_REASONING_FIXTURE'}});
 if(scenario==='public-thinking'){
@@ -169,10 +180,10 @@ send({type:'message_update',assistantMessageEvent:{type:'thinking_end',contentIn
 send({type:'message_update',assistantMessageEvent:{type:'thinking_delta',contentIndex:2,delta:'REDACTED_TEXT',partial:{content:[null,null,{redacted:true,thinkingSignature:'OPAQUE_SIGNATURE'}]}}});
 }
 send({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:resumed?'RESUMED':'HELLO'}});
-if(scenario==='cancel')return;
+if(scenario==='cancel'||scenario.startsWith('steer-'))return;
 if(scenario==='tool-error'){send({type:'tool_execution_start',toolCallId:'t',toolName:'write'});send({type:'tool_execution_end',toolCallId:'t',toolName:'write',isError:true,result:{content:[{type:'text',text:'denied'}]}})}
 if(scenario==='malformed'){process.stdout.write('not-json\\n');return}
-send({type:'message_end',message:{role:'assistant',provider:model.provider,model:model.id,content:scenario==='public-thinking'?[{type:'thinking',thinking:'模拟公开过程（权威快照）',thinkingSignature:'OPAQUE_SIGNATURE'},{type:'text',text:'HELLO'},{type:'thinking',thinking:'REDACTED_TEXT',redacted:true,thinkingSignature:'OPAQUE_SIGNATURE'},{type:'redactedThinking',data:'ENCRYPTED_DATA'},{type:'thinking',thinking:'模拟仅完成时提供'}]:[{type:'text',text:resumed?'RESUMED':'HELLO'}],stopReason:'stop'}});
+streaming=false;send({type:'message_end',message:{role:'assistant',provider:model.provider,model:model.id,content:scenario==='public-thinking'?[{type:'thinking',thinking:'模拟公开过程（权威快照）',thinkingSignature:'OPAQUE_SIGNATURE'},{type:'text',text:'HELLO'},{type:'thinking',thinking:'REDACTED_TEXT',redacted:true,thinkingSignature:'OPAQUE_SIGNATURE'},{type:'redactedThinking',data:'ENCRYPTED_DATA'},{type:'thinking',thinking:'模拟仅完成时提供'}]:[{type:'text',text:resumed?'RESUMED':'HELLO'}],stopReason:'stop'}});
 send({type:'agent_end'});if(cli==='pi'&&scenario!=='unsettled')send({type:'agent_settled'});
 if(scenario==='unsettled')setTimeout(()=>process.exit(0),20);
 }});
@@ -247,6 +258,97 @@ async function prepareConfirmed(input: PiOmpInput) {
   )
 }
 describe('Pi/OMP bridge with simulated native RPC processes', () => {
+  it.each(['pi', 'omp'] as const)(
+    '%s accepts native guidance once without restarting its process',
+    async (cli) => {
+      const { input } = await fixture(cli, 'steer-accept')
+      const prepared = await prepareConfirmed(input)
+      expect(prepared.steer).toBeTypeOf('function')
+      const child = spawn(prepared.argv[0]!, prepared.argv.slice(1), {
+        env: fixtureEnvironment(input.nativeHome, prepared.env),
+      })
+      let stdout = ''
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk
+      })
+      const done = new Promise<number | null>((resolve) => child.once('close', resolve))
+      try {
+        await vi.waitFor(() => expect(stdout).toContain('HELLO'), { timeout: 5000 })
+        await Promise.all([
+          prepared.steer!('SIMULATED GUIDE', 'guide-1'),
+          prepared.steer!('SIMULATED GUIDE', 'guide-1'),
+        ])
+        expect(await done).toBe(0)
+        const frames = stdout
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line))
+        expect(frames.filter((frame) => frame.type === 'session')).toHaveLength(1)
+        expect(frames.at(-1)).toMatchObject({ status: 'SUCCESS' })
+        const requestRoot = dirname(prepared.argv.at(-1)!)
+        const configRoot = dirname(requestRoot)
+        const commands = JSON.parse(
+          await readFile(join(configRoot, 'agent', 'sessions', '../observed-steers.json'), 'utf8'),
+        )
+        expect(commands).toEqual(['SIMULATED GUIDE'])
+        await expect(prepared.steer!('LATE GUIDE', 'guide-2')).rejects.toThrow('关闭')
+      } finally {
+        child.kill('SIGTERM')
+        await done
+        await prepared.cleanup()
+      }
+    },
+  )
+
+  it.each(['steer-reject', 'steer-race', 'steer-close'])(
+    'native guidance %s never reports successful delivery or hides the original run outcome',
+    async (scenario) => {
+      const { input } = await fixture('pi', scenario)
+      const prepared = await prepareConfirmed(input)
+      const child = spawn(prepared.argv[0]!, prepared.argv.slice(1), {
+        env: fixtureEnvironment(input.nativeHome, prepared.env),
+      })
+      let stdout = ''
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk
+      })
+      const done = new Promise<number | null>((resolve) => child.once('close', resolve))
+      try {
+        await vi.waitFor(() => expect(stdout).toContain('HELLO'), { timeout: 5000 })
+        const error = await prepared.steer!('SIMULATED GUIDE', scenario).catch(error => error)
+        expect(error).toBeInstanceOf(Error)
+        expect(error.code).toBe(scenario === 'steer-reject' ? 'STEER_REJECTED' : undefined)
+        expect(await done).toBe(scenario === 'steer-close' ? 1 : 0)
+        expect(JSON.parse(stdout.trim().split('\n').at(-1)!)).toMatchObject({
+          status: scenario === 'steer-close' ? 'ERROR' : 'SUCCESS',
+        })
+      } finally {
+        child.kill('SIGTERM')
+        await done
+        await prepared.cleanup()
+      }
+    },
+  )
+
+  it('retries definite native guidance rejection with a fresh native request id', async () => {
+    const { input } = await fixture('pi', 'steer-retry')
+    const prepared = await prepareConfirmed(input)
+    const child = spawn(prepared.argv[0]!, prepared.argv.slice(1), { env: fixtureEnvironment(input.nativeHome, prepared.env) })
+    let stdout = ''
+    child.stdout.on('data', chunk => { stdout += chunk })
+    const done = new Promise<number | null>(resolve => child.once('close', resolve))
+    try {
+      await vi.waitFor(() => expect(stdout).toContain('HELLO'), { timeout: 5000 })
+      await expect(prepared.steer!('SIMULATED RETRY', 'same-request')).rejects.toMatchObject({ code: 'STEER_REJECTED' })
+      await expect(prepared.steer!('SIMULATED RETRY', 'same-request')).resolves.toBeUndefined()
+      expect(await done).toBe(0)
+      const requestRoot = dirname(dirname(prepared.argv.at(-1)!))
+      const ids = JSON.parse(await readFile(join(requestRoot, 'agent/observed-steer-ids.json'), 'utf8'))
+      expect(ids).toHaveLength(2)
+      expect(ids[0]).not.toBe(ids[1])
+    } finally { child.kill('SIGTERM'); await done; await prepared.cleanup() }
+  })
+
   it.each(['pi', 'omp'] as const)(
     '%s publishes visible thinking snapshots without opaque or redacted fields',
     async (cli) => {

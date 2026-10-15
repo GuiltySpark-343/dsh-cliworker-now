@@ -24,7 +24,16 @@ const itemSchema = z.object({
 const queueSchema = z.object({
   policy: z.literal(1),
   items: z.array(itemSchema).max(20),
-  receipts: z.array(z.object({ id: z.uuid(), digest: z.string() })).max(200),
+  receipts: z
+    .array(
+      z.object({
+        id: z.uuid(),
+        digest: z.string(),
+        delivery: z.literal('steer').optional(),
+        acknowledged: z.boolean().optional(),
+      }),
+    )
+    .max(200),
 })
 type StoredQueue = z.infer<typeof queueSchema>
 
@@ -101,6 +110,51 @@ export class FollowupQueue {
   list(workerId: string): QueuedFollowup[] {
     return structuredClone(this.queues.get(workerId)?.items ?? [])
   }
+  receipt(
+    workerId: string,
+    prompt: string,
+    requestId: string,
+  ): { delivery: 'queue' | 'steer'; item?: QueuedFollowup; acknowledged?: boolean } | undefined {
+    z.uuid().parse(requestId)
+    const queue = this.queues.get(workerId)
+    const receipt = queue?.receipts.find((entry) => entry.id === requestId)
+    const item = queue?.items.find((entry) => entry.id === requestId)
+    if (!receipt) {
+      if (!item) return undefined
+      if (item.prompt !== prompt) throw new Error('重复提交标识对应的消息不同')
+      return { delivery: 'queue', item: structuredClone(item) }
+    }
+    if (receipt.digest !== createHash('sha256').update(prompt).digest('hex'))
+      throw new Error('重复提交标识对应的消息不同')
+    return {
+      delivery: receipt.delivery ?? 'queue',
+      acknowledged: receipt.acknowledged,
+      item: structuredClone(item),
+    }
+  }
+  /** Reserve the identity before native delivery; an uncertain receipt must never be resent as a queue item. */
+  recordSteering(workerId: string, prompt: string, requestId: string, acknowledged: boolean): void {
+    const previous = this.receipt(workerId, prompt, requestId)
+    if (previous && previous.delivery !== 'steer') throw new Error('这条消息已经排队，请刷新会话')
+    const queue = structuredClone(
+      this.queues.get(workerId) ?? { policy: 1 as const, items: [], receipts: [] },
+    )
+    const receipt = {
+      id: requestId,
+      digest: createHash('sha256').update(prompt).digest('hex'),
+      delivery: 'steer' as const,
+      acknowledged,
+    }
+    queue.receipts = [...queue.receipts.filter((entry) => entry.id !== requestId), receipt].slice(-200)
+    this.save(workerId, queue)
+  }
+  forgetRejectedSteering(workerId: string, requestId: string): void {
+    const queue = structuredClone(this.queues.get(workerId))
+    const receipt = queue?.receipts.find((entry) => entry.id === requestId)
+    if (!queue || receipt?.delivery !== 'steer' || receipt.acknowledged) return
+    queue.receipts = queue.receipts.filter((entry) => entry.id !== requestId)
+    this.save(workerId, queue)
+  }
   add(workerId: string, prompt: string, requestId: string): QueuedFollowup {
     z.uuid().parse(requestId)
     if (!prompt.trim() || prompt.length > 100_000) throw new Error('消息须包含 1–100000 个字符')
@@ -108,9 +162,15 @@ export class FollowupQueue {
       this.queues.get(workerId) ?? { policy: 1 as const, items: [], receipts: [] },
     )
     const digest = createHash('sha256').update(prompt).digest('hex')
+    const pending = queue.items.find((item) => item.id === requestId)
+    if (pending) {
+      if (pending.prompt !== prompt) throw new Error('重复提交标识对应的消息不同')
+      return structuredClone(pending)
+    }
     const previous = queue.receipts.find((receipt) => receipt.id === requestId)
     if (previous) {
       if (previous.digest !== digest) throw new Error('重复提交标识对应的消息不同')
+      if (previous.delivery === 'steer') throw new Error('这条引导消息已经提交，请核查本轮记录')
       const item = queue.items.find((item) => item.id === requestId)
       if (!item) throw new Error('这条消息已经处理，请刷新会话')
       return structuredClone(item)
@@ -141,6 +201,31 @@ export class FollowupQueue {
     if (!queue?.items.length) return
     queue.items = queue.items.map((item) => ({ ...item, state, pauseReason }))
     this.save(workerId, queue)
+  }
+  /** Explicit interruption may activate one message without resuming an already paused queue. */
+  promote(workerId: string, id: string, previous: QueuedFollowup[]): QueuedFollowup {
+    const queue = structuredClone(this.queues.get(workerId))
+    const item = queue?.items.find((entry) => entry.id === id)
+    if (!queue || !item) throw new Error('消息已发送或已取消，请刷新会话')
+    if (item.state === 'sending') throw new Error('消息正在发送，请稍后再试')
+    const originals = new Map(previous.map((entry) => [entry.id, entry]))
+    queue.items = queue.items
+      .filter((entry) => entry.id !== id)
+      .map((entry) => {
+        const original = originals.get(entry.id)
+        return original
+          ? {
+              ...entry,
+              state: original.state === 'sending' ? 'pending' : original.state,
+              pauseReason: original.state === 'paused' ? original.pauseReason : undefined,
+            }
+          : entry
+      })
+    item.state = 'pending'
+    delete item.pauseReason
+    queue.items.unshift(item)
+    this.save(workerId, queue)
+    return structuredClone(item)
   }
   claim(workerId: string): QueuedFollowup | undefined {
     const queue = structuredClone(this.queues.get(workerId))

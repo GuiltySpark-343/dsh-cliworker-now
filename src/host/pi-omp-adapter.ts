@@ -10,6 +10,7 @@ import { snapshotPiOmpNative, safePiOmpAncestors, type PiOmpNativeOptions } from
 import { finishPiOmpRefresh } from './pi-omp-refresh.mjs'
 import { acquireOwnAccountLease } from './own-account-lease.mjs'
 import { assertPiOmpRefreshSources, assertPiOmpRefreshCache } from './pi-omp-refresh.mjs'
+import { createPiOmpControl } from './pi-omp-control.mjs'
 
 export type PiOmpCli = 'pi' | 'omp'
 export type PiOmpMetadataPhase = 'native-candidates' | 'account-scope'
@@ -95,13 +96,17 @@ async function contextFor(
     const leaseNonce = randomUUID()
     const requestDirectory = await mkdtemp(toNamespacedPath(join(isolated, 'request-')))
     const requestPath = join(requestDirectory, 'request.json')
+    let control: Awaited<ReturnType<typeof createPiOmpControl>> | undefined
     const temporary = join(requestDirectory, `.request-${randomUUID()}.tmp`)
     try {
+      if (!('discover' in input) && !extra.metadataPhase)
+        control = await createPiOmpControl(join(requestDirectory, 'control'))
       await writeFile(
         temporary,
         JSON.stringify({
           ...input,
           ...extra,
+          ...(control ? { controlNonce: control.nonce } : {}),
           stateDirectory: isolated,
           nativeRoot: native.directory,
           ...(native.leaseDirectory
@@ -112,6 +117,10 @@ async function contextFor(
         { flag: 'wx', mode: 0o600 },
       )
       await rename(temporary, requestPath)
+    } catch (error) {
+      await control?.close()
+      await rm(requestDirectory, { recursive: true, force: true })
+      throw error
     } finally {
       await rm(temporary, { force: true })
     }
@@ -119,6 +128,7 @@ async function contextFor(
       argv: [process.execPath, bridgePath(), requestPath],
       env: native.env,
       leaseDirectory: native.leaseDirectory,
+      ...(control ? { steer: control.steer } : {}),
       activate: async () => {
         if (native.leaseDirectory) {
           await acquireOwnAccountLease(native.leaseDirectory, leaseNonce)
@@ -127,8 +137,10 @@ async function contextFor(
         }
       },
       cleanup: async () => {
+        await control?.close()
         if (native.leaseDirectory)
           await finishPiOmpRefresh(native.leaseDirectory, leaseNonce, input.executable, native.receipt)
+        if (control) await rm(requestDirectory, { recursive: true, force: true })
       },
     }
   }
@@ -180,6 +192,7 @@ export async function preparePiOmp(
   leaseDirectory?: string
   activate: () => Promise<void>
   cleanup: () => Promise<void>
+  steer?: (message: string, requestId: string, signal?: AbortSignal) => Promise<void>
 }> {
   if (input.cli !== 'pi' && input.cli !== 'omp') throw new Error('Unsupported Pi/OMP CLI')
   if (!/^[A-Za-z0-9_.:-]+\/[^\s\x00-\x1f]+$/.test(input.preference.model))

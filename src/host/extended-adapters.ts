@@ -174,6 +174,7 @@ export async function extendedLaunch(
       argv,
       env,
       ...('activate' in launch && launch.activate ? { activate: launch.activate } : {}),
+      ...('steer' in launch && launch.steer ? { steer: launch.steer } : {}),
       cleanup: async () => {
         try {
           if ('cleanup' in launch && launch.cleanup) await launch.cleanup()

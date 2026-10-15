@@ -34,6 +34,7 @@ const helperNames = [
   'pi-login',
   'pi-native-catalog',
   'pi-omp-bridge',
+  'pi-omp-control',
   'pi-omp-environment',
   'pi-omp-refresh',
   'private-launch',
@@ -120,6 +121,7 @@ for (const name of [
   'pi-installation',
   'native-launch',
   'pi-omp-environment',
+  'pi-omp-control',
   'own-account-lease',
   'pi-omp-refresh',
 ]) {

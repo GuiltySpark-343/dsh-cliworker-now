@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   Button,
-  Menu,
   Modal,
   StateDot,
   Switch,
@@ -30,6 +29,7 @@ import { value, type API } from './workers.ts'
 import { RolePresetsPane } from './role-presets.tsx'
 import { AccountQueryQueue } from './account-query-queue.ts'
 import { CliExecutableSettings } from './cli-executable-settings.tsx'
+import { NativeChoice } from './native-settings-choice.tsx'
 
 interface SettingsDialogProps {
   open: boolean
@@ -365,83 +365,6 @@ function OpenSettingsDialog({
   )
 }
 
-function NativeChoice({
-  label,
-  selected,
-  choices,
-  disabled,
-  onChange,
-}: {
-  label: string
-  selected: string
-  choices: { id: string; label: string }[]
-  disabled: boolean
-  onChange: (value: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const anchor = useRef<HTMLButtonElement>(null)
-  const [anchorWidth, setAnchorWidth] = useState<number>()
-  const menuClass = `cwn-settings-choice-menu-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
-  useEffect(() => {
-    if (disabled) setOpen(false)
-  }, [disabled])
-  useEffect(() => {
-    const button = anchor.current
-    if (!open || !button) return
-    const measure = () => {
-      const width = button.getBoundingClientRect().width
-      if (width > 0) setAnchorWidth(width)
-    }
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(button)
-    return () => observer.disconnect()
-  }, [open])
-  return (
-    <>
-    <style>{anchorWidth === undefined ? '' : `.${menuClass}{--cwn-settings-choice-width:${anchorWidth}px}`}</style>
-    <Menu
-      open={open && !disabled}
-      onClose={() => setOpen(false)}
-      portal
-      align="start"
-      className="cwn-settings-choice"
-      listClassName={`cwn-settings-choice-menu ${menuClass}`}
-      selectedId={selected}
-      items={choices}
-      onSelect={(id) => {
-        onChange(id)
-        setOpen(false)
-      }}
-      anchor={
-        <Button
-          ref={anchor}
-          type="button"
-          variant="outline"
-          size="md"
-          aria-label={label}
-          aria-haspopup="menu"
-          aria-expanded={open && !disabled}
-          disabled={disabled}
-          onClick={() => {
-            if (!open) {
-              const width = anchor.current?.getBoundingClientRect().width
-              if (width && width > 0) setAnchorWidth(width)
-            }
-            setOpen((old) => !old)
-          }}
-        >
-          <span>
-            {choices.find((choice) => choice.id === selected)?.label ??
-              (label === '默认思考强度' ? '选择强度' : '选择模型')}
-          </span>
-          <IconChevronDownOutlineRegular size={14} />
-        </Button>
-      }
-    />
-    </>
-  )
-}
 
 function SectionProgress({ loading, label }: { loading: boolean; label: string }) {
   return (

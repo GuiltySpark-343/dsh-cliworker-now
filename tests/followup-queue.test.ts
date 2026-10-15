@@ -17,13 +17,22 @@ import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-sub
 import { WorkerRuntime } from '../src/host/runtime.ts'
 import { WorkerStorage } from '../src/host/storage.ts'
 import { CliWorkerService } from '../src/host/index.ts'
-import { DEFAULT_CONFIG, type ProcessBackend } from '../src/host/process.ts'
+import { DEFAULT_CONFIG, ProcessCleanupUnconfirmedError, type ProcessBackend } from '../src/host/process.ts'
 import { authorizeSelection } from '../src/host/authorized-catalog.ts'
 import type { Worker } from '../src/shared/types.ts'
+import { readCliAccountBinding } from '../src/host/cli-account-binding.ts'
+import { extendedLaunch } from '../src/host/extended-adapters.ts'
 
 // Synthetic account, process protocol and model checks only; no CLI/model is called.
 vi.mock('../src/host/cli-account-binding.ts', () => ({
-  readCliAccountBinding: async () => 'synthetic-account',
+  readCliAccountBinding: vi.fn(async () => 'synthetic-account'),
+}))
+vi.mock('../src/host/extended-adapters.ts', async (original) => ({
+  ...(await original<typeof import('../src/host/extended-adapters.ts')>()),
+  extendedLaunch: vi.fn(),
+}))
+vi.mock('../src/host/pi-omp-identity.ts', () => ({
+  verifyPiOmpExecutable: async (_cli: string, executable: string) => executable,
 }))
 vi.mock('../src/host/authorized-catalog.ts', () => ({
   ACCOUNT_CHANGED: 'synthetic account changed',
@@ -32,6 +41,8 @@ vi.mock('../src/host/authorized-catalog.ts', () => ({
 const cleanups: Array<() => void | Promise<void>> = []
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
+  vi.mocked(readCliAccountBinding).mockReset().mockResolvedValue('synthetic-account')
+  vi.mocked(extendedLaunch).mockReset()
 })
 function deferred<T = void>() {
   let resolve!: (value: T) => void
@@ -45,6 +56,8 @@ function fixture(
     cleanup?: boolean
     cleanupGate?: ReturnType<typeof deferred>
     selectionGate?: ReturnType<typeof deferred>
+    cli?: 'pi' | 'omp'
+    steer?: (message: string, requestId: string, signal?: AbortSignal) => Promise<void>
   } = {},
 ) {
   const project = realpathSync(mkdtempSync(join(tmpdir(), 'cwn-followup-queue-')))
@@ -66,6 +79,11 @@ function fixture(
       calls.push({
         spec,
         finish: (status = 'SUCCESS') => {
+          if (options.cli) {
+            stdout.write(JSON.stringify({ type: 'result', status, response: 'synthetic answer' }) + '\n')
+            close()
+            return
+          }
           if (status === 'UNCERTAIN')
             stdout.write(
               JSON.stringify({
@@ -93,6 +111,7 @@ function fixture(
           close()
         },
       })
+      if (options.cli) stdout.write(JSON.stringify({ type: 'session', id: 'synthetic-session' }) + '\n')
       spec.signal?.addEventListener('abort', close, { once: true })
       return {
         stdout,
@@ -107,6 +126,13 @@ function fixture(
     },
   }
   const runtime = new WorkerRuntime(storage, backend, DEFAULT_CONFIG)
+  if (options.cli)
+    vi.mocked(extendedLaunch).mockResolvedValue({
+      argv: ['/synthetic/native-rpc'],
+      env: {},
+      cleanup: async () => {},
+      steer: options.steer,
+    })
   cleanups.push(() => runtime.close())
   const worker: Worker = {
     id: randomUUID(),
@@ -114,7 +140,7 @@ function fixture(
     parentSessionId: 'parent',
     project,
     title: 'Synthetic queue',
-    preference: { cli: 'antigravity', model: 'synthetic-model', effort: 'low' },
+    preference: { cli: options.cli ?? 'antigravity', model: 'synthetic-model', effort: 'low' },
     mode: 'plan',
     status: 'completed',
     conversationId: 'synthetic-session',
@@ -178,7 +204,7 @@ function fixture(
     runtime.queueFollowup('parent', worker.id, prompt, worker.runId, requestId)
   const items = () => runtime.snapshot('parent', worker.id).queuedFollowups!
   const ready = async (count: number) => {
-    await vi.waitFor(() => expect(calls).toHaveLength(count))
+    await vi.waitFor(() => expect(calls, worker.error).toHaveLength(count))
     return calls[count - 1]!
   }
   return { runtime, storage, directory, worker, calls, service, start, queue, items, ready }
@@ -433,4 +459,430 @@ it('rechecks parent execution permissions after waiting behind another write tas
   expect(f.worker.error).toContain('规划模式')
   expect(f.items()).toMatchObject([{ prompt: 'must retain while plan blocks execution', state: 'paused' }])
   expect(f.calls).toHaveLength(2)
+})
+
+it('uses saved queue mode and reports it without calling a native steering channel', async () => {
+  const steer = vi.fn(async () => {}),
+    f = fixture({ cli: 'pi', steer })
+  f.storage.setRunningMessageMode(f.worker.project, 'pi', 'queue')
+  f.start()
+  await f.ready(1)
+  const id = randomUUID()
+  await f.runtime.sendRunningMessage('parent', f.worker.id, 'wait for this turn', f.worker.runId, id)
+  expect(f.runtime.snapshot('parent', f.worker.id).runningMessageMode).toBe('queue')
+  expect(f.items()).toMatchObject([{ id, prompt: 'wait for this turn', state: 'pending' }])
+  expect(steer).not.toHaveBeenCalled()
+  expect(f.worker.status).toBe('running')
+})
+
+it.each(['pi', 'omp'] as const)(
+  'delivers %s steering only once after an acknowledged receipt, preserving the native run',
+  async (cli) => {
+    const ack = deferred(),
+      steer = vi.fn(async () => ack.promise),
+      f = fixture({ cli, steer })
+    const first = f.start()
+    await f.ready(1)
+    const runId = f.worker.runId,
+      requestId = randomUUID()
+    const send = () => f.runtime.sendRunningMessage('parent', f.worker.id, 'new direction', runId, requestId)
+    const accepted = send(),
+      repeated = send()
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
+    expect(f.storage.history(f.worker.id).filter((event) => event.kind === 'user')).toHaveLength(1)
+    ack.resolve()
+    await Promise.all([accepted, repeated])
+    expect(f.worker).toMatchObject({ runId, conversationId: 'synthetic-session', status: 'running' })
+    expect(f.calls).toHaveLength(1)
+    expect(f.items()).toEqual([])
+    expect(
+      f.storage
+        .history(f.worker.id)
+        .filter((event) => event.kind === 'user')
+        .map((event) => event.text),
+    ).toEqual(['initial', 'new direction'])
+    await expect(
+      f.runtime.sendRunningMessage('parent', f.worker.id, 'different', runId, requestId),
+    ).rejects.toThrow('消息不同')
+    f.calls[0]!.finish()
+    await first.done
+  },
+)
+
+it('retains rejected steering as a failed request without queue fallback or a duplicate native send', async () => {
+  const steer = vi.fn(async () => {
+      throw new Error('synthetic steer rejected')
+    }),
+    f = fixture({ cli: 'pi', steer })
+  f.start()
+  await f.ready(1)
+  const id = randomUUID(),
+    send = () => f.runtime.sendRunningMessage('parent', f.worker.id, 'draft must remain', f.worker.runId, id)
+  await expect(send()).rejects.toThrow('synthetic steer rejected')
+  await expect(send()).rejects.toThrow('synthetic steer rejected')
+  expect(steer).toHaveBeenCalledTimes(1)
+  expect(f.items()).toEqual([])
+  expect(f.storage.history(f.worker.id).filter((event) => event.kind === 'user')).toHaveLength(1)
+})
+
+it('rejects steering before the native channel is attached and after a run is stopped', async () => {
+  const steer = vi.fn(async () => {}),
+    f = fixture({ cli: 'pi', steer })
+  f.start()
+  await expect(
+    f.runtime.sendRunningMessage('parent', f.worker.id, 'early', f.worker.runId, randomUUID()),
+  ).rejects.toThrow('尚未准备好')
+  await f.ready(1)
+  await f.runtime.stop('parent', f.worker.id)
+  await expect(
+    f.runtime.sendRunningMessage('parent', f.worker.id, 'late', f.worker.runId, randomUUID()),
+  ).rejects.toThrow('已经结束')
+  expect(steer).not.toHaveBeenCalled()
+  expect(f.items()).toEqual([])
+})
+
+it('rechecks account, parent ownership, run identity and execution permission before native steering', async () => {
+  const steer = vi.fn(async () => {}),
+    f = fixture({ cli: 'pi', steer })
+  f.start()
+  await f.ready(1)
+  await expect(
+    f.runtime.sendRunningMessage('other', f.worker.id, 'foreign', f.worker.runId, randomUUID()),
+  ).rejects.toThrow('belong')
+  await expect(
+    f.runtime.sendRunningMessage('parent', f.worker.id, 'stale', randomUUID(), randomUUID()),
+  ).rejects.toThrow('状态已变化')
+  vi.mocked(readCliAccountBinding).mockResolvedValueOnce('another-account')
+  await expect(
+    f.runtime.sendRunningMessage('parent', f.worker.id, 'account', f.worker.runId, randomUUID()),
+  ).rejects.toThrow('account changed')
+  const gate = deferred<string>()
+  vi.mocked(readCliAccountBinding).mockReturnValueOnce(gate.promise)
+  let planning = false
+  f.runtime.setQueuedExecutionGuard(() => {
+    if (planning) throw new Error('planning changed')
+  })
+  const pending = f.runtime.sendRunningMessage(
+    'parent',
+    f.worker.id,
+    'permission',
+    f.worker.runId,
+    randomUUID(),
+  )
+  planning = true
+  gate.resolve('synthetic-account')
+  await expect(pending).rejects.toThrow('planning changed')
+  expect(steer).not.toHaveBeenCalled()
+})
+
+it('closes an in-flight steering admission when its run ends, without sending to a later run', async () => {
+  const steer = vi.fn(async () => {}),
+    f = fixture({ cli: 'pi', steer })
+  const task = f.start()
+  await f.ready(1)
+  const gate = deferred<string>()
+  vi.mocked(readCliAccountBinding).mockReturnValueOnce(gate.promise)
+  const sending = f.runtime.sendRunningMessage(
+    'parent',
+    f.worker.id,
+    'too late',
+    f.worker.runId,
+    randomUUID(),
+  )
+  const rejected = expect(sending).rejects.toThrow('已结束')
+  f.calls[0]!.finish()
+  await vi.waitFor(() =>
+    expect((f.runtime as any).tasks.get(f.worker.id).steeringController.signal.aborted).toBe(true),
+  )
+  gate.resolve('synthetic-account')
+  await rejected
+  expect((await task.done).status).toBe('completed')
+  expect(steer).not.toHaveBeenCalled()
+})
+
+it('prioritizes a selected card only after confirmed cleanup and preserves the remaining order', async () => {
+  const cleanupGate = deferred(),
+    f = fixture({ cleanupGate }),
+    first = f.start()
+  await f.ready(1)
+  const older = f.queue('older'),
+    urgent = f.queue('urgent'),
+    later = f.queue('later')
+  const runId = f.worker.runId
+  const sending = f.runtime.interruptQueuedFollowup('parent', f.worker.id, urgent.id, runId)
+  await Promise.resolve()
+  expect(f.calls).toHaveLength(1)
+  expect(f.items().map((item) => item.prompt)).toEqual(['older', 'urgent', 'later'])
+  expect(f.worker.status).toBe('stopping')
+  cleanupGate.resolve()
+  await sending
+  expect((await first.done).status).toBe('interrupted')
+  const priority = await f.ready(2)
+  expect(priority.spec.argv.at(-1)).toBe('任务：\nurgent')
+  expect(priority.spec.argv).toContain('synthetic-session')
+  expect(f.items().map((item) => [item.id, item.state])).toEqual([
+    [older.id, 'pending'],
+    [later.id, 'pending'],
+  ])
+  priority.finish()
+  const next = await f.ready(3)
+  expect(next.spec.argv.at(-1)).toBe('任务：\nolder')
+})
+
+it('keeps previously paused messages paused when explicitly prioritizing one card', async () => {
+  const f = fixture(),
+    first = f.start()
+  await f.ready(1)
+  const older = f.queue('remain paused'),
+    urgent = f.queue('one explicit message')
+  await f.runtime.stop('parent', f.worker.id)
+  await first.done
+  await f.runtime.interruptQueuedFollowup('parent', f.worker.id, urgent.id, f.worker.runId)
+  const priority = await f.ready(2)
+  expect(f.items()).toMatchObject([{ id: older.id, state: 'paused' }])
+  priority.finish()
+  await vi.waitFor(() => expect(f.worker.status).toBe('completed'))
+  expect(f.calls).toHaveLength(2)
+})
+
+it('stores a new interrupt message before stopping and deduplicates a retry during cleanup', async () => {
+  const cleanupGate = deferred(),
+    f = fixture({ cleanupGate })
+  f.storage.setRunningMessageMode(f.worker.project, 'antigravity', 'interrupt')
+  f.start()
+  await f.ready(1)
+  const requestId = randomUUID(),
+    runId = f.worker.runId
+  const send = () => f.runtime.sendRunningMessage('parent', f.worker.id, 'priority draft', runId, requestId)
+  const first = send(),
+    retry = send()
+  expect(f.items()).toMatchObject([{ id: requestId, prompt: 'priority draft', state: 'paused' }])
+  expect(f.calls).toHaveLength(1)
+  await expect(
+    f.runtime.sendRunningMessage('parent', f.worker.id, 'another interruption', runId, randomUUID()),
+  ).rejects.toThrow('已有消息正在插队')
+  cleanupGate.resolve()
+  await Promise.all([first, retry])
+  await f.ready(2)
+  expect(f.items()).toEqual([])
+  expect(
+    f.storage
+      .history(f.worker.id)
+      .filter((event) => event.kind === 'user' && event.text === 'priority draft'),
+  ).toHaveLength(1)
+})
+
+it.each(['stop', 'cancel', 'abort'] as const)(
+  'does not restart after %s wins the interrupt cleanup race',
+  async (action) => {
+    const cleanupGate = deferred(),
+      f = fixture({ cleanupGate })
+    f.start()
+    await f.ready(1)
+    const item = f.queue('must not restart'),
+      signal = new AbortController()
+    const sending = f.runtime.interruptQueuedFollowup(
+      'parent',
+      f.worker.id,
+      item.id,
+      f.worker.runId,
+      signal.signal,
+    )
+    const rejected = expect(sending).rejects.toThrow()
+    let stop: Promise<Worker> | undefined
+    if (action === 'stop') stop = f.runtime.stop('parent', f.worker.id)
+    else if (action === 'cancel') f.runtime.cancelQueuedFollowup('parent', f.worker.id, item.id)
+    else signal.abort(new Error('synthetic request disconnected'))
+    cleanupGate.resolve()
+    await rejected
+    await stop
+    expect(f.calls).toHaveLength(1)
+    if (action === 'cancel') expect(f.items()).toEqual([])
+    else expect(f.items()).toMatchObject([{ id: item.id, state: 'paused' }])
+  },
+)
+
+it.each(['cleanup', 'permission'] as const)(
+  'retains interrupted text when %s prevents restarting',
+  async (failure) => {
+    const cleanupGate = deferred(),
+      f = fixture({ cleanupGate, cleanup: failure !== 'cleanup' })
+    f.start()
+    await f.ready(1)
+    const item = f.queue('retain priority text')
+    let allowed = true
+    f.runtime.setQueuedExecutionGuard(() => {
+      if (!allowed) throw new Error('execution permission changed')
+    })
+    const sending = f.runtime.interruptQueuedFollowup('parent', f.worker.id, item.id, f.worker.runId)
+    const rejected = expect(sending).rejects.toThrow(failure === 'cleanup' ? '清理' : 'permission')
+    allowed = false
+    cleanupGate.resolve()
+    await rejected
+    expect(f.calls).toHaveLength(1)
+    expect(f.items()).toMatchObject([{ id: item.id, prompt: 'retain priority text', state: 'paused' }])
+  },
+)
+
+it('rejects an interrupt without a native session before mutating the queue or stopping', async () => {
+  const f = fixture()
+  f.storage.setRunningMessageMode(f.worker.project, 'antigravity', 'interrupt')
+  f.start()
+  await f.ready(1)
+  f.worker.conversationId = undefined
+  await expect(
+    f.runtime.sendRunningMessage('parent', f.worker.id, 'retain draft', f.worker.runId, randomUUID()),
+  ).rejects.toThrow('会话标识')
+  expect(f.worker.status).toBe('running')
+  expect(f.items()).toEqual([])
+})
+
+it.each(['send', 'card'] as const)(
+  'checks Gateway permission, project and account-terminal admission for %s',
+  async (kind) => {
+    const f = fixture()
+    f.start()
+    await f.ready(1)
+    const item = f.queue('existing card')
+    const call = () =>
+      kind === 'send'
+        ? f.service.sendRunningMessage(
+            'parent',
+            f.worker.id,
+            'not admitted',
+            f.worker.runId,
+            randomUUID(),
+            new AbortController().signal,
+          )
+        : f.service.interruptQueuedFollowup(
+            'parent',
+            f.worker.id,
+            item.id,
+            f.worker.runId,
+            new AbortController().signal,
+          )
+    f.service.assertExecution.mockImplementation(() => {
+      throw new Error('planning blocked')
+    })
+    await expect(call()).rejects.toThrow('planning blocked')
+    f.service.assertExecution.mockReset()
+    f.service.project = () => '/another-project'
+    await expect(call()).rejects.toThrow('项目已变更')
+    f.service.project = () => f.worker.project
+    f.service.accounts.isBusy = () => true
+    await expect(call()).rejects.toThrow('账号终端')
+    expect(f.worker.status).toBe('running')
+    expect(f.items()).toHaveLength(1)
+  },
+)
+
+it('never reroutes a retried submission after the saved mode changes', async () => {
+  const steer = vi.fn(async () => {}),
+    f = fixture({ cli: 'pi', steer })
+  const task = f.start()
+  await f.ready(1)
+  const steeringId = randomUUID(),
+    queuedId = randomUUID()
+  await f.runtime.sendRunningMessage('parent', f.worker.id, 'steered once', f.worker.runId, steeringId)
+  f.storage.setRunningMessageMode(f.worker.project, 'pi', 'queue')
+  await f.runtime.sendRunningMessage('parent', f.worker.id, 'steered once', f.worker.runId, steeringId)
+  await f.runtime.sendRunningMessage('parent', f.worker.id, 'queued once', f.worker.runId, queuedId)
+  f.storage.setRunningMessageMode(f.worker.project, 'pi', 'steer')
+  await f.runtime.sendRunningMessage('parent', f.worker.id, 'queued once', f.worker.runId, queuedId)
+  expect(steer).toHaveBeenCalledTimes(1)
+  expect(f.items()).toMatchObject([{ id: queuedId, prompt: 'queued once' }])
+  f.runtime.cancelQueuedFollowup('parent', f.worker.id, queuedId)
+  f.calls[0]!.finish()
+  await task.done
+  f.storage.setRunningMessageMode(f.worker.project, 'pi', 'queue')
+  await f.runtime.sendRunningMessage('parent', f.worker.id, 'steered once', f.worker.runId, steeringId)
+  expect(f.items()).toEqual([])
+  expect(f.calls).toHaveLength(1)
+})
+
+it('blocks further execution if a steering account query cannot confirm its process cleanup', async () => {
+  const steer = vi.fn(async () => {}),
+    f = fixture({ cli: 'pi', steer }),
+    task = f.start()
+  await f.ready(1)
+  vi.mocked(readCliAccountBinding).mockRejectedValueOnce(new ProcessCleanupUnconfirmedError())
+  await expect(
+    f.runtime.sendRunningMessage('parent', f.worker.id, 'not delivered', f.worker.runId, randomUUID()),
+  ).rejects.toThrow('quiescence')
+  expect((await task.done).status).toBe('failed')
+  expect(f.storage.cleanupBlockState()).not.toBe('none')
+  expect(() => f.runtime.assertAccountIdle('pi')).toThrow('清理')
+  expect(steer).not.toHaveBeenCalled()
+  expect(f.calls).toHaveLength(1)
+})
+
+it('allows retrying the same steering identity after a permission or metadata failure before native delivery', async () => {
+  const steer = vi.fn(async () => {}),
+    f = fixture({ cli: 'pi', steer })
+  f.start()
+  await f.ready(1)
+  const requestId = randomUUID(),
+    send = () =>
+      f.runtime.sendRunningMessage('parent', f.worker.id, 'retry unchanged draft', f.worker.runId, requestId)
+  vi.mocked(readCliAccountBinding).mockRejectedValueOnce(new Error('temporary metadata failure'))
+  await expect(send()).rejects.toThrow('temporary metadata failure')
+  f.runtime.setQueuedExecutionGuard(() => {
+    throw new Error('planning permission denied')
+  })
+  await expect(send()).rejects.toThrow('planning permission denied')
+  f.runtime.setQueuedExecutionGuard(() => {})
+  await send()
+  expect(steer).toHaveBeenCalledTimes(1)
+  expect(f.storage.history(f.worker.id).filter((event) => event.kind === 'user')).toHaveLength(2)
+})
+
+it.each(['STEER_REJECTED'])(
+  'allows the unchanged draft to retry after explicit %s but not unknown delivery',
+  async (code) => {
+    const steer = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('synthetic explicit rejection'), { code }))
+      .mockResolvedValue(undefined)
+    const f = fixture({ cli: 'pi', steer })
+    f.start()
+    await f.ready(1)
+    const id = randomUUID(),
+      send = () =>
+        f.runtime.sendRunningMessage(
+          'parent',
+          f.worker.id,
+          'retry rejected native command',
+          f.worker.runId,
+          id,
+        )
+    await expect(send()).rejects.toThrow('explicit rejection')
+    expect(f.storage.history(f.worker.id).filter((event) => event.kind === 'user')).toHaveLength(1)
+    await send()
+    await send()
+    expect(steer).toHaveBeenCalledTimes(2)
+    expect(f.storage.history(f.worker.id).filter((event) => event.kind === 'user')).toHaveLength(2)
+    expect(f.items()).toEqual([])
+  },
+)
+
+it('keeps pending queue IDs deduplicated even when bounded delivery receipts rotate', async () => {
+  const f = fixture()
+  f.start()
+  await f.ready(1)
+  const id = randomUUID(),
+    original = f.queue('still pending', id)
+  const outbox = (f.runtime as any).followups
+  for (let i = 0; i < 200; i++)
+    outbox.recordSteering(f.worker.id, `synthetic steering ${i}`, randomUUID(), true)
+  expect(f.queue('still pending', id)).toEqual(original)
+  expect(() => f.queue('changed text', id)).toThrow('消息不同')
+  const duplicate = await f.runtime.sendRunningMessage(
+    'parent',
+    f.worker.id,
+    'still pending',
+    f.worker.runId,
+    id,
+  )
+  expect(duplicate).toEqual(original)
+  expect(f.items()).toHaveLength(1)
 })

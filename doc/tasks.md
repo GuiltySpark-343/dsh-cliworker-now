@@ -1178,3 +1178,21 @@
 - `pnpm ... build:preview` 最终通过；在隔离包内运行 `pnpm ... typecheck`，使用本次生成的 Remote 声明，Host 和 Client 均通过。全部 src 与最终预览源逐字节一致。正式 lib 不修改，避免热更新已安装插件。构建仅保留既有 CommonJS 建议提示。
 - Tabbit 使用真实 Panel/ConversationTimeline/原生控件、明确模拟 Gateway：运行中打字与 Enter 入队、继续草稿、暂停/显式恢复/取消、模型及强度快选（目录读取 1 次、偏好保存 2 次、任务启动 0 次）、公开摘要安全文本、无摘要提示均已实际渲染核对；最终按钮数始终为 1。320 px 窄栏 clientWidth/scrollWidth 均为 320，按钮可见。夹具与证据在 `.cache/followup-ui/`，`single-action.png` 为最终界面，`verification.json` 记录范围与哈希。模拟渲染不等于安装后的 Desktop 验收。
 - 版本仍为 0.7.9。未执行真实账号/模型、Windows 实机、正式 Desktop 更新、全量测试、GitHub 推送或发布。全量验收只在获准的正式 GitHub 提交前执行。
+
+
+## 2026-10-15：v0.7.9 运行中发送方式与待发送折叠最小验收
+
+本次属于 v0.7.9 未提交 GitHub 的迭代，未增加版本号。高级设置按项目/CLI 保存引导、插队、排队；Pi/OMP 接原生 steer，其余默认排队；待发送卡片可插队、取消，标题下有分隔线并支持带动效折叠；输入框仍只有一个动作按钮。
+
+已执行（命令统一使用 `pnpm --config.verifyDepsBeforeRun=false`，以下均为对应变更的关联验收）：
+
+- `exec vitest run tests/running-message-settings.test.ts tests/storage.test.ts`：7 项通过；另 `tests/cli-settings.test.ts -t 'running message preference Gateway'` 2 项通过。验证能力默认、项目/CLI 隔离、重启恢复、私有权限、无 CLI 查询的读写，以及非法方式/链接文件拒绝。Gateway 参数经运行时枚举校验，使用现有字符串 Remote 边界。
+- `exec vitest run tests/panel.test.tsx tests/settings-dialog.test.tsx`：240 项通过；之后只对新增折叠/单按钮/卡片插队等 6 项及“保存方式不重读目录”1 项做定向检查，通过。未再次执行全套。
+- Host 的 `tests/followup-queue.test.ts`、`tests/runtime.test.ts`、`tests/cleanup-persistence.test.ts` 关联回归：3 文件 53 项通过，验证三模式、原生回执与用户事件、相同请求跨模式去重、明确未发送失败重试、未知结果不重投、插队等待清理、停止/取消竞争、保留其他队列顺序/原暂停状态、权限及账号变化和清理异常全局封闭。
+- `exec vitest run tests/pi-omp-control.test.ts`：8 项通过；`exec vitest run tests/pi-omp-adapter.test.ts -t 'native guidance'`：6 项通过、56 项按名跳过；另与既有公开过程、恢复、工具失败、Pi 终止及 SIGTERM 清理相关的 8 项通过。全部使用明确模拟处理器或 RPC 子进程，未调用真实账号/模型。
+- 原生控制确定性回归覆盖：成功 receipt 已写入后立即 close/abort 仍确认成功；明确拒绝允许最多三次新 attempt，每次有独立文件和原生 id；终态先于回执、超时及未知接收结果不自动重投。Windows 盘符/UNC 的 namespace 等价只做离线单元验证。
+- 最终 `build:preview` 成功；在 `.cache/preview-package` 执行 `typecheck`，Host 与 Client 通过。核对全部源码与预览副本字节一致，新增 control helper 位于 `lib` 和声明输出目录。第一次构建暴露 Remote 不能直接使用未导出的 CliId 类型，改用现有字符串边界加枚举校验后通过。未执行正式 build，未更新 Desktop 链接。
+- Tabbit 加载实际 Panel/高级设置/原生菜单与明确模拟 Gateway：三项文字、Codex 禁用引导及默认排队、Pi 默认引导、按 CLI 恢复选择、三模式提交、卡片插队顺序、单按钮均通过。折叠高度从 108.5px 到 0、标题线 0.5px、inert 生效，过渡 220ms/180ms；reduced-motion 下为 0s。360px 视口内对话内容宽与滚动宽同为 340px，折叠期间新消息仍保留、计数更新。证据在 `.cache/running-modes-ui/verification.json`、`settings-and-queue.png`、`narrow-layout.png`；测试页已关闭、服务已停止。
+- `spec:check` 归档前 16 项、归档后 15 项均通过、0 失败；本 change 的 9 项任务完成，规格同步并归档为 `2026-10-15-add-running-message-modes`；已有 `release-v078-latest-install` 的重复 ADDED 信息保留，本轮未修改该旧 change。`git diff --check` 通过。
+
+未执行：真实 CLI 模型引导/跨模型上下文、Windows 实机、已安装 Desktop、全量测试、GitHub 推送或发布。原生语义来源和能力边界见 `doc/running-message-protocol.md`；回执仅表示 CLI 接收，不等于模型执行完毕。独立审查发现的回执与结束竞态、确定未发送失败重试问题已修复并回归。

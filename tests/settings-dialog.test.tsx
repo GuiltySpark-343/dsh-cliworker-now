@@ -74,7 +74,11 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
           'div',
           { role: 'menu' },
           items.map((item: any) =>
-            createElement('button', { key: item.id, onClick: () => onSelect(item.id) }, item.label),
+            createElement(
+              'button',
+              { key: item.id, disabled: item.disabled, onClick: () => onSelect(item.id) },
+              item.label,
+            ),
           ),
         ),
     ),
@@ -135,6 +139,20 @@ async function setup(
     available: true,
   })
   const cliExecutablePath = vi.fn(async (_session, cli: CliId) => remote(paths.get(cli) ?? defaultPath(cli)))
+  const runningMessageSettings = vi.fn(async (_session, cli: CliId) =>
+    remote({
+      cli,
+      mode: cli === 'pi' || cli === 'omp' ? 'steer' : 'queue',
+      canSteer: cli === 'pi' || cli === 'omp',
+    }),
+  )
+  const saveRunningMessageMode = vi.fn(async (_session, cli: CliId, mode: string) =>
+    remote({
+      cli,
+      mode,
+      canSteer: cli === 'pi' || cli === 'omp',
+    }),
+  )
   const refreshCliExecutablePath = vi.fn(async (_session, cli: CliId, path: string, action: string) => {
     const next =
       action === 'auto'
@@ -161,6 +179,8 @@ async function setup(
       setCliEnabled,
       cliExecutablePath,
       refreshCliExecutablePath,
+      runningMessageSettings,
+      saveRunningMessageMode,
       ...overrides,
     },
   } as unknown as API
@@ -213,6 +233,8 @@ async function setup(
     setCliEnabled,
     cliExecutablePath,
     refreshCliExecutablePath,
+    runningMessageSettings,
+    saveRunningMessageMode,
   }
 }
 it('starts the selected CLI first and bounds background account discovery', async () => {
@@ -2280,3 +2302,115 @@ it('toggles advanced content only through its separate arrow and preserves hidde
   expect(t.button('高级设置').props['aria-expanded']).toBe(true)
   expect(t.configure).not.toHaveBeenCalled()
 })
+
+it.each(['pi', 'omp', 'codex'] as const)(
+  'reads %s running message defaults only after expanding, without saving',
+  async (cli) => {
+    const t = await setup({}, undefined, cli)
+    expect(t.runningMessageSettings).not.toHaveBeenCalled()
+    await t.click('高级设置')
+    expect(t.runningMessageSettings).toHaveBeenCalledExactlyOnceWith(
+      'simulation-parent',
+      cli,
+      expect.any(AbortSignal),
+    )
+    expect(visibleText(t.button('运行中发送'))).toContain(cli === 'codex' ? '排队' : '引导')
+    await t.click('运行中发送')
+    expect(t.button('引导').props.disabled).toBe(cli === 'codex')
+    expect(t.button('插队').props.disabled).not.toBe(true)
+    expect(t.button('排队').props.disabled).not.toBe(true)
+    if (cli === 'codex') await t.click('引导')
+    expect(t.saveRunningMessageMode).not.toHaveBeenCalled()
+    expect(t.configure).not.toHaveBeenCalled()
+  },
+)
+
+it('saves running message choice automatically and does not refresh account or model directories', async () => {
+  const t = await setup({}, undefined, 'pi')
+  await t.click('高级设置')
+  const reads = t.accountStatus.mock.calls.length
+  const models = t.catalogForCli.mock.calls.length
+  const paths = t.cliExecutablePath.mock.calls.length
+  await t.click('运行中发送')
+  await t.click('插队')
+  expect(t.saveRunningMessageMode).toHaveBeenCalledExactlyOnceWith(
+    'simulation-parent',
+    'pi',
+    'interrupt',
+    expect.any(AbortSignal),
+  )
+  expect(visibleText(t.button('运行中发送'))).toContain('插队')
+  expect(t.text()).toContain('发送方式已保存')
+  expect(t.text()).toContain('先停止当前轮')
+  expect(t.accountStatus).toHaveBeenCalledTimes(reads)
+  expect(t.catalogForCli).toHaveBeenCalledTimes(models)
+  expect(t.cliExecutablePath).toHaveBeenCalledTimes(paths)
+  expect(t.configure).not.toHaveBeenCalled()
+})
+
+it('retains a failed mode selection with its error and retries the same choice', async () => {
+  const saveRunningMessageMode = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('模拟发送方式保存失败'))
+    .mockResolvedValue(remote({ cli: 'pi', mode: 'interrupt', canSteer: true }))
+  const t = await setup({ saveRunningMessageMode }, undefined, 'pi')
+  await t.click('高级设置')
+  await t.click('运行中发送')
+  await t.click('插队')
+  expect(visibleText(t.button('运行中发送'))).toContain('插队')
+  expect(t.text()).toContain('模拟发送方式保存失败')
+  expect(t.text()).not.toContain('发送方式已保存')
+  await t.click('高级设置')
+  await t.click('高级设置')
+  expect(visibleText(t.button('运行中发送'))).toContain('插队')
+  expect(t.text()).toContain('模拟发送方式保存失败')
+  await t.click('运行中发送')
+  await t.click('插队')
+  expect(saveRunningMessageMode).toHaveBeenCalledTimes(2)
+  expect(t.text()).toContain('发送方式已保存')
+})
+
+it('does not invent a default after a failed mode read and allows retry', async () => {
+  const runningMessageSettings = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('模拟发送方式读取失败'))
+    .mockResolvedValue(remote({ cli: 'pi', mode: 'queue', canSteer: true }))
+  const t = await setup({ runningMessageSettings }, undefined, 'pi')
+  await t.click('高级设置')
+  expect(t.button('运行中发送').props.disabled).toBe(true)
+  expect(visibleText(t.button('运行中发送'))).toContain('选择发送方式')
+  expect(t.text()).toContain('模拟发送方式读取失败')
+  await t.click('重试读取发送方式')
+  expect(visibleText(t.button('运行中发送'))).toContain('排队')
+  expect(t.button('运行中发送').props.disabled).toBe(false)
+  expect(t.saveRunningMessageMode).not.toHaveBeenCalled()
+})
+
+it.each(['read', 'save'] as const)(
+  'discards a late running-message %s after switching CLI',
+  async (operation) => {
+    const pending = deferred()
+    const runningMessageSettings = vi.fn((_session, cli: CliId) =>
+      operation === 'read' && cli === 'pi'
+        ? pending.promise
+        : Promise.resolve(remote({ cli, mode: cli === 'pi' ? 'steer' : 'queue', canSteer: cli === 'pi' })),
+    )
+    const saveRunningMessageMode = vi.fn(() => pending.promise)
+    const t = await setup({ runningMessageSettings, saveRunningMessageMode }, undefined, 'pi')
+    await t.click('高级设置')
+    if (operation === 'save') {
+      await t.click('运行中发送')
+      await t.click('插队')
+    }
+    const signal =
+      operation === 'read'
+        ? runningMessageSettings.mock.calls[0]![2]
+        : saveRunningMessageMode.mock.calls[0]![3]
+    await t.click('Codex 设置')
+    expect(signal.aborted).toBe(true)
+    await t.click('高级设置')
+    await act(async () => pending.resolve(remote({ cli: 'pi', mode: 'interrupt', canSteer: true })))
+    expect(visibleText(t.button('运行中发送'))).toContain('排队')
+    expect(t.text()).not.toContain('发送方式已保存')
+  },
+)

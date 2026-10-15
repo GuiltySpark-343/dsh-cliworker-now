@@ -32,6 +32,7 @@ import { WorkerModelMenu } from './worker-model-menu.tsx'
 import { SettingsDialog } from './settings-dialog.tsx'
 import { RenameWorker } from './rename-worker.tsx'
 import { WorkerCard, type WorkerManagementAction } from './worker-card.tsx'
+import { RUNNING_MESSAGE_LABELS } from '../shared/running-message.ts'
 
 const status: Record<WorkerStatus, string> = {
   queued: '排队中',
@@ -76,7 +77,9 @@ function SessionPanel({
 }) {
   const [selected, select] = useState('')
   const [collapsed, setCollapsed] = useState<Partial<Record<CliId, boolean>>>({})
+  const [collapsedFollowups, setCollapsedFollowups] = useState<Record<string, boolean>>({})
   const cliGroupId = useId()
+  const followupQueueId = useId()
   const overview = useRef<HTMLDivElement>(null),
     overviewScroll = useRef(0)
   const back = useRef<HTMLButtonElement>(null),
@@ -106,6 +109,8 @@ function SessionPanel({
   const error = errors[selected] ?? ''
   const setError = (text: string) => setErrors((old) => ({ ...old, [selected]: text }))
   const pendingAction = useRef(false)
+  const pendingStop = useRef(false)
+  const [stoppingRequest, setStoppingRequest] = useState(false)
   const queuedRequests = useRef(new Map<string, { runId: string; prompt: string; id: string }>())
   const managementAbort = useRef<AbortController>()
   const [following, setFollowing] = useState(true)
@@ -188,18 +193,51 @@ function SessionPanel({
       if (alive.current) setBusy(false)
     }
   }
+  async function stopWorker(target: Worker) {
+    if (pendingStop.current || target.status === 'stopping' || unavailable) return
+    pendingStop.current = true
+    setStoppingRequest(true)
+    setErrors((old) => ({ ...old, [target.id]: '' }))
+    try {
+      value(await api.cliworker.stop(sessionId, target.id))
+    } catch (error) {
+      if (alive.current) setErrors((old) => ({ ...old, [target.id]: operationMessage(error) }))
+    } finally {
+      pendingStop.current = false
+      if (alive.current) setStoppingRequest(false)
+    }
+  }
   const running = worker && active(worker.status)
   const unavailable = connecting || !!streamError
   const startingNew = !!worker && restartFor === worker.id
   const resumeBlocked = snapshot.resumeBlockedReason
   const queuedFollowups = snapshot.queuedFollowups ?? []
+  const followupsExpanded = !collapsedFollowups[selected]
   const waitingForTurn = worker?.status === 'running' || worker?.status === 'queued'
   const queueSubmission = !!waitingForTurn || queuedFollowups.length > 0
+  const runningMessageMode = snapshot.runningMessageMode ?? 'queue'
+  const submissionLabel = waitingForTurn
+    ? runningMessageMode === 'queue'
+      ? '加入待发送消息'
+      : `${RUNNING_MESSAGE_LABELS[runningMessageMode]}发送`
+    : queueSubmission
+      ? '加入待发送消息'
+      : '继续对话'
+  const submissionHint = waitingForTurn
+    ? runningMessageMode === 'steer'
+      ? '引导当前运行'
+      : runningMessageMode === 'interrupt'
+        ? '停止当前轮后插队发送'
+        : '本轮结束后发送'
+    : queueSubmission
+      ? '加入待发送消息'
+      : '继续对话'
   const canResume =
     (startingNew || ((waitingForTurn || worker?.conversationId) && !resumeBlocked)) &&
     !retired &&
     (!startingNew || !running) &&
     worker?.status !== 'stopping' &&
+    !stoppingRequest &&
     !unavailable
   submitEnabled.current = !!prompt.trim() && !!canResume && !busy
   const jumpToLatest = () => {
@@ -725,7 +763,21 @@ function SessionPanel({
                     : { runId: worker.runId, prompt, id: crypto.randomUUID() }
                 queuedRequests.current.set(worker.id, request)
                 value(
-                  await api.cliworker.queueFollowup(sessionId, worker.id, prompt, worker.runId, request.id),
+                  waitingForTurn
+                    ? await api.cliworker.sendRunningMessage(
+                        sessionId,
+                        worker.id,
+                        prompt,
+                        worker.runId,
+                        request.id,
+                      )
+                    : await api.cliworker.queueFollowup(
+                        sessionId,
+                        worker.id,
+                        prompt,
+                        worker.runId,
+                        request.id,
+                      ),
                 )
                 if (queuedRequests.current.get(worker.id) === request)
                   queuedRequests.current.delete(worker.id)
@@ -742,52 +794,116 @@ function SessionPanel({
             <section className="cwn-followup-queue" aria-label="待发送消息" aria-live="polite">
               <div className="cwn-followup-heading">
                 <span>待发送 · {queuedFollowups.length}</span>
-                {queuedFollowups.some((item) => item.state === 'paused') && !running && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    disabled={busy || unavailable || !!resumeBlocked || !worker.conversationId}
-                    onClick={() =>
-                      void perform(async () => {
-                        value(await api.cliworker.retryQueuedFollowups(sessionId, worker.id, worker.runId))
-                      })
-                    }
-                  >
-                    继续发送
-                  </Button>
-                )}
-              </div>
-              <ol>
-                {queuedFollowups.map((item, index) => (
-                  <li key={item.id}>
-                    <div className="cwn-followup-content">
-                      <p>{item.prompt}</p>
-                      <small>
-                        {item.state === 'paused'
-                          ? item.pauseReason || '已暂停，等待继续发送'
-                          : item.state === 'sending'
-                            ? '准备发送…'
-                            : '本轮结束后发送'}
-                      </small>
-                    </div>
+                <div className="cwn-followup-heading-actions">
+                  {queuedFollowups.some((item) => item.state === 'paused') && !running && (
                     <Button
                       type="button"
                       size="sm"
                       variant="ghost"
-                      aria-label={`取消待发送消息 ${index + 1}`}
-                      disabled={busy || unavailable || (item.state === 'sending' && !!running)}
+                      disabled={busy || unavailable || !!resumeBlocked || !worker.conversationId}
                       onClick={() =>
                         void perform(async () => {
-                          value(await api.cliworker.cancelQueuedFollowup(sessionId, worker.id, item.id))
+                          value(await api.cliworker.retryQueuedFollowups(sessionId, worker.id, worker.runId))
                         })
                       }
                     >
-                      取消
+                      继续发送
                     </Button>
-                  </li>
-                ))}
-              </ol>
+                  )}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="cwn-followup-toggle"
+                    aria-label={followupsExpanded ? '折叠待发送消息' : '展开待发送消息'}
+                    aria-expanded={followupsExpanded}
+                    aria-controls={followupQueueId}
+                    onClick={() => setCollapsedFollowups((old) => ({ ...old, [worker.id]: !old[worker.id] }))}
+                  >
+                    <IconChevronDownOutlineRegular size={14} />
+                  </Button>
+                </div>
+              </div>
+              <div
+                id={followupQueueId}
+                className="cwn-followup-body"
+                data-expanded={followupsExpanded}
+                aria-hidden={!followupsExpanded}
+                {...(!followupsExpanded ? { inert: '' } : {})}
+              >
+                <div className="cwn-followup-body-inner">
+                  <ol>
+                    {queuedFollowups.map((item, index) => (
+                      <li key={item.id}>
+                        <div className="cwn-followup-content">
+                          <p>{item.prompt}</p>
+                          <small>
+                            {item.state === 'paused'
+                              ? item.pauseReason || '已暂停，等待继续发送'
+                              : item.state === 'sending'
+                                ? '准备发送…'
+                                : '本轮结束后发送'}
+                          </small>
+                        </div>
+                        <div className="cwn-followup-actions">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            aria-label={`插队待发送消息 ${index + 1}`}
+                            title="停止当前轮后优先发送这条消息"
+                            disabled={
+                              busy ||
+                              unavailable ||
+                              !!resumeBlocked ||
+                              !worker.conversationId ||
+                              worker.status === 'stopping' ||
+                              (item.state === 'sending' && !!running)
+                            }
+                            onClick={() => {
+                              if (
+                                busy ||
+                                unavailable ||
+                                resumeBlocked ||
+                                !worker.conversationId ||
+                                worker.status === 'stopping' ||
+                                (item.state === 'sending' && running)
+                              )
+                                return
+                              void perform(async () => {
+                                value(
+                                  await api.cliworker.interruptQueuedFollowup(
+                                    sessionId,
+                                    worker.id,
+                                    item.id,
+                                    worker.runId,
+                                  ),
+                                )
+                              })
+                            }}
+                          >
+                            插队
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            aria-label={`取消待发送消息 ${index + 1}`}
+                            disabled={busy || unavailable || (item.state === 'sending' && !!running)}
+                            onClick={() =>
+                              void perform(async () => {
+                                value(await api.cliworker.cancelQueuedFollowup(sessionId, worker.id, item.id))
+                              })
+                            }
+                          >
+                            取消
+                          </Button>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              </div>
             </section>
           )}
           <div className="cwn-compose-box">
@@ -805,7 +921,11 @@ function SessionPanel({
                 startingNew
                   ? '输入新对话的任务…'
                   : running
-                    ? '输入下一步，本轮结束后自动发送…'
+                    ? runningMessageMode === 'steer'
+                      ? '输入引导消息，交给 CLI 在当前运行中处理…'
+                      : runningMessageMode === 'interrupt'
+                        ? '输入消息，停止当前轮后优先发送…'
+                        : '输入下一步，本轮结束后自动发送…'
                     : '给这个子 Agent 分配下一步…'
               }
               rows={1}
@@ -818,7 +938,7 @@ function SessionPanel({
                 sessionId={sessionId}
                 disabled={retired || busy || unavailable || !!running || startingNew || !!resumeBlocked}
               />
-              {running && (!prompt.trim() || worker.status === 'stopping') ? (
+              {running && (!prompt.trim() || worker.status === 'stopping' || stoppingRequest) ? (
                 <Button
                   type="button"
                   size="sm"
@@ -826,12 +946,8 @@ function SessionPanel({
                   className="cwn-send"
                   aria-label="停止"
                   title="停止"
-                  disabled={busy || worker.status === 'stopping'}
-                  onClick={() =>
-                    void perform(async () => {
-                      value(await api.cliworker.stop(sessionId, worker.id))
-                    })
-                  }
+                  disabled={stoppingRequest || unavailable || worker.status === 'stopping'}
+                  onClick={() => void stopWorker(worker)}
                 >
                   <Glyph name="stop" />
                 </Button>
@@ -839,10 +955,8 @@ function SessionPanel({
                 <button
                   type="submit"
                   className="cwn-send"
-                  aria-label={
-                    startingNew ? '新建对话并发送' : queueSubmission ? '加入待发送消息' : '继续对话'
-                  }
-                  title={startingNew ? '新建对话并发送' : queueSubmission ? '本轮结束后发送' : '继续对话'}
+                  aria-label={startingNew ? '新建对话并发送' : submissionLabel}
+                  title={startingNew ? '新建对话并发送' : submissionHint}
                   disabled={!canResume || busy || !prompt.trim()}
                   onMouseDown={(e) => {
                     e.preventDefault()

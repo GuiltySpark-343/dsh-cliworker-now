@@ -2,6 +2,7 @@ import { readClaudeOwnRoute, prepareClaudeWorkerLaunch } from './claude-own-rout
 import { extendedLaunch, isExtendedCli } from './extended-adapters.ts'
 import { appendFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { z } from 'zod'
 import type { SubprocessHandle } from '@deepseek-ai/dsh-subprocess'
 import {
   active,
@@ -57,6 +58,9 @@ interface Task {
   settle: (worker: Worker) => void
   admission: Promise<string>
   queuedFollowupId?: string
+  steer?: (message: string, requestId: string, signal?: AbortSignal) => Promise<void>
+  steering: Map<string, { prompt: string; done: Promise<void> }>
+  steeringController: AbortController
 }
 export interface Submission {
   worker: Worker
@@ -90,6 +94,15 @@ export class WorkerRuntime {
     signal: AbortSignal,
   ) => Promise<void>
   private queuedExecutionGuard?: (worker: Worker) => void
+  private stopEpochs = new Map<string, number>()
+  private interruptions = new Map<
+    string,
+    {
+      id: string
+      controller: AbortController
+      done: Promise<QueuedFollowup>
+    }
+  >()
   revision = 0
   constructor(
     readonly storage: WorkerStorage,
@@ -114,6 +127,178 @@ export class WorkerRuntime {
   }
   setQueuedExecutionGuard(guard: (worker: Worker) => void): void {
     this.queuedExecutionGuard = guard
+  }
+  async sendRunningMessage(
+    parent: string,
+    id: string,
+    prompt: string,
+    expectedRunId: string,
+    requestId: string,
+    signal?: AbortSignal,
+  ): Promise<QueuedFollowup | undefined> {
+    const worker = this.get(parent, id)
+    this.assertCliEnabled(cliOf(worker.preference))
+    if (worker.runId !== expectedRunId) throw new Error('本轮状态已变化，请刷新后重新发送')
+    signal?.throwIfAborted()
+    const priorSteer = this.tasks.get(id)?.steering.get(requestId)
+    if (priorSteer) {
+      if (priorSteer.prompt !== prompt) throw new Error('重复提交标识对应的消息不同')
+      await priorSteer.done
+      return
+    }
+    const receipt = this.followups.receipt(id, prompt, requestId)
+    if (receipt) {
+      const interruption = this.interruptions.get(id)
+      if (interruption?.id === requestId) return interruption.done
+      if (receipt.delivery === 'steer') {
+        if (receipt.acknowledged) return
+        throw new Error('该引导请求已提交，接收状态尚未确认，请核查本轮记录')
+      }
+      if (!receipt.item) throw new Error('这条消息已经处理，请刷新会话')
+      return receipt.item
+    }
+    const mode = this.storage.runningMessageSettings(worker.project, cliOf(worker.preference)).mode
+    if (mode === 'queue') return this.queueFollowup(parent, id, prompt, expectedRunId, requestId)
+    if (mode === 'interrupt') {
+      if (!worker.conversationId) throw new Error('尚未收到 CLI 会话标识，无法插队；请保留消息稍后重试')
+      const existing = this.interruptions.get(id)
+      if (existing && existing.id !== requestId) throw new Error('已有消息正在插队，请稍后再试')
+      // The outbox persists before stopping. A failed cleanup or launch cannot lose the text.
+      const item = existing
+        ? this.followups.add(id, prompt, requestId)
+        : this.addInterruptMessage(worker, prompt, requestId)
+      return this.interruptQueuedFollowup(parent, id, item.id, expectedRunId, signal)
+    }
+    await this.steerRunningMessage(worker, prompt, requestId, signal)
+  }
+  private addInterruptMessage(worker: Worker, prompt: string, requestId: string): QueuedFollowup {
+    if (worker.status === 'stopping') throw new Error('本轮正在停止，请保留消息稍后重试')
+    if (!this.storage.accountBinding(worker.id)) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
+    this.queuedExecutionGuard?.(worker)
+    const item = this.followups.add(worker.id, prompt, requestId)
+    this.changed()
+    return item
+  }
+  private async steerRunningMessage(
+    worker: Worker,
+    prompt: string,
+    requestId: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    z.uuid().parse(requestId)
+    if (!prompt.trim() || prompt.length > 100_000) throw new Error('消息须包含 1–100000 个字符')
+    const task = this.tasks.get(worker.id)
+    if (!task?.steer || task.controller.signal.aborted || worker.status !== 'running')
+      throw new Error('当前 CLI 引导通路尚未准备好或已经结束，请保留消息稍后重试')
+    const prior = task.steering.get(requestId)
+    if (prior) {
+      if (prior.prompt !== prompt) throw new Error('重复提交标识对应的消息不同')
+      return prior.done
+    }
+    if (task.steering.size >= 200) throw new Error('本轮引导消息过多，请等待本轮结束后再发送')
+    const snapshot = structuredClone(worker)
+    const control = AbortSignal.any([
+      task.controller.signal,
+      task.steeringController.signal,
+      ...(signal ? [signal] : []),
+    ])
+    let submitted = false
+    const done = (async () => {
+      this.queuedExecutionGuard?.(worker)
+      const binding = this.storage.accountBinding(worker.id)
+      if (!binding) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
+      const current = await readCliAccountBinding(
+        cliOf(worker.preference),
+        this.backend,
+        this.config,
+        worker.project,
+        control,
+      )
+      control.throwIfAborted()
+      if (binding !== current) throw new Error(ACCOUNT_CHANGED)
+      if (
+        this.tasks.get(worker.id) !== task ||
+        worker.runId !== snapshot.runId ||
+        worker.status !== 'running'
+      )
+        throw new Error('本轮状态已变化，请保留消息稍后重试')
+      this.assertCliEnabled(cliOf(worker.preference))
+      this.queuedExecutionGuard?.(worker)
+      this.followups.recordSteering(worker.id, prompt, requestId, false)
+      submitted = true
+      await task.steer!(prompt, requestId, control)
+      // A matching native receipt acknowledges delivery even if the run ends immediately afterwards.
+      this.storage.append(snapshot, { kind: 'user', text: prompt })
+      this.followups.recordSteering(worker.id, prompt, requestId, true)
+      this.changed()
+    })().catch((error) => {
+      const rejected =
+        error && typeof error === 'object' && 'code' in error && error.code === 'STEER_REJECTED'
+      if (!submitted || rejected) task.steering.delete(requestId)
+      if (submitted && rejected) this.followups.forgetRejectedSteering(worker.id, requestId)
+      if (error instanceof ProcessCleanupUnconfirmedError) {
+        this.markCleanupBlocked(error)
+        task.controller.abort(error)
+        this.drain()
+      }
+      throw error
+    })
+    task.steering.set(requestId, { prompt, done })
+    await done
+  }
+  interruptQueuedFollowup(
+    parent: string,
+    id: string,
+    queuedId: string,
+    expectedRunId: string,
+    signal?: AbortSignal,
+  ): Promise<QueuedFollowup> {
+    const worker = this.get(parent, id)
+    this.assertCliEnabled(cliOf(worker.preference))
+    if (worker.runId !== expectedRunId) throw new Error('本轮状态已变化，请刷新后重新发送')
+    signal?.throwIfAborted()
+    const existing = this.interruptions.get(id)
+    if (existing) {
+      if (existing.id !== queuedId) throw new Error('已有消息正在插队，请稍后再试')
+      return existing.done
+    }
+    if (worker.status === 'stopping') throw new Error('本轮正在停止，请稍后再试')
+    if (!worker.conversationId) throw new Error('尚未收到 CLI 会话标识，无法插队')
+    if (!this.storage.accountBinding(id)) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
+    if (this.tasks.get(id)?.queuedFollowupId === queuedId) throw new Error('消息已开始执行，请使用停止操作')
+    this.queuedExecutionGuard?.(worker)
+    const previous = this.followups.list(id)
+    if (!previous.some((item) => item.id === queuedId)) throw new Error('消息已发送或已取消，请刷新会话')
+    const epoch = this.stopEpochs.get(id) ?? 0
+    const controller = new AbortController()
+    const control = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
+    const operation = { id: queuedId, controller, done: undefined! as Promise<QueuedFollowup> }
+    this.interruptions.set(id, operation)
+    operation.done = (async () => {
+      await this.stopCurrent(parent, id)
+      control.throwIfAborted()
+      if ((this.stopEpochs.get(id) ?? 0) !== epoch) throw new Error('插队已因停止操作取消，请确认后重试')
+      this.assertManagedIdle(worker)
+      this.assertCliEnabled(cliOf(worker.preference))
+      if (worker.runId !== expectedRunId) throw new Error('本轮状态已变化，请刷新后重试')
+      this.queuedExecutionGuard?.(worker)
+      const item = this.followups.promote(id, queuedId, previous)
+      this.interruptions.delete(id)
+      this.changed()
+      this.dispatchFollowup(worker, true)
+      return item
+    })()
+      .catch((error) => {
+        if (this.followups.list(id).some((entry) => entry.id === queuedId)) {
+          this.pauseFollowups(id, `插队已暂停：${error instanceof Error ? error.message : String(error)}`)
+          this.changed()
+        }
+        throw error
+      })
+      .finally(() => {
+        if (this.interruptions.get(id) === operation) this.interruptions.delete(id)
+      })
+    return operation.done
   }
   queueFollowup(
     parent: string,
@@ -142,6 +327,8 @@ export class WorkerRuntime {
     if (this.tasks.get(id)?.queuedFollowupId === queuedId)
       throw new Error('消息已进入执行队列，请使用停止操作')
     this.followups.remove(id, queuedId)
+    const interruption = this.interruptions.get(id)
+    if (interruption?.id === queuedId) interruption.controller.abort(new Error('待发送消息已取消'))
     const dispatch = this.followupDispatches.get(id)
     if (dispatch?.id === queuedId) dispatch.controller.abort(new Error('待发送消息已取消'))
     this.changed()
@@ -166,7 +353,13 @@ export class WorkerRuntime {
     }
   }
   private dispatchFollowup(worker: Worker, explicitlyRetried = false): void {
-    if (this.disposed || this.blocked || !this.followupLauncher || this.followupDispatches.has(worker.id))
+    if (
+      this.disposed ||
+      this.blocked ||
+      !this.followupLauncher ||
+      this.followupDispatches.has(worker.id) ||
+      this.interruptions.has(worker.id)
+    )
       return
     if (
       this.tasks.has(worker.id) ||
@@ -386,6 +579,9 @@ export class WorkerRuntime {
       archivedWorkers,
       selected: worker,
       queuedFollowups: worker ? this.followups.list(worker.id) : [],
+      runningMessageMode: worker
+        ? this.storage.runningMessageSettings(worker.project, cliOf(worker.preference)).mode
+        : undefined,
       resumeBlockedReason:
         worker?.conversationId && !this.storage.accountBinding(worker.id)
           ? LEGACY_ACCOUNT_RECORD_NOTICE
@@ -536,6 +732,8 @@ export class WorkerRuntime {
       settle,
       admission,
       queuedFollowupId: queuedAdmission?.id,
+      steering: new Map(),
+      steeringController: new AbortController(),
     }
     this.tasks.set(worker.id, task)
     this.queue.push(task)
@@ -555,6 +753,12 @@ export class WorkerRuntime {
     this.changed()
   }
   stop(parent: string, id: string): Promise<Worker> {
+    this.get(parent, id)
+    this.stopEpochs.set(id, (this.stopEpochs.get(id) ?? 0) + 1)
+    this.interruptions.get(id)?.controller.abort(new Error('插队已因停止操作取消，请确认后重试'))
+    return this.stopCurrent(parent, id)
+  }
+  private stopCurrent(parent: string, id: string): Promise<Worker> {
     const worker = this.get(parent, id)
     const dispatch = this.followupDispatches.get(id)?.done
     this.pauseFollowups(id, '任务已停止，请确认后继续发送')
@@ -790,6 +994,7 @@ export class WorkerRuntime {
       // Observe spawn rejection immediately even while draining protocol streams.
       void handle.done.catch(() => undefined)
       controller.signal.throwIfAborted()
+      if ('steer' in launch && typeof launch.steer === 'function') task.steer = launch.steer
       // Before a CLI process is actually launched, a rejected account/model or
       // permission check must leave the original outbox message recoverable.
       if (task.queuedFollowupId) {
@@ -834,6 +1039,8 @@ export class WorkerRuntime {
       if (error instanceof ProcessCleanupUnconfirmedError) this.markCleanupBlocked(error)
     } finally {
       clearTimeout(timeout)
+      task.steer = undefined
+      task.steeringController.abort(new Error('当前运行已结束，引导通路已关闭'))
       if (handle) {
         handle.terminate()
         try {
@@ -854,6 +1061,7 @@ export class WorkerRuntime {
             : protocol.currentTurnResponse || undefined
       else if (protocol.result) worker.lastResult = protocol.result.response
     }
+    await Promise.allSettled([...task.steering.values()].map((entry) => entry.done))
     try {
       if ((!handle || quiescent) && !this.blocked) await release?.()
     } catch (error) {
@@ -888,7 +1096,9 @@ export class WorkerRuntime {
     for (const worker of this.storage.workers.values())
       this.pauseFollowups(worker.id, 'Host 已关闭，请确认后继续发送')
     const tasks = [...this.tasks.values()]
+    const interruptions = [...this.interruptions.values()].map((operation) => operation.done)
     await Promise.all(tasks.map((task) => this.stop(task.worker.parentSessionId, task.worker.id)))
+    await Promise.allSettled(interruptions)
     await Promise.allSettled([...this.followupRuns])
     this.listeners.clear()
     this.storage.close()

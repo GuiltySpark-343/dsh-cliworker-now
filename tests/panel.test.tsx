@@ -328,9 +328,9 @@ it('shows and searches worker names alongside model metadata and the conversatio
 it('queues a running followup without interrupting and keeps newer typing while admission is pending', async () => {
   const t = await setup(),
     done = deferred()
-  const queueFollowup = vi.fn().mockReturnValue(done.promise)
+  const sendRunningMessage = vi.fn().mockReturnValue(done.promise)
   const stop = vi.fn()
-  Object.assign(t.api.cliworker, { queueFollowup, stop })
+  Object.assign(t.api.cliworker, { sendRunningMessage, stop })
   await t.push('a', 2, { status: 'running' })
   expect(t.input().props.disabled).toBe(false)
   const composerActions = () =>
@@ -342,9 +342,9 @@ it('queues a running followup without interrupting and keeps newer typing while 
   expect(composerActions()[0]!.props['aria-label']).toBe('加入待发送消息')
   await t.submit()
   await t.submit()
-  expect(queueFollowup).toHaveBeenCalledOnce()
-  expect(queueFollowup.mock.calls[0]!.slice(0, 4)).toEqual(['parent', 'a', 'next step', 'run-a'])
-  expect(queueFollowup.mock.calls[0]![4]).toEqual(expect.any(String))
+  expect(sendRunningMessage).toHaveBeenCalledOnce()
+  expect(sendRunningMessage.mock.calls[0]!.slice(0, 4)).toEqual(['parent', 'a', 'next step', 'run-a'])
+  expect(sendRunningMessage.mock.calls[0]![4]).toEqual(expect.any(String))
   expect(t.input().props.disabled).toBe(false)
   await t.edit('another instruction')
   await act(async () => done.resolve({ ok: true, value: '{}' }))
@@ -357,18 +357,18 @@ it('queues a running followup without interrupting and keeps newer typing while 
 })
 it('retains a rejected queued draft and reuses its request identity on retry', async () => {
   const t = await setup()
-  const queueFollowup = vi
+  const sendRunningMessage = vi
     .fn()
     .mockRejectedValueOnce(new Error('模拟连接中断'))
     .mockResolvedValue({ ok: true, value: '{}' })
-  Object.assign(t.api.cliworker, { queueFollowup })
+  Object.assign(t.api.cliworker, { sendRunningMessage })
   await t.push('a', 2, { status: 'queued', conversationId: undefined })
   await t.edit('send after the first turn')
   await t.submit()
   expect(t.input().props.value).toBe('send after the first turn')
   expect(t.text()).toContain('模拟连接中断')
   await t.submit()
-  expect(queueFollowup.mock.calls[1]).toEqual(queueFollowup.mock.calls[0])
+  expect(sendRunningMessage.mock.calls[1]).toEqual(sendRunningMessage.mock.calls[0])
   expect(t.input().props.value).toBe('')
 })
 it('shows host queued messages with cancel and explicit resume after failure, without automatic client dispatch', async () => {
@@ -403,8 +403,8 @@ it('shows host queued messages with cancel and explicit resume after failure, wi
 })
 it('does not submit queued guidance while stopping or disconnected', async () => {
   const t = await setup()
-  const queueFollowup = vi.fn()
-  Object.assign(t.api.cliworker, { queueFollowup })
+  const sendRunningMessage = vi.fn()
+  Object.assign(t.api.cliworker, { sendRunningMessage })
   await t.edit('keep this draft')
   await t.push('a', 2, { status: 'stopping' })
   expect(t.input().props.disabled).toBe(true)
@@ -412,7 +412,7 @@ it('does not submit queued guidance while stopping or disconnected', async () =>
   await t.push('a', 3, { status: 'running' })
   await act(async () => t.streams.at(-1)!.fail())
   await t.submit()
-  expect(queueFollowup).not.toHaveBeenCalled()
+  expect(sendRunningMessage).not.toHaveBeenCalled()
   expect(t.input().props.value).toBe('keep this draft')
 })
 it('allows cancelling queued metadata preparation but uses stop after runtime admission', async () => {
@@ -1197,6 +1197,8 @@ it('closing settings during slow CLI discovery leaves conversation and stop cont
   expect(t.input().props.disabled).toBe(false)
   await t.edit('可以继续输入')
   await t.push('a', 2, { status: 'running' })
+  // The single composer action becomes Stop only after the running draft is empty.
+  await t.edit('')
   await t.click('停止')
   expect(stop).toHaveBeenCalledWith('parent', 'a')
   await act(async () =>
@@ -1683,4 +1685,134 @@ it('settings refresh explicitly queries a fresh directory and keeps a still-vali
   expect(catalogForCli).toHaveBeenCalledTimes(1)
   expect(f.text()).toContain('High')
   expect(configure).not.toHaveBeenCalled()
+})
+
+it.each(['steer', 'interrupt', 'queue'] as const)(
+  'submits %s running messages through Host preference routing while keeping one action',
+  async (runningMessageMode) => {
+    const sendRunningMessage = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
+    const t = await setup(true, undefined, workers, { sendRunningMessage })
+    await act(async () =>
+      t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), runningMessageMode }),
+    )
+    const actions = () =>
+      t.r.root.findAllByType('button').filter((button) => button.props.className === 'cwn-send')
+    expect(actions()).toHaveLength(1)
+    expect(actions()[0]!.props['aria-label']).toBe('停止')
+    await t.edit('new instruction')
+    expect(actions()).toHaveLength(1)
+    expect(actions()[0]!.props['aria-label']).toBe(
+      runningMessageMode === 'steer'
+        ? '引导发送'
+        : runningMessageMode === 'interrupt'
+          ? '插队发送'
+          : '加入待发送消息',
+    )
+    expect(t.input().props.placeholder).toContain(
+      runningMessageMode === 'steer'
+        ? '当前运行中处理'
+        : runningMessageMode === 'interrupt'
+          ? '停止当前轮'
+          : '本轮结束后',
+    )
+    await t.submit()
+    expect(sendRunningMessage.mock.calls[0]!.slice(0, 4)).toEqual(['parent', 'a', 'new instruction', 'run-a'])
+    expect(t.followup).not.toHaveBeenCalled()
+    expect(t.input().props.value).toBe('')
+    expect(actions()).toHaveLength(1)
+    expect(actions()[0]!.props['aria-label']).toBe('停止')
+  },
+)
+
+it('prioritizes the chosen queued card and allows Stop while priority cleanup is pending', async () => {
+  const pending = deferred()
+  const interruptQueuedFollowup = vi.fn().mockReturnValue(pending.promise)
+  const stop = vi.fn().mockResolvedValue({ ok: true, value: undefined })
+  const t = await setup(true, undefined, workers, { interruptQueuedFollowup, stop })
+  const queuedFollowups = ['first', 'second'].map((id) => ({
+    id,
+    prompt: id,
+    createdAt: '',
+    state: 'pending' as const,
+  }))
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), queuedFollowups }),
+  )
+  await t.click('插队待发送消息 2')
+  expect(interruptQueuedFollowup).toHaveBeenCalledExactlyOnceWith('parent', 'a', 'second', 'run-a')
+  const stopButton = t.r.root.findAllByType('button').find((button) => button.props['aria-label'] === '停止')!
+  expect(stopButton.props.disabled).toBe(false)
+  await t.click('停止')
+  expect(stop).toHaveBeenCalledExactlyOnceWith('parent', 'a')
+  await act(async () => pending.reject(new Error('模拟插队被停止')))
+  expect(t.text()).toContain('模拟插队被停止')
+  expect(t.text()).toContain('first')
+  expect(t.text()).toContain('second')
+})
+
+it.each([
+  { status: 'running' as const, conversationId: undefined, state: 'pending' as const },
+  { status: 'stopping' as const, conversationId: 'session-a', state: 'pending' as const },
+  { status: 'running' as const, conversationId: 'session-a', state: 'sending' as const },
+])(
+  'blocks queued-card priority without a usable native session or during admission: %j',
+  async ({ status, conversationId, state }) => {
+    const interruptQueuedFollowup = vi.fn()
+    const t = await setup(true, undefined, workers, { interruptQueuedFollowup })
+    await act(async () =>
+      t.streams.at(-1)!.push({
+        ...t.snapshot('a', 2, { status, conversationId }),
+        queuedFollowups: [{ id: 'pending', prompt: 'keep text', createdAt: '', state }],
+      }),
+    )
+    const button = t.r.root
+      .findAllByType('button')
+      .find((button) => button.props['aria-label'] === '插队待发送消息 1')!
+    expect(button.props.disabled).toBe(true)
+    await t.click('插队待发送消息 1')
+    expect(interruptQueuedFollowup).not.toHaveBeenCalled()
+  },
+)
+
+it('folds the pending list per worker without changing Host messages, and keeps resume available', async () => {
+  const retryQueuedFollowups = vi.fn().mockResolvedValue({ ok: true, value: undefined })
+  const cancelQueuedFollowup = vi.fn()
+  const interruptQueuedFollowup = vi.fn()
+  const t = await setup(true, undefined, workers, {
+    retryQueuedFollowups,
+    cancelQueuedFollowup,
+    interruptQueuedFollowup,
+  })
+  const queuedFollowups = [
+    { id: 'waiting', prompt: 'retained pending text', createdAt: '', state: 'paused' as const },
+  ]
+  const pushQueued = async (id: string, revision: number) =>
+    act(async () => {
+      t.streams.at(-1)!.push({ ...t.snapshot(id, revision, { status: 'failed' }), queuedFollowups })
+    })
+  await pushQueued('a', 2)
+  const body = () => t.r.root.findByProps({ className: 'cwn-followup-body' })
+  const toggle = (label: string) =>
+    t.r.root.findAllByType('button').find((button) => button.props['aria-label'] === label)!
+  expect(body().props['data-expanded']).toBe(true)
+  expect(toggle('折叠待发送消息').props['aria-controls']).toBe(body().props.id)
+  await t.click('折叠待发送消息')
+  expect(body().props['aria-hidden']).toBe(true)
+  expect(body().props.inert).toBe('')
+  expect(toggle('展开待发送消息').props['aria-expanded']).toBe(false)
+  expect(t.text()).toContain('待发送 · ')
+  expect(t.text()).toContain('retained pending text')
+  expect(cancelQueuedFollowup).not.toHaveBeenCalled()
+  expect(interruptQueuedFollowup).not.toHaveBeenCalled()
+  await t.click('继续发送')
+  expect(retryQueuedFollowups).toHaveBeenCalledExactlyOnceWith('parent', 'a', 'run-a')
+  await t.select('b')
+  await pushQueued('b', 3)
+  expect(body().props['data-expanded']).toBe(true)
+  await t.select('a')
+  await pushQueued('a', 4)
+  expect(body().props['data-expanded']).toBe(false)
+  await t.click('展开待发送消息')
+  expect(body().props['aria-hidden']).toBe(false)
+  expect(body().props.inert).toBeUndefined()
 })

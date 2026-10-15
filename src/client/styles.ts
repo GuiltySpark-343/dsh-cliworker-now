@@ -62,12 +62,16 @@ body[data-ds-dark-theme] .cwn-cli-group{box-shadow:var(--dsw-elevation-stroke),0
 .cwn-compose-state{height:24px;gap:8px;margin:4px 8px 0;font-size:var(--dsh-content-font-size-secondary,13px);line-height:20px}
 .cwn-compose-cli{margin-left:auto}
 .cwn-followup-queue{margin:0 0 8px;padding:8px 10px;border:0.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-md);font-size:var(--dsh-content-font-size-secondary,13px);line-height:20px;color:var(--dsw-alias-label-secondary)}
-.cwn-followup-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.cwn-followup-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-bottom:6px;border-bottom:0.5px solid var(--dsw-alias-border-l2)}
+.cwn-followup-heading-actions{display:flex;align-items:center;gap:4px;flex:none}.cwn-followup-heading .cwn-followup-toggle{flex:none;width:28px;min-width:28px;padding:0}.cwn-followup-toggle>svg{transition:transform 220ms cubic-bezier(.2,0,0,1)}.cwn-followup-toggle[aria-expanded=true]>svg{transform:rotate(180deg)}
+.cwn-followup-body{display:grid;grid-template-rows:1fr;opacity:1;transition:grid-template-rows 220ms cubic-bezier(.2,0,0,1),opacity 180ms ease,visibility 220ms}.cwn-followup-body[data-expanded=false]{grid-template-rows:0fr;opacity:0;visibility:hidden}.cwn-followup-body-inner{min-height:0;overflow:hidden}
+@media(prefers-reduced-motion:reduce){.cwn-followup-body,.cwn-followup-toggle>svg{transition:none}}
 .cwn-followup-queue ol{list-style:none;padding:0;margin:4px 0 0;max-height:160px;overflow:auto}
 .cwn-followup-queue li{display:flex;align-items:flex-start;gap:8px;padding:6px 0}
 .cwn-followup-queue li+li{border-top:0.5px solid var(--dsw-alias-border-l2)}
 .cwn-followup-content{flex:1;min-width:0}.cwn-followup-content p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:60px;overflow:auto;color:var(--dsw-alias-label-primary)}
 .cwn-followup-content small{font-size:12px;line-height:18px;color:var(--dsw-alias-label-caption)}
+.cwn-followup-actions{display:flex;align-items:center;gap:4px;flex:none}.cwn-followup-actions>button{white-space:nowrap}
 @container(max-width:320px){.cwn-feed{padding:14px 16px}.cwn-compose{padding-left:8px;padding-right:8px}.cwn-model-effort{display:none}}
 `
 

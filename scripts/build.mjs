@@ -21,6 +21,7 @@ for (const name of [
   'pi-omp-environment',
   'terminal-bridge',
   'pi-omp-bridge',
+  'pi-omp-control',
   'pi-native-catalog',
   'pi-installation',
   'account-models',
@@ -46,7 +47,7 @@ cpSync('src/host/native-spawn.mjs', 'lib/types/host/native-spawn.mjs')
 cpSync('src/host/private-launch.mjs', 'lib/types/host/private-launch.mjs')
 cpSync('src/host/pi-omp-environment.mjs', 'lib/types/host/pi-omp-environment.mjs')
 cpSync('src/host/pi-omp-environment.d.mts', 'lib/types/host/pi-omp-environment.d.mts')
-for (const name of ['own-account-lease', 'pi-omp-refresh']) {
+for (const name of ['own-account-lease', 'pi-omp-refresh', 'pi-omp-control']) {
   cpSync(`src/host/${name}.mjs`, `lib/types/host/${name}.mjs`)
   if (existsSync(`src/host/${name}.d.mts`)) cpSync(`src/host/${name}.d.mts`, `lib/types/host/${name}.d.mts`)
 }

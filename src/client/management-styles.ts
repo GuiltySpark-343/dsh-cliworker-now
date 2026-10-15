@@ -2,6 +2,7 @@
 export const workerManagementStyles = `
 .cwn-settings-advanced-heading{flex:1;min-width:0}.cwn-settings-section-head>.cwn-settings-advanced-toggle{flex:none;width:var(--cwn-settings-control-height);min-width:var(--cwn-settings-control-height);padding:0;color:inherit}.cwn-settings-advanced-toggle>svg{transition:transform 220ms cubic-bezier(.2,0,0,1)}.cwn-settings-advanced-toggle[aria-expanded=true]>svg{transform:rotate(180deg)}
 .cwn-settings-advanced-body{display:grid;grid-template-rows:1fr;opacity:1;transition:grid-template-rows 220ms cubic-bezier(.2,0,0,1),opacity 180ms ease,visibility 220ms}.cwn-settings-advanced-body[data-expanded=false]{grid-template-rows:0fr;opacity:0;visibility:hidden}.cwn-settings-advanced-body-inner{min-height:0;overflow:hidden}
+.cwn-running-message-settings+.cwn-cli-path-settings{border-top:var(--cwn-settings-border)}
 .cwn-cli-path-settings{display:flex;flex-direction:column;gap:var(--cwn-settings-field-gap);min-width:0}.cwn-cli-path-settings>.cwn-setting-row-text{flex:none;color:var(--dsw-alias-label-primary)}.cwn-cli-path-settings form{display:flex;flex-direction:column;gap:var(--cwn-settings-action-gap);min-width:0}.cwn-cli-path-settings .cwn-cli-path-input{width:100%;min-width:0}.cwn-cli-path-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:var(--cwn-settings-action-gap)}
 @media(prefers-reduced-motion:reduce){.cwn-settings-advanced-body,.cwn-settings-advanced-toggle>svg{transition:none}}
 .cwn-worker{display:block;padding:12px;min-height:62px}

@@ -19,6 +19,13 @@ import { join } from 'node:path'
 import { randomUUID, createHash } from 'node:crypto'
 import { z } from 'zod'
 import type { CliSettings } from '../shared/cli-settings.ts'
+import {
+  RUNNING_MESSAGE_MODES,
+  defaultRunningMessageMode,
+  supportsNativeSteering,
+  type RunningMessageMode,
+  type RunningMessageSettings,
+} from '../shared/running-message.ts'
 import { BUILTIN_ROLE_PRESETS } from '../shared/builtin-presets.ts'
 import {
   agentNameSchema,
@@ -85,6 +92,12 @@ const storedCliSchema = z.enum([...CLI_IDS, 'harness'])
 const storedPreferenceSchema = preferenceSchema.extend({ cli: storedCliSchema.optional() })
 const cliSettingsSchema = z.object({ enabled: z.partialRecord(storedCliSchema, z.boolean()) })
 const enabledByDefault = () => Object.fromEntries(CLI_IDS.map((cli) => [cli, true])) as CliSettings['enabled']
+const runningMessageSchema = z.object({
+  policy: z.literal(1),
+  project: z.string().min(1),
+  cli: z.enum(CLI_IDS),
+  mode: z.enum(RUNNING_MESSAGE_MODES),
+}).strict()
 const workerSchema = z.object({
   id: z.uuid(),
   parentSessionId: z.string().min(1),
@@ -367,6 +380,39 @@ export class WorkerStorage {
     const value = projectPreferenceSchema.parse(JSON.parse(readFileSync(path, 'utf8')))
     if ((value.cli ?? 'antigravity') !== cli) throw new Error('项目偏好的 CLI 标识不匹配')
     return value
+  }
+  runningMessageSettings(project: string, cli: CliId): RunningMessageSettings {
+    if (isRetiredCli(cli)) return { cli, mode: 'queue', canSteer: false }
+    const path = join(this.directory, `${this.projectKey(project, cli)}.running-message.json`)
+    let mode = defaultRunningMessageMode(cli)
+    if (existsSync(path)) {
+      const info = lstatSync(path)
+      if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > 16_384)
+        throw new Error('运行中发送设置无法核验')
+      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+      try {
+        const opened = fstatSync(fd)
+        if (opened.ino !== info.ino || opened.dev !== info.dev || opened.nlink !== 1 || opened.size > 16_384)
+          throw new Error('运行中发送设置身份已变化')
+        const value = runningMessageSchema.parse(JSON.parse(readFileSync(fd, 'utf8')))
+        if (value.project !== project || value.cli !== cli)
+          throw new Error('运行中发送设置的项目或 CLI 不匹配')
+        if (value.mode === 'steer' && !supportsNativeSteering(cli))
+          throw new Error('此 CLI 不支持引导，请重新选择运行中发送方式')
+        mode = value.mode
+      } finally {
+        closeSync(fd)
+      }
+    }
+    return { cli, mode, canSteer: supportsNativeSteering(cli) }
+  }
+  setRunningMessageMode(project: string, cli: CliId, mode: RunningMessageMode): RunningMessageSettings {
+    if (isRetiredCli(cli)) throw new Error(RETIRED_HARNESS_NOTICE)
+    const value = runningMessageSchema.parse({ policy: 1, project, cli, mode })
+    if (mode === 'steer' && !supportsNativeSteering(cli))
+      throw new Error('此 CLI 不支持引导，请选择插队或排队')
+    atomicJSON(join(this.directory, `${this.projectKey(project, cli)}.running-message.json`), value)
+    return { cli, mode, canSteer: supportsNativeSteering(cli) }
   }
   preference(project: string, cli: CliId = 'antigravity'): Preference | undefined {
     if (isRetiredCli(cli)) return undefined

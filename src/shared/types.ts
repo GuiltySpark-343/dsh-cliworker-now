@@ -1,4 +1,5 @@
 import type { Telemetry, TokenUsage } from './telemetry.ts'
+import type { RunningMessageMode } from './running-message.ts'
 export const EFFORTS = [
   'default',
   'none',
@@ -175,6 +176,8 @@ export interface WorkerSnapshot {
   resumeBlockedReason?: string
   /** Accepted messages for the selected Worker; not delivered to the CLI yet. */
   queuedFollowups?: QueuedFollowup[]
+  /** Current project/CLI preference for submissions during an active turn. */
+  runningMessageMode?: RunningMessageMode
   timeline: TimelineItem[]
   revision: number
   truncated: boolean

@@ -10,6 +10,7 @@ import { readFile } from 'node:fs/promises'
 import { nativeLaunchArgv } from './native-launch.mjs'
 import { ownsOwnAccountLease, OWN_ACCOUNT_BUSY } from './own-account-lease.mjs'
 import { assertPiOmpRefreshSources, assertPiOmpRefreshCache } from './pi-omp-refresh.mjs'
+import { receivePiOmpControl } from './pi-omp-control.mjs'
 import {
   queryNativeCandidates,
   snapshotNativeCandidates,
@@ -91,10 +92,13 @@ let child,
   startupTimer,
   config,
   session,
-  finalized = false
+  finalized = false,
+  controlReceiver,
+  closeGuidance = () => {}
 const metadataController = new AbortController()
 const stop = (reason) => {
   failure ??= reason
+  closeGuidance()
   child?.stdin?.end()
   child?.kill('SIGTERM')
   forceTimer ??= setTimeout(() => child?.kill('SIGKILL'), 5000)
@@ -134,7 +138,7 @@ try {
   const requestPath = process.argv[2]
   config = JSON.parse(await privateFile(requestPath, true))
   await unlink(requestPath)
-  await rmdir(dirname(requestPath))
+  if (!config.controlNonce) await rmdir(dirname(requestPath))
   if (
     !['pi', 'omp'].includes(config.cli) ||
     typeof config.executable !== 'string' ||
@@ -404,6 +408,42 @@ try {
     const send = (value) => {
       if (!child.stdin.destroyed) child.stdin.write(JSON.stringify(value) + '\n')
     }
+    const nativeSteers = new Map(),
+      steerRequestIds = new Set()
+    let finalRequested = false
+    const finishIfReady = () => {
+      if (!settled || nativeSteers.size || finalRequested || stopped) return
+      finalRequested = true
+      send({ id: 'final', type: 'get_state' })
+    }
+    closeGuidance = () => {
+      for (const request of nativeSteers.values()) {
+        clearTimeout(request.timer)
+        request.reject(new Error('原生引导通路已关闭或尚未准备，请保留消息后重试'))
+      }
+      nativeSteers.clear()
+    }
+    if (config.controlNonce) {
+      controlReceiver = await receivePiOmpControl(
+        join(dirname(requestPath), 'control'),
+        config.controlNonce,
+        (message, _requestId, attempt) => {
+          if (!sent || settled || stopped || failure || child.stdin.destroyed || child.exitCode !== null)
+            return Promise.reject(Object.assign(new Error('原生引导通路已关闭或尚未准备，请保留消息后重试'), { code: 'STEER_REJECTED' }))
+          const id = `cwn-steer-${attempt}`
+          steerRequestIds.add(id)
+          return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+              nativeSteers.delete(id)
+              reject(new Error('Native guidance acknowledgement timed out'))
+              finishIfReady()
+            }, 12_000)
+            nativeSteers.set(id, { resolve, reject, timer })
+            send({ id, type: 'steer', message })
+          })
+        },
+      )
+    }
     const validateState = (state, validateModel = true) => {
       if (
         !state ||
@@ -437,6 +477,22 @@ try {
       if (!value || typeof value !== 'object' || typeof value.type !== 'string')
         throw new Error('Invalid native RPC record')
       if (value.type === 'response') {
+        if (steerRequestIds.has(value.id)) {
+          const request = nativeSteers.get(value.id)
+          if (request) {
+            clearTimeout(request.timer)
+            nativeSteers.delete(value.id)
+            // Native acceptance is not completion. A terminal event observed
+            // before this receipt closes admission rather than claiming delivery.
+            if (value.command === 'steer' && value.success === true && !settled && !stopped && !failure)
+              request.resolve()
+            else if (value.command === 'steer' && value.success === false)
+              request.reject(Object.assign(new Error('Native CLI rejected guidance'), { code: 'STEER_REJECTED' }))
+            else request.reject(new Error('Native CLI ended before its guidance receipt'))
+            finishIfReady()
+          }
+          return
+        }
         if (!value.success) throw new Error('Native CLI rejected an RPC request')
         if (value.id === 'select-model') {
           if (config.preference.effort !== 'default')
@@ -602,7 +658,7 @@ try {
       ) {
         if (!sent) throw new Error('Unexpected native terminal event')
         settled = true
-        send({ id: 'final', type: 'get_state' })
+        finishIfReady()
       }
     }
     child.stdin.on('error', () => {})
@@ -636,6 +692,9 @@ try {
       })
       child.once('close', (code, signal) => resolve({ code, signal }))
     })
+    closeGuidance()
+    await controlReceiver?.close()
+    controlReceiver = undefined
     for (const block of thinkingBlocks.values())
       publicThinking(block.messageKey, block.index, block.text, block.state, true)
     clearTimeout(startupTimer)
@@ -654,9 +713,11 @@ try {
     if (failure || stopped) process.exitCode = 1
   }
 } catch (error) {
+  closeGuidance()
   clearTimeout(startupTimer)
   clearTimeout(closeTimer)
   clearTimeout(forceTimer)
   if (!finalized) output({ type: 'result', status: 'ERROR', response: '', error: errorMessage(error) })
   process.exitCode = 1
 }
+await controlReceiver?.close().catch(() => undefined)

@@ -133,6 +133,30 @@ function fixture() {
   }
 }
 
+describe('running message preference Gateway', () => {
+  it('reads and saves project choices without querying accounts, models or spawning a task', async () => {
+    const f = fixture()
+    expect(JSON.parse(await f.service.runningMessageSettings('parent', 'pi', f.signal)))
+      .toEqual({ cli: 'pi', mode: 'steer', canSteer: true })
+    expect(JSON.parse(await f.service.saveRunningMessageMode('parent', 'pi', 'queue', f.signal)))
+      .toEqual({ cli: 'pi', mode: 'queue', canSteer: true })
+    expect(f.storage.runningMessageSettings(f.project, 'pi').mode).toBe('queue')
+    expect(f.backend.spawn).not.toHaveBeenCalled()
+    expect(f.accounts.status).not.toHaveBeenCalled()
+    expect(catalogFor).not.toHaveBeenCalled()
+    expect(f.jobs.start).not.toHaveBeenCalled()
+  })
+  it('rejects an aborted save and a CLI without native steering without replacing the prior mode', async () => {
+    const f = fixture()
+    await f.service.saveRunningMessageMode('parent', 'codex', 'interrupt', f.signal)
+    await expect(f.service.saveRunningMessageMode('parent', 'codex', 'steer', f.signal)).rejects.toThrow('不支持引导')
+    const controller = new AbortController()
+    controller.abort()
+    await expect(f.service.saveRunningMessageMode('parent', 'codex', 'queue', controller.signal)).rejects.toThrow()
+    expect(f.storage.runningMessageSettings(f.project, 'codex').mode).toBe('interrupt')
+  })
+})
+
 describe('profile-wide CLI enablement', () => {
   it.each(['bigmodel', 'zai'] as const)(
     'forwards the selected ZCode %s provider through the guarded account endpoint',

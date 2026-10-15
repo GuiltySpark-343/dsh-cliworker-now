@@ -42,6 +42,7 @@ import { nativeProcessBackend } from './native-process.ts'
 import { validatePreference, configuredCliExecutable, resolveCliExecutable } from './adapters.ts'
 import { CliExecutablePathStore } from './cli-executable-paths.ts'
 import type { CliExecutablePathStatus } from '../shared/cli-settings.ts'
+import { RUNNING_MESSAGE_MODES } from '../shared/running-message.ts'
 import { WindowsCliInstallationError } from './windows-cli-installation.ts'
 import { ACCOUNT_CHANGED, authorizedCatalog, authorizeSelection } from './authorized-catalog.ts'
 import { WorkerStorage, type DispatchSetup } from './storage.ts'
@@ -738,6 +739,32 @@ export class CliWorkerService extends TypertRemoteService {
       throw failure(error)
     }
   }
+  /** @param parentSessionId - Active parent. @param cli - Explicit CLI. @param signal - Read lifetime. @returns Project/CLI running-message preference and native capability. */
+  @Remote('runningMessageSettings')
+  async runningMessageSettings(parentSessionId: string, cli: string, signal: AbortSignal): Promise<string> {
+    try {
+      const agent = await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      return JSON.stringify(this.runtime.storage.runningMessageSettings(this.project(agent), validate.enum(CLI_IDS).parse(cli)))
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Active parent. @param cli - Explicit CLI. @param mode - Running submission preference. @param signal - Save lifetime. @returns Saved preference; never starts a CLI. */
+  @Remote('saveRunningMessageMode')
+  async saveRunningMessageMode(parentSessionId: string, cli: string, mode: string, signal: AbortSignal): Promise<string> {
+    try {
+      const agent = await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      const result = this.runtime.storage.setRunningMessageMode(
+        this.project(agent), validate.enum(CLI_IDS).parse(cli), validate.enum(RUNNING_MESSAGE_MODES).parse(mode),
+      )
+      this.runtime.changed()
+      return JSON.stringify(result)
+    } catch (error) {
+      throw failure(error)
+    }
+  }
   /** @param parentSessionId - Active parent. @param signal - Query lifetime. @returns JSON role preset library. */
   @Remote('rolePresets')
   async rolePresets(parentSessionId: string, signal: AbortSignal): Promise<string> {
@@ -1234,6 +1261,44 @@ export class CliWorkerService extends TypertRemoteService {
       const worker = this.runtime.get(agent.id, workerId)
       if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目继续')
       return JSON.stringify(this.runtime.queueFollowup(agent.id, workerId, prompt, expectedRunId, requestId))
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param workerId - Active Worker. @param prompt - New message. @param expectedRunId - Observed run. @param requestId - Stable submission UUID. @param signal - Admission lifetime. @returns Accepted submission using the saved mode. */
+  @Remote('sendRunningMessage')
+  async sendRunningMessage(
+    parentSessionId: string, workerId: string, prompt: string, expectedRunId: string,
+    requestId: string, signal: AbortSignal,
+  ): Promise<string> {
+    try {
+      const agent = await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      this.assertExecution(agent)
+      const worker = this.runtime.get(agent.id, workerId)
+      if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目继续')
+      if (this.accounts.isBusy(cliOf(worker.preference))) throw new Error('请先关闭账号终端')
+      const receipt = await this.runtime.sendRunningMessage(
+        agent.id, workerId, prompt, expectedRunId, requestId, signal,
+      )
+      return JSON.stringify(receipt ?? { accepted: true })
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param workerId - Worker with pending messages. @param queuedId - Explicit priority message. @param expectedRunId - Observed run. @param signal - Admission lifetime. @returns Priority admission; cleanup and authorization still apply. */
+  @Remote('interruptQueuedFollowup')
+  async interruptQueuedFollowup(
+    parentSessionId: string, workerId: string, queuedId: string, expectedRunId: string, signal: AbortSignal,
+  ): Promise<void> {
+    try {
+      const agent = await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      this.assertExecution(agent)
+      const worker = this.runtime.get(agent.id, workerId)
+      if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目继续')
+      if (this.accounts.isBusy(cliOf(worker.preference))) throw new Error('请先关闭账号终端')
+      await this.runtime.interruptQueuedFollowup(agent.id, workerId, queuedId, expectedRunId, signal)
     } catch (error) {
       throw failure(error)
     }
