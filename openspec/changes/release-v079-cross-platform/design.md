@@ -11,6 +11,7 @@
 ## Decisions
 
 - 使用 build:preview 构建并在隔离 profile 验收，避免更新正在被 Desktop 使用的根 lib。
+- 隔离安装通过不代表正式 Desktop 已更新。用户要求可见桌面验收后，先检查活动任务，再以同一冻结包更新 Windows 正式 Desktop；保留原账号和会话，核验实际加载来源与最新交互，不以测试计数替代 UI 证据。
 - 双平台分别跑完整测试，记录平台跳过原因；受限沙箱造成的环境失败保留原始记录，在已授权的正常环境重跑。
 - 公开包由 package-release 脚本生成并审计边界，两个平台与三个渠道统一 SHA256。测试维护不改变 runtime 源码。
 - 发布按 GitHub 提交/CI/Release、npm、既有 dshmarket PR 更新顺序执行；npm 传播延迟只轮询，不重复发布同版本。

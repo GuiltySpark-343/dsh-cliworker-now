@@ -1250,3 +1250,25 @@
 - macOS 已安装 Desktop 真实 AGY 验收：原 `Gemini 3.8 Flash · Low` 选型，等待轮 `d6a362dd-63e5-4f68-968b-2781470cf10a` 正常停止，原生结果 `ERROR/interrupted`；A 在准备阶段被 B 替换，A 原生 user 事件 0、持久气泡 1 且 superseded；B 原生 user 事件 1、气泡 1，轮 `ebb1df87-de90-4d90-b74e-d0aabb15e2da` 原生 SUCCESS，实际响应 `LATEST_INTERRUPT_OK`。两次点击即时退卡，A 取消文字留在实际对话，B 完成后无待发送卡片或“正在发送”。
 - 原生会话 ID 保持；测试结束活动 Worker 与队列均为 0，等待/任务进程已退出；历史前缀 hash 不变，33 个既有偏好、会话选型和账号绑定文件 hash 不变。实际事件读取并经 `foldEvents` 复核；私有证据 `.cache/latest-interrupt-v079/native-verification.json`。桌面随后正被其他工作流插件安装操作占用，未额外进行桌面重开；重挂载验收只归为上述显式模拟，不冒充真实重启。未做 Windows、其他 CLI 真实模型、全量验收或 GitHub 推送/发布。
 - OpenSpec 严格校验归档前 16/16、同步并归档后 15/15 通过；仅归档本次 `2026-10-15-replace-pending-interrupts-with-latest`，其余既有变更保持。主规格标题、Purpose 和其他需求未改。
+
+
+## 2026-10-15：v0.7.9 macOS / Windows 全量发布验收
+
+- 用户明确授权连接 Windows，在两个平台全量验收合格后提交 GitHub、npm 和 dshmarket；版本继续固定 0.7.9。使用隔离构建、专用 profile 与私有远程目录，未覆盖用户现有 Desktop 配置、账号或会话；既有素材整理和历史文档差异未带入提交。
+- macOS arm64 全量最终 108 文件、2392 通过、8 个 Windows 专属用例跳过、0 失败；Windows x64 / Node 24.15.0 全量 2400 用例、2381 通过、19 个 POSIX/macOS 专属用例跳过、0 失败。全部新增排队、插队、停止、持久恢复用例均执行。命令统一使用 `pnpm --config.verifyDepsBeforeRun=false`；平台 skip 明细保留于本轮私有报告。
+- 修正两类测试预期而未更改运行时代码：设置用例按已落实的准备阶段忙碌协议拒绝禁用，显式 stop 后恢复操作，另用外部配置写入保留禁用竞态；outbox 的 0600 只在 POSIX 断言，两个平台都核验拒绝硬/符号链接且目标实际权限和字节不变。macOS 和 Windows 已在最终修正后重新跑完整套。
+- macOS 首轮受限执行因进程管理/回环监听限制未完成，改在获准的正常执行环境重跑；Windows 首轮 2378 通过/3 失败/19 跳过，三个失败均为 POSIX mode 数值断言。保留首轮原始日志，不将其计作通过。两平台类型检查、隔离构建及 OpenSpec 16/16 严格校验通过。
+- 唯一冻结包 `dsh-cliworker-now-0.7.9.tgz`：383 文件（378 lib），SHA-256 `0d183d7c1649c756e4d6c5ff62dbaa2ea276b7bc4ace13f8c6a25633de52f949`。开发清单仍 private；公开清单去除 scripts/devDependencies，并指向 canonical 仓库；包边界、辅助资源和模块图检查通过，无凭据、连接配置、账号绑定或运行日志。两系统安装目录均 383 文件逐字节匹配。
+- 两平台使用实际 dsh 安装器和隔离 profile 加载最终包；Host/Client 来源、Gateway 空 watch/取消订阅/非法 interrupt 参数拒绝均通过；appReady 后 appExit(0) 自然退出，PID/端口清理确认。macOS 初次验收夹具缺少独立 package 边界使 self-reference 解析到仓库，修正私有夹具后同包重验通过；Windows 初次隔离 PATH 缺固定 pnpm、诊断连接提前断开导致 runner 后续 stdout 断管，保留失败并仅清理所属进程/锁后恢复余下阶段。
+- macOS 实装 Codex 0.162.1、Pi 1.0.4、OMP 16.4.4 的空 HOME 版本/帮助检查与 Pi 离线 SDK 元数据通过；Windows 固定官方 CLI 入口及真实 Electron/SDK ConPTY stop/natural-exit、Job 后代清理和窗口观察结果见本轮报告。Windows 真实官方入口 Codex 0.160.0、Pi 1.0.4、OMP 16.4.4（Bun 1.3.14）及空账号 Pi SDK 元数据通过；原生窗口观察完整覆盖 stop/natural-exit，新增可见控制台 0。合成子进程与真实模型分开；自动化全量阶段新增 CLI 登录、CLI 账号查询与模型生成均为 0，未更新全局 CLI。
+- UI 证据沿用同一 v0.7.9 开发阶段实际 macOS Desktop：最新连续插队已核对真实 AGY 事件、原生退出、同一会话和持久气泡。最终 Host 与已验收部署字节一致，Client 仅构建路径 region 注释不同，执行文本相同。自动化阶段未操作当时被其他工作流占用的生产 Desktop；随后按用户要求补做正式桌面验收，见下方追加证据。没有全 CLI 真实模型或所有订阅覆盖结论。
+- 私有证据集中于 `.test-data/release-079/`；macOS 最终全量 `mac/full-tests-final-after-platform-fix.json`、安装/Host/Gateway及生命周期、公开 0.7.8 升级基线已保存。Windows 原始和最终报告、同包清单、SDK/窗口及清理证据分阶段保留。本条记录为发布前验收，公开下载、npm 和市场状态在下方另记，不能将本地准备视为公开发布。
+
+- 用户随后指出 Windows 正式 Desktop 未见新版。核实该处仍为 0.7.8；以上 0.7.9 是隔离 profile 安装，不属于正式桌面更新。已暂缓发布，追加正式 Desktop 更新及最新交互验收，完成证据另记。
+
+- macOS 正式 Desktop 最新补验：CUA 打开原 AGY 子对话确认重启后 A 取消/B 完成历史保留；真实等待任务仅执行 `sleep 60`，点击停止后显示“已停止”且无 error 事件；随后普通续聊在前轮终态后准入，同一原生会话、用户事件恰好一条、无工具，原生 SUCCESS 精确返回 `RELEASE_AFTER_STOP_OK`。两次提交均即时出现消息并清空可编辑输入框，无“正在发送”。原生事件、UI 观察与清理回执分别保留于 `mac/desktop-final-stop-resume.json` 和 `mac/desktop-final-ui-observation.json`；活动/待发/本轮进程最终均 0。此补验包含两次真实 AGY 任务，宿主另自动生成状态回报，不能将整次发布阶段表述为零模型调用。
+
+- Windows 正式 Desktop 补验：确认无活动 Worker 后通过原生应用菜单正常退出，使用同一冻结 tgz 从 0.7.8 升级至 0.7.9；安装器 exit 0，383 文件及 Host SHA 一致，安装前后 cordis 配置、3 条历史 Worker 和账号元数据一致。正常启动后沿用既有 AGY / gemini-3.8-flash-low / low 选型：即时消息、运行中输入、自动排队、待发送折叠/展开通过。连续插队 A2 只有 pending→superseded、无 user/admitted；B2 恰好一个 user，最终 SUCCESS 返回 `WIN079_LATEST_B2_DONE`。真实 UI 保留 A2 取消气泡，约 540ms 后待发条目 0、输入仍可用，无“正在发送”。显式停止得到 interrupted/user 且无错误，普通续聊成功返回 `WIN079_AFTER_STOP_DONE`。
+- Windows 真实桌面过程保留工具调整的未通过尝试：首次中文 IME 改写文本由精确校验拦截未发送；首次连续插队脚本误按 Invoke 操作 ExpandCollapse 控件，停止后旧排队自然出队，因此不将该轮算连续插队通过。修正私有测试工具后对更长等待重新验证，上述 A2/B2 事件和截图才是通过证据。无产品源码改动，未改发送模式；动效只核对真实折叠与退卡状态，不声称逐帧或帧率测量。证据在 `windows/evidence/desktop/`，不是合成模型回复。
+
+- Windows 最终只读收尾（14:25:56 UTC）：活动 Worker、账号就绪作用域、账号所属进程、认证进程、observer/验收/UI 任务及调试参数进程均 0，run.lock 不存在；正式 Harness 正常进程保留运行。双平台本地及正式桌面发布前门禁至此通过，未将等待公开渠道的事项提前标为完成。
