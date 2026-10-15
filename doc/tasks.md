@@ -1272,3 +1272,14 @@
 - Windows 真实桌面过程保留工具调整的未通过尝试：首次中文 IME 改写文本由精确校验拦截未发送；首次连续插队脚本误按 Invoke 操作 ExpandCollapse 控件，停止后旧排队自然出队，因此不将该轮算连续插队通过。修正私有测试工具后对更长等待重新验证，上述 A2/B2 事件和截图才是通过证据。无产品源码改动，未改发送模式；动效只核对真实折叠与退卡状态，不声称逐帧或帧率测量。证据在 `windows/evidence/desktop/`，不是合成模型回复。
 
 - Windows 最终只读收尾（14:25:56 UTC）：活动 Worker、账号就绪作用域、账号所属进程、认证进程、observer/验收/UI 任务及调试参数进程均 0，run.lock 不存在；正式 Harness 正常进程保留运行。双平台本地及正式桌面发布前门禁至此通过，未将等待公开渠道的事项提前标为完成。
+
+
+## 2026-10-15：v0.7.9 公开发布与安装回验
+
+- 发布前两端全量和正式 Desktop 门禁通过后，提交 `a31f35e69e68b9bead471edf551ce8302802d132` 已推送 main；该提交的 [GitHub Windows CI](https://github.com/SuperWheel/dsh-cliworker-now/actions/runs/38751781428) 成功。v0.7.9 注释 Tag 固定到该提交，[Release](https://github.com/SuperWheel/dsh-cliworker-now/releases/tag/v0.7.9) 标题为 `dsh-cliworker-now v0.7.9`，包含冻结 tgz、SHA256SUMS.txt 与去除私人路径的 package-verification.json。未重新打包或增加版本号。
+- npm 正常登录及本次发布网页验证由用户完成，官方发布进程 exit 0；匿名公共仓库在传播完成后确认固定版本与 latest 均为 0.7.9。GitHub 与 npm tgz 匿名下载逐字节相同，SHA-256 均为 `0d183d7c1649c756e4d6c5ff62dbaa2ea276b7bc4ace13f8c6a25633de52f949`；registry integrity 及 repository/homepage/bugs 指向核对通过。两条原 issue #1、#2 已关闭为 completed。
+- macOS 与 Windows 分别以原生 DSH 安装器在隔离 profile 安装公开 npm 固定 0.7.9：383/383 文件与冻结包一致、lock 记录公共 registry integrity，Host/Client 实际来源、Gateway、appExit(0) 自然退出及进程/端口清理通过。此阶段没有模型、CLI 登录、账号查询或正式 Desktop 修改。两个安装器自行在各自隔离 profile 加入仅针对 `dsh-cliworker-now@0.7.9` 的 minimumReleaseAgeExclude；没有手工放宽全局策略。Windows 最终正式 Desktop 5 个原 PID 保持不变。
+- 默认升级单独验证：macOS 独立 0.7.8 profile 执行 `@latest` exit 0，但实际仍为 0.7.8；仅备份刷新本包隔离 metadata 后，已读取 latest 0.7.9，重新执行仍保留 0.7.8。workspace 前后相同，没有版本年龄例外，符合默认等待期边界，不能计作已升级到 0.7.9。README 与 Release 保留等待说明及固定 GitHub tgz 入口。Windows 没有额外执行默认 latest 升级，不把固定版本安装当成该项验证。
+- 原 [dshmarket PR #6795](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6795) 已定向更新唯一插件 YAML 至固定 v0.7.9 tgz，提交 `2ed68bff64e12391d727698487a0dc67a9c4009f`，无其他条目或生成 README 差异；标题、正文及远端条目均回读一致。[市场 CI](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/actions/runs/38754058024) 已完成且成功，包括目录/README 校验及完整站点构建；PR 仍待维护者审核合并，不能称已经上架。
+- 公开安装原始记录保留于私有 `.test-data/release-079/mac/public-install-final-verification.json`、`mac/upgrade/latest-verification.json`、`windows/evidence/public-npm/`；公开下载与市场回读分别位于 `public-downloads/`、`market-submission-receipt.json`。macOS 固定安装首尝试遇到隔离 store 路径不匹配，复用同一 profile 原 store 后通过，失败日志保留；全量自动、模拟终端和正式桌面真实 AGY 的范围沿用上一节，不扩称所有提供商、订阅或跨模型上下文组合。
+- 仅本轮发布验收 OpenSpec 变更完成后归档；归档前严格检查 16/16 通过，归档后剩余活动变更与主规格 15/15 通过；其他历史未完成变更保留。本阶段没有运行时代码变化，因此不重复整套测试或改动正式安装。
