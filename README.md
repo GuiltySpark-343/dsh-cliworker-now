@@ -12,7 +12,7 @@
 [![Harness](https://img.shields.io/badge/DeepSeek_Harness-0.2.0--rc.2-555)](https://github.com/deepseek-ai/deepseek-harness)
 [![Platform](https://img.shields.io/badge/Platforms-macOS%20%7C%20Windows-555)](#4-环境与-cli-支持)
 [![License](https://img.shields.io/badge/License-MIT-555)](LICENSE)
-[![dshfind](https://dshfind.com/api/badge/SuperWheel/cliworker-now?lang=zh)](https://dshfind.com/zh/plugins/SuperWheel/cliworker-now?ref=badge)
+[![dshfind](https://dshfind.com/api/card/SuperWheel/dsh-cliworker-now?lang=zh)](https://dshfind.com/zh/plugins/SuperWheel/dsh-cliworker-now?ref=badge)
 
 [下载安装包](https://github.com/SuperWheel/dsh-cliworker-now/releases/latest) · [安装方法](#5-安装与更新) · [开始使用](#6-使用方法) · [反馈问题](https://github.com/SuperWheel/dsh-cliworker-now/issues)
 
