@@ -2111,3 +2111,11 @@ Claude/Kimi/MiMo/Grok 没有此项目保存模型与强度，本轮没有模型�
 - Mac clean profile在用户停测前补完一轮真实GPT-6.1 Sol / Low：原生fileChange生成实际marker、原生turn completed与回复匹配；实际Client打开同一Worker并展开文件详情，本轮47393 token=未缓存输入10553+缓存读取36736+输出104，未知三类上下文显示“—”。四个原生进程句柄正常退出且范围为空；隐藏IAB及Host清理、卸载恢复四个官方模块通过，正式Desktop/Web配置未变。证据为私有`mac/r4-clean-real-worker-closure-receipt.json`；此项为真实任务，不与先前模拟投影混写。
 - 用户随后明确要求“暂停所有测试”，并表示自行测试后所有任务正常、可以上传。立即停止后续诊断/修复/重测，撤回唯一尚未验收的合成夹具临时改动，生产、测试与r4冻结内容一致；本任务测试、模型、临时Host、浏览器、监听端口和计划任务均已收尾，保留用户自测及其他Codex进程。
 - 本次按用户最新手工验收和明确授权发布同一r4包；不宣称Windows自动回归全绿。Windows clean profile真实模型任务尚未启动，公开registry固定版本及latest升级测试也按停测要求不再执行。上传后只做公开版本、URL及包摘要的只读确认；OpenSpec保留未验证项，不强行归档。
+
+### 2026-10-18 v0.8.1 上传与开源致谢
+
+- 用户明确停止全部测试并确认手工验收正常后，将已审核的595项改动提交为 `ecaddbe0a2178b2ff0f42730e31d278206ff0d6d`；保留远端README历史的合并提交为 `037168a23fb4fd5e1260d9f3fc04fedc23fc81bc`，以非强制方式上传main与v0.8.1标签。合并没有改变发布源码内容，无关素材修改未暂存。提交包含 `[skip ci]`，只读回查该提交的Actions运行数为0。
+- [GitHub Release v0.8.1](https://github.com/SuperWheel/dsh-cliworker-now/releases/tag/v0.8.1) 已公开，含tgz、SHA256SUMS.txt及脱敏package-verification.json。远端下载为17935007字节，SHA-256 `ca760868ed041845c414a92dc75e927ba5798baa43259cbc28f793b57af3be1b`，与两端已安装候选逐字相同；没有重建或重打包。
+- npm经用户完成官方发布二次验证后返回HTTP 202，CLI退出0；提交包同上。公开registry的版本及摘要另行只读回查，不把服务端接受等同于已经可安装。
+- 按用户补充要求，在中英文README增加“开源参考与致谢”及导航，列明codex-host、Codingns4DSH、DeepSeek Harness的作者与实际参考内容，并链接已核对的相关CLI官方项目。该修改仅提交GitHub文档，已上传0.8.1安装包内的README保持冻结内容。
+- 按停测指示没有新增测试、真实模型任务、构建或发布后安装；Windows自动回归的4项失败及其余未验收边界继续保留。

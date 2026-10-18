@@ -21,7 +21,7 @@
 
 **阅读导航**
 
-[1. 项目定位](#1-项目定位) · [2. 特点与优势](#2-特点与优势) · [3. 界面效果](#3-功能与界面效果) · [4. 支持范围](#4-环境与-cli-支持) · [5. 安装更新](#5-安装与更新) · [6. 使用方法](#6-使用方法) · [7. 常见问题](#7-权限数据与常见问题) · [8. 开发验证](#8-开发与验证) · [9. 文档与反馈](#9-文档反馈与许可)
+[1. 项目定位](#1-项目定位) · [2. 特点与优势](#2-特点与优势) · [3. 界面效果](#3-功能与界面效果) · [4. 支持范围](#4-环境与-cli-支持) · [5. 安装更新](#5-安装与更新) · [6. 使用方法](#6-使用方法) · [7. 常见问题](#7-权限数据与常见问题) · [8. 开发验证](#8-开发与验证) · [9. 文档与反馈](#9-文档反馈与许可) · [10. 开源致谢](#10-开源参考与致谢)
 
 ## 1. 项目定位
 
@@ -501,3 +501,17 @@ Codex 中选择 `openspec-propose` 技能准备方案，再用 `openspec-apply-c
 - [提交 Issue](https://github.com/SuperWheel/dsh-cliworker-now/issues)：请附 Harness / 插件 / CLI 版本、复现步骤与已脱敏日志；不要上传账号令牌或私人项目内容。
 
 项目采用 [MIT License](LICENSE)，是独立社区插件。DeepSeek Harness 及各 CLI 的名称、图标和商标归各自权利人所有，不表示官方关联或背书。
+
+## 10. 开源参考与致谢
+
+感谢以下项目的作者、维护者和贡献者公开源码与文档，为本项目的实现和问题排查提供了帮助。
+
+| 项目与作者 | 参考内容 |
+| --- | --- |
+| [codex-host](https://github.com/BytePioneer-AI/codex-host) · BytePioneer-AI 与贡献者 | 多 CLI 适配、Token 与缓存统计、公开思考记录，以及 Codex 原生摘要通知的处理。 |
+| [Codingns4DSH](https://github.com/jingyi0605/Codingns4DSH) · jingyi0605 与贡献者 | 外部 CLI 接入 Harness 原生会话的实现思路，以及 Grok 模型容量、用量与上下文绑定。 |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) · DeepSeek 与贡献者 | 插件扩展机制、原生会话组件、任务与权限接口，是本插件运行和界面集成的基础。 |
+
+也感谢 [Codex](https://github.com/openai/codex)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[Kimi Code](https://github.com/MoonshotAI/kimi-code)、[Grok Build](https://github.com/xai-org/grok-build)、[Pi](https://github.com/earendil-works/pi)、[Oh My Pi](https://github.com/can1357/oh-my-pi)、[OpenCode](https://github.com/anomalyco/opencode) 和 [MiMo Code](https://github.com/XiaomiMiMo/MiMo-Code) 与 [ZCode](https://github.com/zai-org/ZCode) 的开发者。我们参考各自公开的源码与协议文档，核对原生事件、会话生命周期和用量口径。
+
+具体参考版本和采用范围见 [CLI 数据接口核查](doc/cli-native-data-audit.md) 与 [Codingns4DSH 参考记录](doc/codingns-reference-audit.md)。感谢开源作者们的持续投入与分享。

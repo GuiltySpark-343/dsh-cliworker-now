@@ -42,7 +42,7 @@ Finished empty intermediate replies appear in the expandable work process with t
 
 **On this page**
 
-[1. Overview](#1-overview) · [2. Features](#2-features) · [3. Screenshots](#3-features-in-the-interface) · [4. Support](#4-requirements-and-cli-support) · [5. Installation](#5-installation-and-updates) · [6. Usage](#6-using-dsh-cliworker-now) · [7. Permissions and FAQ](#7-permissions-data-and-faq) · [8. Development](#8-development-and-verification) · [9. Documentation](#9-documentation-feedback-and-license)
+[1. Overview](#1-overview) · [2. Features](#2-features) · [3. Screenshots](#3-features-in-the-interface) · [4. Support](#4-requirements-and-cli-support) · [5. Installation](#5-installation-and-updates) · [6. Usage](#6-using-dsh-cliworker-now) · [7. Permissions and FAQ](#7-permissions-data-and-faq) · [8. Development](#8-development-and-verification) · [9. Documentation](#9-documentation-feedback-and-license) · [10. Acknowledgments](#10-open-source-references-and-acknowledgments)
 
 ## 1. Overview
 
@@ -497,3 +497,17 @@ In Codex, use `openspec-propose` to prepare a change, `openspec-apply-change` to
 - [Report an issue](https://github.com/SuperWheel/dsh-cliworker-now/issues): include Harness / plugin / CLI versions, reproduction steps and redacted logs. Keep account tokens and private project content out of reports.
 
 This independent community plugin uses the [MIT License](LICENSE). DeepSeek Harness and CLI names, icons and trademarks belong to their respective owners; no official affiliation or endorsement is implied.
+
+## 10. Open-source references and acknowledgments
+
+Thank you to the authors, maintainers and contributors of these projects for sharing the source code and documentation that helped us implement features and investigate issues.
+
+| Project and authors | What we referenced |
+| --- | --- |
+| [codex-host](https://github.com/BytePioneer-AI/codex-host) · BytePioneer-AI and contributors | Multi-CLI adapters, token and cache accounting, public reasoning records, and native Codex summary notifications. |
+| [Codingns4DSH](https://github.com/jingyi0605/Codingns4DSH) · jingyi0605 and contributors | Approaches to projecting external CLI events into native Harness conversations, plus Grok model capacity and usage/context binding. |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) · DeepSeek and contributors | The plugin extension system, native conversation components, task and permission interfaces that this plugin builds on. |
+
+We also thank the developers of [Codex](https://github.com/openai/codex), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Kimi Code](https://github.com/MoonshotAI/kimi-code), [Grok Build](https://github.com/xai-org/grok-build), [Pi](https://github.com/earendil-works/pi), [Oh My Pi](https://github.com/can1357/oh-my-pi), [OpenCode](https://github.com/anomalyco/opencode) [MiMo Code](https://github.com/XiaomiMiMo/MiMo-Code) and [ZCode](https://github.com/zai-org/ZCode). Their public source code and protocol documentation helped us check native events, session lifecycles and usage accounting.
+
+The [CLI data interface audit](doc/cli-native-data-audit.md) and [Codingns4DSH reference notes](doc/codingns-reference-audit.md) record the versions and scope of these references. Thank you for your continued work and generosity in sharing it.
