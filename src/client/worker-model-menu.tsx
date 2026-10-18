@@ -31,11 +31,13 @@ export function WorkerModelMenu({
   api,
   sessionId,
   disabled,
+  disabledReason,
 }: {
   worker: Worker
   api: API
   sessionId: string
   disabled: boolean
+  disabledReason?: string
 }) {
   const cli = cliOf(worker.preference)
   const [open, setOpen] = useState(false)
@@ -181,9 +183,10 @@ export function WorkerModelMenu({
           aria-expanded={open}
           onClick={() => (open ? close() : setOpen(true))}
           title={
-            active(worker.status)
+            disabledReason ||
+            (active(worker.status)
               ? '本轮结束后可以修改模型与强度'
-              : `${name} · ${effortLabel(selection.effort)}`
+              : `${name} · ${effortLabel(selection.effort)}`)
           }
         >
           <span>{name}</span>

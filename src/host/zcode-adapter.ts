@@ -12,7 +12,7 @@ import {
   renameSync,
   rmSync,
 } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { join, dirname, basename, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { StringDecoder } from 'node:string_decoder'
@@ -22,6 +22,7 @@ import type { EventInput, ProtocolResult } from './protocol.ts'
 import type { AccountIdentity } from './account-identity.ts'
 import { probeAccountModels } from './account-models.mjs'
 import { readZCodeAccountApiKeys, readZCodeAccountBindings } from './zcode-account-models.ts'
+import { ZcodeResponseTracker } from './zcode-response.mjs'
 
 // Native ZCode uses exact tool-name sets, not globs. Deny its own delegation
 // surface and bundled browser REPL. This is not a general MCP isolation policy;
@@ -54,6 +55,7 @@ export interface ZCodeInput {
   mode: TaskMode
   prompt: string
   conversationId?: string
+  nativeTransport?: boolean
   stateDirectory: string
   authDirectory?: string
   builtinConfig?: string
@@ -91,7 +93,7 @@ function builtinPath(executable: string, builtin?: string): string {
       ? adjacent
       : existsSync(bundled)
         ? bundled
-      : '/Applications/ZCode.app/Contents/Resources/config/provider/zcode-builtin.json')
+        : '/Applications/ZCode.app/Contents/Resources/config/provider/zcode-builtin.json')
   if (!existsSync(config)) throw new Error('请配置与 ZCode CLI 配套的 zcodeBuiltinConfig')
   return config
 }
@@ -161,6 +163,54 @@ export async function prepareZCode(input: ZCodeInput) {
     input.authDirectory,
     input.builtinConfig,
   )
+  // app-server is a desktop-hosted surface: unlike headless, it receives the
+  // account overlay and request authentication from its client. Keep the one
+  // admitted native binding in the bridge environment, never its request file.
+  const access = selected.providerConfig.access
+  if (input.nativeTransport && access?.type === 'zhipu-account') {
+    if (
+      access.mode !== 'individual-coding-plan' ||
+      !['bigmodel', 'zai'].includes(access.accountType) ||
+      !record(builtin) ||
+      !Number.isSafeInteger(builtin.revision) ||
+      builtin.revision < 0
+    )
+      throw new Error('ZCode 原生账号路由缺少可核实的配置版本')
+    const authDirectory = env.ZCODE_DATA_BASE_DIR
+    const credentialPath = join(authDirectory, '.zcode/v2/credentials.json')
+    const credentialDigest = () =>
+      createHash('sha256')
+        .update(JSON.stringify(readZCodeConfig(credentialPath, false, true)))
+        .digest('hex')
+    const before = credentialDigest()
+    const binding = (await readZCodeAccountBindings(authDirectory, [selected.providerId])).get(
+      selected.providerId,
+    )
+    if (!binding || credentialDigest() !== before)
+      throw new Error('ZCode 当前账号绑定缺失或已变化，请重新检查原生登录')
+    const providerId = selected.providerId
+    Object.assign(env, {
+      CLIWORKER_ZCODE_NATIVE_ACCOUNT: JSON.stringify({
+        schema: 1,
+        createdAt: Date.now(),
+        selection,
+        accountAccess: {
+          type: 'zhipu-account',
+          accountType: access.accountType,
+          mode: access.mode,
+          entitled: true,
+        },
+        binding,
+        credential: { authDirectory, sha256: before },
+        snapshot: {
+          revision: `cliworker-account:${randomUUID()}`,
+          basedOnZCodeBuiltinRevision: `zcode-builtin:${builtin.revision}:${createHash('sha256').update(resolve(env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE)).digest('hex')}`,
+          providers: { [providerId]: { access: { type: 'zhipu-account', entitled: true } } },
+          states: { [providerId]: { availability: 'available', entitled: true, current: true } },
+        },
+      }),
+    })
+  }
   // Preserve private provider/model overlays. Only this worker's default selection changes.
   writePersonalConfig(env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE, {
     ...personal,
@@ -183,7 +233,7 @@ export async function prepareZCode(input: ZCodeInput) {
     '--prompt',
     `任务：\n${input.prompt}`,
   ]
-  if (input.conversationId) {
+  if (input.conversationId && !input.nativeTransport) {
     const request = join(input.stateDirectory, `resume-${randomUUID()}.json`)
     writePersonalConfig(request, {
       executable: input.executable,
@@ -812,6 +862,9 @@ export class ZCodeProtocol {
   private failed = false
   private completed = false
   private ended = false
+  private responses = new ZcodeResponseTracker((event) => this.emit(event))
+  private thoughts = new Map<string, string>()
+  private activeThought?: string
   conversationId?: string
   result?: ProtocolResult
   constructor(
@@ -837,10 +890,18 @@ export class ZCodeProtocol {
     this.pending += this.decoder.end()
     if (this.pending.trim()) this.line(this.pending.trim())
     this.pending = ''
+    this.responses.finish()
   }
   private step(id: string) {
     if (!this.steps.has(id)) this.steps.set(id, this.steps.size)
     return this.steps.get(id)!
+  }
+  private finishThought() {
+    if (!this.activeThought) return
+    const id = this.activeThought
+    this.responses.emit({ kind: 'reasoning', step: this.step(`reasoning:${id}`),
+      text: 'ZCode 公开思考', detail: this.thoughts.get(id)!, state: 'COMPLETED' }, id, 'reasoning', 0)
+    this.activeThought = undefined
   }
   private line(line: string) {
     if (Buffer.byteLength(line) > this.maxLineBytes) throw new Error('ZCode event too large')
@@ -860,24 +921,40 @@ export class ZCodeProtocol {
         this.identify(v.sessionId)
       }
     }
+    if (v.type === 'session.updated' && p.querySource === 'main_turn' &&
+      typeof p.content === 'string' && Number.isSafeInteger(p.toolCallCount) &&
+      typeof p.stopReason === 'string') this.finishThought()
     if (v.type === 'model.streaming' && p.kind === 'text_delta') {
+      this.finishThought()
       if (!nonempty(p.assistantMessageId) || typeof p.delta !== 'string')
         throw new Error('Invalid ZCode text delta')
-      this.emit({ kind: 'assistant', step: this.step(p.assistantMessageId), text: p.delta })
+      this.responses.emit({ kind: 'assistant', step: this.step(p.assistantMessageId), text: p.delta },
+        p.assistantMessageId, 'text', 1)
+    } else if (v.type === 'model.streaming' && p.kind === 'reasoning_delta') {
+      if (!nonempty(p.assistantMessageId) || typeof p.delta !== 'string')
+        throw new Error('Invalid ZCode reasoning delta')
+      const thought = (this.thoughts.get(p.assistantMessageId) ?? '') + p.delta
+      this.thoughts.set(p.assistantMessageId, thought)
+      this.activeThought = p.assistantMessageId
+      this.responses.emit({ kind: 'reasoning', step: this.step(`reasoning:${p.assistantMessageId}`),
+        text: 'ZCode 公开思考', detail: thought, state: 'RUNNING' }, p.assistantMessageId, 'reasoning', 0)
+    } else if (v.type === 'session.updated' && this.responses.complete(p)) {
+      // Ordered model_complete carries only this request's usage, never turn usage.
     } else if (v.type === 'session.updated' && nonempty(p.providerId) && nonempty(p.modelId)) {
       if (this.expectedModel && `${p.providerId}/${p.modelId}` !== this.expectedModel)
         throw new Error('ZCode 实际模型与所选模型不匹配，任务已拒绝')
       this.emit({ kind: 'status', text: 'ZCode 模型已确认', observedModel: `${p.providerId}/${p.modelId}` })
     } else if (v.type === 'tool.updated') {
+      this.finishThought()
       if (p.kind === 'batch') {
         // Native permission rejection may only emit scheduled + batch(errorCount),
         // with no started/result event. Never let turn.completed erase that fact.
         if (!Number.isSafeInteger(p.errorCount) || p.errorCount < 0)
           throw new Error('Invalid ZCode tool batch')
         if (p.errorCount > 0) this.failed = true
-      } else if (['scheduled', 'started', 'result'].includes(p.kind)) {
+      } else if (['scheduled', 'started', 'result', 'error'].includes(p.kind)) {
         if (!nonempty(p.toolCallId)) throw new Error('Invalid ZCode tool identity')
-        const done = p.kind === 'result'
+        const done = p.kind === 'result' || p.kind === 'error'
         if (done) {
           this.open.delete(p.toolCallId)
           if (p.result?.success !== true) this.failed = true
@@ -889,6 +966,9 @@ export class ZCodeProtocol {
           text: this.toolNames.get(p.toolCallId) ?? '工具',
           state: done ? (p.result?.success === true ? 'COMPLETED' : 'FAILED') : 'RUNNING',
           detail: JSON.stringify(p.result ?? p),
+          toolCall: { callId: p.toolCallId, name: this.toolNames.get(p.toolCallId),
+            ...(Object.hasOwn(p, 'input') ? { input: p.input } : {}),
+            ...(Object.hasOwn(p, 'result') ? { output: p.result } : {}) },
         })
       }
     } else if (

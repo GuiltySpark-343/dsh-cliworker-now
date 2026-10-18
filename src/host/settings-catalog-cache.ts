@@ -184,6 +184,8 @@ export class SettingsCatalogCache {
     project: string
     signal: AbortSignal
     refresh?: boolean
+    /** Qoder discovery itself verifies current account + complete sources before publishing. */
+    selfVerifiedDiscovery?: boolean
     binding: () => Promise<string>
     discover: () => Promise<{ catalog: Catalog; binding: string }>
   }): Promise<{ catalog: Catalog; binding: string }> {
@@ -205,14 +207,14 @@ export class SettingsCatalogCache {
     try {
       if (input.refresh) this.ready.delete(key)
       const revision = this.revision(cli)
-      const binding = await input.binding()
-      signal.throwIfAborted()
       const current = this.ready.get(key)
-      if (current?.binding === binding) return structuredClone({ catalog: current.catalog, binding })
+      const binding = cli === 'qoder' && input.selfVerifiedDiscovery && !current ? undefined : await input.binding()
+      signal.throwIfAborted()
+      if (current && current.binding === binding) return structuredClone({ catalog: current.catalog, binding })
       this.ready.delete(key)
       const result = await input.discover()
       signal.throwIfAborted()
-      if (this.revision(cli) !== revision || result.binding !== binding || result.catalog.cli !== cli)
+      if (this.revision(cli) !== revision || binding !== undefined && result.binding !== binding || result.catalog.cli !== cli || !result.catalog.models.length)
         throw new Error('模型来源已变化，请刷新重试')
       this.remember(input.project, result, revision)
       return structuredClone(result)

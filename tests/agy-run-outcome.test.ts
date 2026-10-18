@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { PassThrough } from 'node:stream'
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { AgyProtocol, type EventInput } from '../src/host/protocol.ts'
-import { WorkerRuntime } from '../src/host/runtime.ts'
+import { WorkerRuntime } from './fixtures/legacy-runtime.ts'
 import { WorkerStorage } from '../src/host/storage.ts'
 import { CliWorkerService } from '../src/host/index.ts'
 import { DEFAULT_CONFIG, type ProcessBackend } from '../src/host/process.ts'
@@ -333,6 +333,7 @@ describe('AGY runtime outcomes', () => {
       },
     }
     const service = Object.assign(Object.create(CliWorkerService.prototype), {
+      nativeRunDone: new Map(),
       runtime: f.runtime,
       options: DEFAULT_CONFIG,
       disposed: new AbortController(),

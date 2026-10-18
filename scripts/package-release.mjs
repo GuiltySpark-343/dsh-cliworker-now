@@ -13,11 +13,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { verifyHostRuntime } from './host-runtime.mjs'
 
 // Prepare an already verified build. This script never builds, installs or publishes.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const rootManifestText = readFileSync(join(root, 'package.json'), 'utf8')
 const rootManifest = JSON.parse(rootManifestText)
+verifyHostRuntime(root)
 if (rootManifest.name !== 'dsh-cliworker-now' || rootManifest.private !== true)
   throw new Error('The development manifest must remain private dsh-cliworker-now')
 if (!/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?$/.test(rootManifest.version))
@@ -41,6 +43,7 @@ const helperNames = [
   'windows-account-launch',
   'windows-account-stdio',
   'windows-hidden-launch',
+  'windows-console-manifest',
   'terminal-bridge',
   'zcode-resume',
 ]
@@ -57,12 +60,22 @@ const required = new Set([
   'lib/types/host/windows-account-launch.mjs',
   'lib/types/host/windows-account-stdio.mjs',
   'lib/types/host/windows-hidden-launch.mjs',
+  'lib/types/host/windows-console-manifest.mjs',
+  'lib/types/host/windows-console-manifest.d.mts',
   'lib/types/host/private-launch.mjs',
   'lib/types/host/native-spawn.mjs',
   'lib/windows-agy-account.ps1',
   'lib/types/host/windows-agy-account.ps1',
+  'lib/native-runtime-guard/index.mjs',
+  'lib/native-runtime-guard/host-runtime.mjs',
+  'lib/native-runtime-guard/package.json',
+  'lib/native-file-privacy.mjs',
+  'lib/native-file-privacy.ps1',
+  'lib/types/host/native-file-privacy.mjs',
+  'lib/types/host/native-file-privacy.ps1',
+  'lib/types/host/native-file-privacy.d.mts',
 ])
-const runtimeEntries = new Set(helperNames.map((name) => `lib/${name}.mjs`))
+const runtimeEntries = new Set([...helperNames.map((name) => `lib/${name}.mjs`), 'lib/native-runtime-guard/index.mjs'])
 const typeEntries = new Set()
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 const inside = (base, path) => {
@@ -130,7 +143,7 @@ for (const name of [
 }
 
 directory(join(root, 'lib'))
-const files = [...inventory(root, 'lib'), ...allowlist]
+const files = [...inventory(root, 'lib'), ...inventory(root, 'runtime-host'), ...allowlist]
 for (const part of allowlist) regular(join(root, part))
 for (const part of required) {
   const path = resolve(root, part)

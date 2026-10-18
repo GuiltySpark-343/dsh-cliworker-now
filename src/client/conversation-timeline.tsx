@@ -1,119 +1,19 @@
-import { Fragment, useEffect, useState, type ReactNode } from 'react'
+import { Fragment, useState, type ReactNode } from 'react'
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
-import {
-  CLI_LABELS,
-  cliOf,
-  active,
-  isUserInterrupted,
-  type TimelineItem,
-  type Worker,
-} from '../shared/types.ts'
+import { CLI_LABELS, cliOf, active, type TimelineItem, type Worker } from '../shared/types.ts'
 import { messageClock } from '../shared/telemetry.ts'
 import { UsageIndicator } from './telemetry.tsx'
 import { CopyText } from './copy-text.tsx'
-import { Glyph } from './icons.tsx'
-const labels: Record<string, string> = {
-  completed: '已完成',
-  failed: '失败',
-  uncertain: '结果待核实',
-  interrupted: '已中断',
-  running: '运行中',
-  queued: '排队中',
-  stopping: '正在停止',
-}
+import {
+  WorkerProcessGroup,
+  WorkerProcessHeader,
+  runOf,
+  completedEmptyReply,
+  processAlwaysOpen,
+  processContent,
+} from './worker-process.tsx'
+import { useNativePresentation } from './native-presentation.tsx'
 const markdownLabels = { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' }
-const runOf = (item: TimelineItem) => item.admittedRunId ?? item.id.split(':')[0]
-function completedEmptyReply(item: TimelineItem, worker?: Worker): boolean {
-  return (
-    item.kind === 'assistant' &&
-    !item.text.trim() &&
-    (item.state === 'DONE' ||
-      !!item.runEndedAt ||
-      (!!item.runOutcome && !active(item.runOutcome)) ||
-      (worker?.runId === runOf(item) && !active(worker.status)))
-  )
-}
-function ProcessRow({ item }: { item: TimelineItem }) {
-  return item.kind === 'tool' || item.kind === 'diagnostic' || item.kind === 'reasoning' ? (
-    <details className={`cwn-tool${item.kind === 'reasoning' ? ' cwn-reasoning' : ''}`}>
-      <summary>
-        {item.kind !== 'reasoning' && <Glyph name="tool" />}
-        <span className="cwn-tool-title">{item.text}</span>
-        <small title={item.runStatus ? `CLI 最后状态：${item.state}；未收到最终工具状态` : undefined}>
-          {item.runStatus ? (item.runStatus === 'interrupted' ? '本轮已中断' : '本轮已结束') : item.state}
-        </small>
-      </summary>
-      <pre>{item.detail}</pre>
-    </details>
-  ) : (
-    <div className="cwn-process-event">
-      {item.text === '已停止' ? item.text : (labels[item.state ?? item.text] ?? item.text)}
-    </div>
-  )
-}
-function Progress({ rows, item, worker }: { rows: TimelineItem[]; item: TimelineItem; worker?: Worker }) {
-  const [now, setNow] = useState(Date.now)
-  const isRunning =
-    !item.runEndedAt &&
-    worker?.runId === runOf(item) &&
-    ['running', 'queued', 'stopping'].includes(worker.status)
-  useEffect(() => {
-    if (!isRunning) return
-    const timer = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(timer)
-  }, [isRunning])
-  const start = Date.parse(item.runStartedAt ?? '')
-  const end = item.runEndedAt ? Date.parse(item.runEndedAt) : isRunning ? now : NaN
-  const seconds =
-    Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, Math.floor((end - start) / 1000)) : undefined
-  const label =
-    (worker && worker.runId === runOf(item) && isUserInterrupted(worker)) ||
-    rows.some((row) => row.kind === 'status' && row.text === '已停止')
-      ? '已停止'
-      : (labels[item.runOutcome ?? ''] ?? (isRunning ? labels[worker!.status] : '工作过程'))
-  return (
-    <details className="cwn-progress">
-      <summary>
-        {label}
-        {seconds !== undefined ? `，用时 ${seconds}秒` : ''}
-        <span className="cwn-progress-chevron">
-          <Glyph name="chevron" />
-        </span>
-      </summary>
-      <div className="cwn-process-body">
-        <p className="cwn-process-note">
-          {rows.some((row) => row.kind === 'reasoning' && row.detail?.trim())
-            ? '以下为 CLI 返回的公开思考、计划与工具记录。'
-            : '本轮 CLI 未返回可展示的思考摘要；以下为已有工作记录。'}
-        </p>
-        {item.sessionDurationSeconds !== undefined && (
-          <p className="cwn-process-note">CLI 会话累计耗时：{item.sessionDurationSeconds}秒</p>
-        )}
-        {rows
-          .filter((row) =>
-            row.kind === 'reasoning'
-              ? !!row.detail?.trim()
-              : !['user', 'assistant'].includes(row.kind) || completedEmptyReply(row, worker),
-          )
-          .map((row) =>
-            row.kind === 'assistant' ? (
-              <div key={row.id} className="cwn-process-event" data-empty-reply-id={row.id}>
-                <span>无正文回复 · </span>
-                <UsageIndicator usage={row.usage} reply />
-                {row.durationSeconds !== undefined && <span> · CLI 报告耗时：{row.durationSeconds}秒</span>}
-                <span> · </span>
-                <time dateTime={row.time} title={new Date(row.time).toLocaleString('zh-CN')}>
-                  {messageClock(row.time)}
-                </time>
-              </div>
-            ) : (
-              <ProcessRow key={row.id} item={row} />
-            ),
-          )}
-      </div>
-    </details>
-  )
-}
 export function ConversationTimeline({
   items,
   latestItems = items,
@@ -125,6 +25,8 @@ export function ConversationTimeline({
   worker?: Worker
   messageFeedback?: Record<string, ReactNode>
 }) {
+  const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({})
+  const policy = useNativePresentation()
   // Match rc.2 UserMessageNodeView / TurnTailNodeView. A newer user turn
   // hides the preceding assistant tail; a history page is never the live end.
   const latestUser = latestItems.findLast((item) => item.kind === 'user')?.id
@@ -142,16 +44,55 @@ export function ConversationTimeline({
     const id = runOf(item)
     runs.set(id, [...(runs.get(id) ?? []), item])
   }
-  const seen = new Set<string | undefined>()
+  // A queued turn publishes preparation status before its native-start user event.
+  // Show that opening message before its process, while preserving mid-run input order.
+  const displayItems = [...items]
+  for (const rows of runs.values()) {
+    const opening = rows.findIndex((row) => row.kind === 'user')
+    if (opening <= 0 || !rows.slice(0, opening).every((row) => ['status', 'diagnostic'].includes(row.kind)))
+      continue
+    const user = rows[opening]!
+    displayItems.splice(displayItems.indexOf(user), 1)
+    displayItems.splice(displayItems.indexOf(rows[0]!), 0, user)
+  }
+  const flow: { item: TimelineItem; process?: TimelineItem[] }[] = []
+  for (const item of displayItems) {
+    const process = item.kind !== 'user' && (item.kind !== 'assistant' || completedEmptyReply(item, worker))
+    const previous = flow.at(-1)
+    if (process && previous?.process && runOf(previous.item) === runOf(item)) previous.process.push(item)
+    else flow.push({ item, process: process ? [item] : undefined })
+  }
+  const seen = new Set<string | undefined>(),
+    groupsSeen = new Set<string | undefined>()
   return (
     <>
-      {items.map((item) => {
+      {flow.map(({ item, process }) => {
         const id = runOf(item)
+        const rows = runs.get(id)!
         const first = item.kind !== 'user' && !seen.has(id)
         if (item.kind !== 'user') seen.add(id)
+        const firstGroup = !!process && processContent(process, worker).length > 0 && !groupsSeen.has(id)
+        if (firstGroup) groupsSeen.add(id)
+        const open = processAlwaysOpen(rows, worker) || !policy.foldCompletedTurns || !!expandedRuns[id!]
         return (
-          <Fragment key={item.id}>
-            {first && <Progress rows={runs.get(id)!} item={item} worker={worker} />}
+          <Fragment key={item.kind === 'user' ? (item.queuedFollowupId ?? item.id) : item.id}>
+            {first && (
+              <WorkerProcessHeader
+                rows={rows}
+                worker={worker}
+                open={open}
+                toggle={() => setExpandedRuns((old) => ({ ...old, [id!]: !open }))}
+              />
+            )}
+            {process && (
+              <WorkerProcessGroup
+                items={process}
+                rows={rows}
+                worker={worker}
+                hidden={!open}
+                first={firstGroup}
+              />
+            )}
             {(item.kind === 'user' || (item.kind === 'assistant' && !completedEmptyReply(item, worker))) && (
               <article
                 className={`cwn-message ${item.kind}`}
@@ -189,17 +130,11 @@ export function ConversationTimeline({
                     )}
                   </div>
                   {messageFeedback?.[item.id] ??
-                    (item.kind === 'user' &&
-                    item.deliveryState &&
-                    ['superseded', 'cancelled', 'failed'].includes(item.deliveryState) ? (
+                    (item.kind === 'user' && item.deliveryState && item.deliveryState === 'failed' ? (
                       <span role="status">
-                        {item.deliveryState === 'superseded'
-                          ? '已被后续插队取消'
-                          : item.deliveryState === 'cancelled'
-                            ? '已停止发送'
-                            : item.deliveryError?.includes('结果待确认')
-                              ? item.deliveryError
-                              : `发送失败：${item.deliveryError || '插队未完成'}`}
+                        {item.deliveryError?.includes('结果待确认')
+                          ? item.deliveryError
+                          : `发送失败：${item.deliveryError || '插队未完成'}`}
                       </span>
                     ) : null)}
                 </div>

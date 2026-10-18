@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
+import { attestElectronConsoleManifest } from './windows-console-manifest.mjs'
 import type { SubprocessTerminalHandle, SubprocessTerminalSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { ProcessCleanupUnconfirmedError, type ProcessBackend } from './process.ts'
 
@@ -68,6 +69,17 @@ export async function spawnAccountTerminal(
       return false
     }
   }
+  let manifestRequest: string | undefined
+  const serviceManifest = async () => {
+    let raw: string
+    try { raw = await readFile(join(directory, 'manifest-request'), 'utf8') }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
+    if (raw === manifestRequest) return
+    if (manifestRequest !== undefined || Buffer.byteLength(raw) > 4096) throw new WindowsAccountTerminalError()
+    manifestRequest = raw
+    const proof = await attestElectronConsoleManifest(JSON.parse(raw))
+    await writeFile(join(directory, 'manifest-proof'), JSON.stringify(proof), { mode: 0o600, flag: 'wx' })
+  }
   const terminate = (): Promise<void> =>
     (cleanup ??= (async () => {
       let stage = 'receipt'
@@ -77,6 +89,7 @@ export async function spawnAccountTerminal(
         await writeFile(join(directory, 'cancel'), 'cancel', { mode: 0o600 })
         const adoptedUntil = Date.now() + (options.cleanupMs ?? 9000)
         while (!(await exists('ready'))) {
+          await serviceManifest()
           if (Date.now() >= adoptedUntil) throw new ProcessCleanupUnconfirmedError()
           await delay(25)
         }
@@ -146,6 +159,7 @@ export async function spawnAccountTerminal(
     void terminal.done.catch(() => undefined)
     const until = Date.now() + (options.handshakeMs ?? 15_000)
     while (!(await exists('ready'))) {
+      await serviceManifest()
       spec.signal?.throwIfAborted()
       if (Date.now() >= until) throw new Error('Windows account terminal handshake timed out')
       await Promise.race([

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -58,6 +58,70 @@ function backend(resolve: (entry: string) => Promise<string>): ProcessBackend {
 }
 
 describe('Windows default executable fallback without changing other platforms', () => {
+  it('discovers the installed Qoder standalone CLI before consulting an IDE alias or stale PATH', async () => {
+    const entry = join(state.home, '.qoder/bin/qodercli/qodercli.exe'), bytes = Buffer.alloc(80)
+    bytes.write('MZ'); bytes.writeUInt32LE(64, 0x3c); bytes.write('PE\0\0', 64)
+    mkdirSync(dirname(entry), { recursive: true }); writeFileSync(entry, bytes)
+    const lookup = backend(async path => path)
+    expect(executableFor('qoder', DEFAULT_CONFIG)).toBe(entry)
+    await expect(resolveCliExecutable('qoder', lookup, DEFAULT_CONFIG)).resolves.toBe(realpathSync(entry))
+    expect(lookup.resolveExecutable).toHaveBeenCalledExactlyOnceWith(entry)
+    const custom = 'D:\\Custom CLI\\qodercli.exe'
+    expect(executableFor('qoder', { ...DEFAULT_CONFIG, qoderExecutable: custom })).toBe(custom)
+    Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' })
+    expect(executableFor('qoder', DEFAULT_CONFIG)).toBe('qoder')
+  })
+  it('finds a custom Qoder CLI on PATH and uses the legacy alias only when qodercli is absent', async () => {
+    const entry = join(state.home, 'Custom CLI/qodercli.exe'), bytes = Buffer.alloc(80)
+    bytes.write('MZ'); bytes.writeUInt32LE(64, 0x3c); bytes.write('PE\0\0', 64)
+    mkdirSync(dirname(entry), { recursive: true }); writeFileSync(entry, bytes)
+    const direct = backend(async name => name === 'qodercli' ? entry : 'unexpected')
+    await expect(resolveCliExecutable('qoder', direct, DEFAULT_CONFIG)).resolves.toBe(realpathSync(entry))
+    expect(direct.resolveExecutable).toHaveBeenCalledExactlyOnceWith('qodercli')
+    const legacy = backend(async command => {
+      if (command === 'qodercli') throw new SubprocessExecutableNotFoundError('Synthetic old npm install')
+      return entry
+    })
+    await expect(resolveCliExecutable('qoder', legacy, DEFAULT_CONFIG)).resolves.toBe(realpathSync(entry))
+    expect(vi.mocked(legacy.resolveExecutable).mock.calls.map(call => call[0])).toEqual(['qodercli', 'qoder'])
+  })
+  it('rejects IDE or unknown legacy qoder paths and ignores an unrelated local-bin GUI without spawning it', async () => {
+    const gui = join(state.home, '.local/bin/qoder.exe')
+    mkdirSync(dirname(gui), { recursive: true }); writeFileSync(gui, 'Synthetic IDE; must not execute')
+    const lookup = backend(async name => {
+      if (name === 'qodercli') throw new SubprocessExecutableNotFoundError('Synthetic missing CLI')
+      return gui
+    })
+    expect(executableFor('qoder', DEFAULT_CONFIG)).toBe('qodercli')
+    await expect(resolveCliExecutable('qoder', lookup, DEFAULT_CONFIG)).rejects.toThrow('Qoder Windows 安装入口无法确认')
+    expect(vi.mocked(lookup.resolveExecutable).mock.calls.map(call => call[0])).toEqual(['qodercli', 'qoder'])
+    await expect(resolveCliExecutable('qoder', backend(async () => 'C:\\Program Files\\Qoder\\Qoder.exe'), DEFAULT_CONFIG))
+      .rejects.toThrow('Qoder Windows 安装入口无法确认')
+  })
+  it('rechecks Qoder automatic cache identity while leaving an explicit manual path authoritative', async () => {
+    const gui = join(state.home, 'Qoder.exe'); writeFileSync(gui, 'Synthetic IDE; never executed')
+    const remember = vi.fn(), store = { read: () => ({ mode: 'auto', path: gui }), revision: () => 0, remember }
+    await expect(resolveCliExecutable('qoder', backend(async path => path), {
+      ...DEFAULT_CONFIG, cliExecutablePaths: store as never,
+    })).rejects.toThrow('Qoder Windows 安装入口无法确认')
+    expect(remember).not.toHaveBeenCalled()
+    await expect(resolveCliExecutable('qoder', backend(async path => path), { ...DEFAULT_CONFIG, qoderExecutable: gui }))
+      .resolves.toBe(gui)
+  })
+  it('does not replace explicit or inaccessible Qoder entries with another installation', async () => {
+    for (const config of [DEFAULT_CONFIG, { ...DEFAULT_CONFIG, qoderExecutable: 'D:\\explicit\\qoder.exe' }]) {
+      const denied = Object.assign(new Error('Synthetic denied'), { code: 'EACCES' })
+      const lookup = backend(async () => { throw denied })
+      await expect(resolveCliExecutable('qoder', lookup, config)).rejects.toBe(denied)
+      expect(lookup.resolveExecutable).toHaveBeenCalledTimes(1)
+    }
+    const missing = backend(async () => { throw new SubprocessExecutableNotFoundError('Synthetic missing') })
+    await expect(resolveCliExecutable('qoder', missing, DEFAULT_CONFIG)).rejects.toThrow('Qoder CLI 未找到')
+    const explicit = backend(async () => { throw new SubprocessExecutableNotFoundError('Synthetic explicit missing') })
+    await expect(resolveCliExecutable('qoder', explicit, { ...DEFAULT_CONFIG, qoderExecutable: 'D:\\missing\\qoder.exe' })).rejects.toThrow('explicit missing')
+    expect(explicit.resolveExecutable).toHaveBeenCalledTimes(1)
+    expect(desktop).not.toHaveBeenCalled()
+  })
   it.each(['win32', 'darwin'] as const)(
     'prefers a deployed managed ZCode runtime on %s while preserving explicit custom paths',
     async (target) => {

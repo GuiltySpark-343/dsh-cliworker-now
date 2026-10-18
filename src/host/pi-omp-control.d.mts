@@ -12,3 +12,18 @@ export function receivePiOmpControl(
   nonce: string,
   handle: (message: string, requestId: string, attempt: string) => Promise<void>,
 ): Promise<{ close: () => Promise<void> }>
+export const createNativeGuidanceControl: typeof createPiOmpControl
+export const receiveNativeGuidanceControl: typeof receivePiOmpControl
+export function createNativeStopControl(
+  directory: string,
+  options?: { timeoutMs?: number },
+): Promise<{
+  nonce: string
+  stop: () => Promise<void>
+  close: () => Promise<void>
+}>
+export function receiveNativeStopControl(
+  directory: string,
+  nonce: string,
+  handle: () => Promise<void>,
+): Promise<{ close: () => Promise<void> }>

@@ -195,9 +195,22 @@ beforeEach(() => {
     'OPENCODE_MODELS_PATH',
     'ZCODE_DATA_BASE_DIR',
     'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE',
+    'QODER_PERSONAL_ACCESS_TOKEN',
+    'QODERCLI_SITE',
+    'QODER_JOB_TOKEN',
+    'QODER_SERVICE_ACCOUNT_KEY',
+    'QODER_SDK_AUTH_PAYLOAD_FILE',
+    'QODER_SDK_AUTH_CONFIG_DIR',
+    'QODER_CENTER_ENDPOINT',
+    'QODER_SERVER_ENDPOINT',
+    'QODER_VPC_ENDPOINT',
+    'QODER_ENV_VPC_ENABLED',
+    'QODER_ENV',
+    'QODER_RUNNING_ENV',
   ])
     vi.stubEnv(name, '')
   vi.stubEnv('ZCODE_DATA_BASE_DIR', fixture.home)
+  vi.stubEnv('QODER_CONFIG_DIR', join(fixture.home, '.qoder'))
 })
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -295,6 +308,7 @@ function own(cli: CliId) {
     write(join(fixture.home, '.local/share/opencode/auth.json'), {
       own: { type: 'api', key: 'synthetic-opencode-key' },
     })
+  else if (cli === 'qoder') vi.stubEnv('QODER_PERSONAL_ACCESS_TOKEN', 'synthetic-own-qoder-pat')
   else if (cli === 'zcode') zcode()
   else if (cli === 'grok')
     write(join(fixture.home, '.grok/auth.json'), {

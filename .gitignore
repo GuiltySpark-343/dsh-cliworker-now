@@ -1,5 +1,7 @@
 node_modules/
 lib/
+!runtime-host/**/lib/
+!runtime-host/**/lib/**
 dist/
 coverage/
 .cache/

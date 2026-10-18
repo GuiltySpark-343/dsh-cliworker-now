@@ -10,7 +10,9 @@ import { snapshotPiOmpNative, safePiOmpAncestors, type PiOmpNativeOptions } from
 import { finishPiOmpRefresh } from './pi-omp-refresh.mjs'
 import { acquireOwnAccountLease } from './own-account-lease.mjs'
 import { assertPiOmpRefreshSources, assertPiOmpRefreshCache } from './pi-omp-refresh.mjs'
-import { createPiOmpControl } from './pi-omp-control.mjs'
+import { createPiOmpControl, createNativeStopControl } from './pi-omp-control.mjs'
+import { buildNativeHarnessInjection } from './native-harness-injection.mjs'
+import type { NativeHarnessConnection } from './native-harness-tools.ts'
 
 export type PiOmpCli = 'pi' | 'omp'
 export type PiOmpMetadataPhase = 'native-candidates' | 'account-scope'
@@ -30,6 +32,7 @@ export interface PiOmpInput extends PiOmpNativeOptions {
   prompt: string
   conversationId?: string
   stateDirectory: string
+  harnessTools?: NativeHarnessConnection
 }
 const bridgePath = () => {
   const here = dirname(fileURLToPath(import.meta.url))
@@ -97,16 +100,27 @@ async function contextFor(
     const requestDirectory = await mkdtemp(toNamespacedPath(join(isolated, 'request-')))
     const requestPath = join(requestDirectory, 'request.json')
     let control: Awaited<ReturnType<typeof createPiOmpControl>> | undefined
+    let stopControl: Awaited<ReturnType<typeof createNativeStopControl>> | undefined
     const temporary = join(requestDirectory, `.request-${randomUUID()}.tmp`)
+    const injection = buildNativeHarnessInjection({ cli: input.cli, argv: [input.executable], env: native.env,
+      connection: !('discover' in input) && !extra.metadataPhase ? input.harnessTools : undefined })
     try {
-      if (!('discover' in input) && !extra.metadataPhase)
+      if (!('discover' in input) && !extra.metadataPhase) {
         control = await createPiOmpControl(join(requestDirectory, 'control'))
+        stopControl = await createNativeStopControl(join(requestDirectory, 'stop'))
+      }
       await writeFile(
         temporary,
         JSON.stringify({
           ...input,
           ...extra,
+          // The run capability is child-process environment only, never a
+          // persisted request or native account snapshot.
+          harnessTools: undefined,
           ...(control ? { controlNonce: control.nonce } : {}),
+          ...(stopControl
+            ? { stopNonce: stopControl.nonce, stopDirectory: join(requestDirectory, 'stop') }
+            : {}),
           stateDirectory: isolated,
           nativeRoot: native.directory,
           ...(native.leaseDirectory
@@ -119,6 +133,7 @@ async function contextFor(
       await rename(temporary, requestPath)
     } catch (error) {
       await control?.close()
+      await stopControl?.close()
       await rm(requestDirectory, { recursive: true, force: true })
       throw error
     } finally {
@@ -126,9 +141,10 @@ async function contextFor(
     }
     return {
       argv: [process.execPath, bridgePath(), requestPath],
-      env: native.env,
+      env: injection.env,
       leaseDirectory: native.leaseDirectory,
       ...(control ? { steer: control.steer } : {}),
+      ...(stopControl ? { stop: stopControl.stop } : {}),
       activate: async () => {
         if (native.leaseDirectory) {
           await acquireOwnAccountLease(native.leaseDirectory, leaseNonce)
@@ -138,6 +154,7 @@ async function contextFor(
       },
       cleanup: async () => {
         await control?.close()
+        await stopControl?.close()
         if (native.leaseDirectory)
           await finishPiOmpRefresh(native.leaseDirectory, leaseNonce, input.executable, native.receipt)
         if (control) await rm(requestDirectory, { recursive: true, force: true })
@@ -193,6 +210,7 @@ export async function preparePiOmp(
   activate: () => Promise<void>
   cleanup: () => Promise<void>
   steer?: (message: string, requestId: string, signal?: AbortSignal) => Promise<void>
+  stop?: () => Promise<void>
 }> {
   if (input.cli !== 'pi' && input.cli !== 'omp') throw new Error('Unsupported Pi/OMP CLI')
   if (!/^[A-Za-z0-9_.:-]+\/[^\s\x00-\x1f]+$/.test(input.preference.model))

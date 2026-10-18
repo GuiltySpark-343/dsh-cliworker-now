@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { CLI_IDS, type Worker } from '../src/shared/types.ts'
 import { CliWorkerService } from '../src/host/index.ts'
 import { WorkerStorage } from '../src/host/storage.ts'
-import { WorkerRuntime } from '../src/host/runtime.ts'
+import { WorkerRuntime } from './fixtures/legacy-runtime.ts'
 import { DEFAULT_CONFIG, ProcessCleanupUnconfirmedError, type ProcessBackend } from '../src/host/process.ts'
 import { catalogFor, type Catalog } from '../src/host/adapters.ts'
 import { readCliAccountBinding } from '../src/host/cli-account-binding.ts'
@@ -148,12 +148,12 @@ describe('running message preference Gateway', () => {
   })
   it('rejects an aborted save and a CLI without native steering without replacing the prior mode', async () => {
     const f = fixture()
-    await f.service.saveRunningMessageMode('parent', 'codex', 'interrupt', f.signal)
-    await expect(f.service.saveRunningMessageMode('parent', 'codex', 'steer', f.signal)).rejects.toThrow('不支持引导')
+    await f.service.saveRunningMessageMode('parent', 'antigravity', 'interrupt', f.signal)
+    await expect(f.service.saveRunningMessageMode('parent', 'antigravity', 'steer', f.signal)).rejects.toThrow('不支持引导')
     const controller = new AbortController()
     controller.abort()
-    await expect(f.service.saveRunningMessageMode('parent', 'codex', 'queue', controller.signal)).rejects.toThrow()
-    expect(f.storage.runningMessageSettings(f.project, 'codex').mode).toBe('interrupt')
+    await expect(f.service.saveRunningMessageMode('parent', 'antigravity', 'queue', controller.signal)).rejects.toThrow()
+    expect(f.storage.runningMessageSettings(f.project, 'antigravity').mode).toBe('interrupt')
   })
 })
 

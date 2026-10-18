@@ -14,6 +14,7 @@ import {
   OPENCODE_OAUTH_UNSUPPORTED,
 } from './opencode-native.ts'
 import { probeAccountModels, type AccountModelScope } from './account-models.mjs'
+import { NativeBlockResponses, sessionHttpResponseUsage } from './http-rpc-response.mjs'
 
 export interface OpenCodeInput {
   executable: string
@@ -448,6 +449,7 @@ export class OpenCodeProtocol {
   private steps = new Map<string, number>()
   private textParts = new Map<string, string>()
   private openTools = new Set<string>()
+  private responses = new NativeBlockResponses('opencode', (event) => this.emit(event))
   conversationId?: string
   result?: ProtocolResult
   constructor(
@@ -498,6 +500,11 @@ export class OpenCodeProtocol {
       this.conversationId = value
     }
   }
+  private publicEvent(part: Record<string, any>, event: EventInput) {
+    if (typeof part.messageID === 'string' && part.messageID && typeof part.id === 'string' && part.id)
+      this.responses.event(part.messageID, part.id, event)
+    else this.emit(event)
+  }
   private line(line: string) {
     if (Buffer.byteLength(line) > this.maxLineBytes) throw new Error('OpenCode event exceeds maxLineBytes')
     let event: unknown
@@ -524,7 +531,14 @@ export class OpenCodeProtocol {
       }
       this.textParts.set(part.id, part.text)
       this.response = part.text
-      this.emit({ kind: 'assistant', step: this.step(part.id), text: part.text })
+      this.publicEvent(part, { kind: 'assistant', step: this.step(part.id), text: part.text })
+    } else if (event.type === 'reasoning') {
+      // Only the CLI's explicitly public ReasoningPart is text. Incomplete
+      // historical envelopes and provider replay metadata remain undisplayed.
+      if (part?.type === 'reasoning' && typeof part.id === 'string' && typeof part.messageID === 'string' &&
+        part.sessionID === this.conversationId && typeof part.text === 'string' && part.redacted !== true)
+        this.publicEvent(part, { kind: 'reasoning', step: this.step(`reasoning:${part.id}`),
+          text: 'OpenCode 公开思考', detail: part.text, state: 'COMPLETED' })
     } else if (event.type === 'tool_use') {
       if (!part || typeof part.tool !== 'string' || !object(part.state))
         throw new Error('Invalid OpenCode tool event')
@@ -537,17 +551,22 @@ export class OpenCodeProtocol {
       if (state === 'error')
         this.failure ??=
           typeof part.state.error === 'string' ? part.state.error : 'OpenCode 工具执行失败或权限被拒绝'
-      this.emit({
+      this.publicEvent(part, {
         kind: 'tool',
         step: this.step(id),
         text: part.tool,
         detail: JSON.stringify(part.state),
         state: state === 'error' ? 'FAILED' : state === 'completed' ? 'COMPLETED' : 'RUNNING',
+        toolCall: { callId: id, name: part.tool,
+          ...(Object.hasOwn(part.state, 'input') ? { input: part.state.input } : {}),
+          ...(Object.hasOwn(part.state, 'output') ? { output: part.state.output } : {}) },
       })
     } else if (event.type === 'step_finish') {
       if (!part || typeof part.reason !== 'string' || !this.sawStep)
         throw new Error('Invalid OpenCode step finish')
       this.stopped = part.reason === 'stop'
+      if (typeof part.messageID === 'string')
+        this.responses.finish(part.messageID, sessionHttpResponseUsage(part.tokens))
       if (!['stop', 'tool-calls'].includes(part.reason))
         this.failure ??= `OpenCode 未正常完成：${part.reason}`
     } else if (event.type === 'error') {

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import type { SubprocessHandle } from '@deepseek-ai/dsh-subprocess'
 import { extendedLaunch } from '../src/host/extended-adapters.ts'
-import { WorkerRuntime } from '../src/host/runtime.ts'
+import { WorkerRuntime } from './fixtures/legacy-runtime.ts'
 import { WorkerStorage } from '../src/host/storage.ts'
 import { DEFAULT_CONFIG, ProcessCleanupUnconfirmedError, type ProcessBackend } from '../src/host/process.ts'
 

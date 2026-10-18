@@ -7,7 +7,23 @@ import z from '@deepseek-ai/schemastery'
 import { z as validate } from 'zod'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { createHarnessConversationBridge } from './harness-conversation.ts'
+import { HarnessConversationStore } from './harness-conversation-store.ts'
+import { projectExternalTurnUsage, recoverHarnessTurnRuns, type HarnessTurnObservation } from './harness-turn-usage.ts'
+import { projectExternalTurnAnswer } from './harness-turn-answer.ts'
+import { projectRequestState } from './native-request-state.ts'
+import type { HarnessConversationApi, HarnessConversationRecord } from './harness-conversation-types.ts'
+import {
+  classifyHarnessTool,
+  createNativeHarnessTools,
+  type NativeHarnessSkill,
+} from './native-harness-tools.ts'
+import { nativeHarnessToolCapability } from './native-harness-injection.mjs'
+import { installHarnessModelGuard, withinCliTool } from './harness-model-guard.ts'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type {} from '@deepseek-ai/dsh-jobs'
@@ -30,6 +46,7 @@ import {
   type Preference,
   type TaskMode,
   type RoleSnapshot,
+  type Worker,
 } from '../shared/types.ts'
 import { agentNameSchema, readRoleAnswer, roleQuestion } from './roles.ts'
 import {
@@ -44,6 +61,7 @@ import { validatePreference, configuredCliExecutable, resolveCliExecutable } fro
 import { CliExecutablePathStore } from './cli-executable-paths.ts'
 import type { CliExecutablePathStatus } from '../shared/cli-settings.ts'
 import { RUNNING_MESSAGE_MODES } from '../shared/running-message.ts'
+import { workerPermissionOptions, type WorkerPermissionState } from '../shared/worker-permissions.ts'
 import { WindowsCliInstallationError } from './windows-cli-installation.ts'
 import { ACCOUNT_CHANGED, authorizedCatalog, authorizeSelection } from './authorized-catalog.ts'
 import { WorkerStorage, type DispatchSetup } from './storage.ts'
@@ -89,6 +107,7 @@ export interface Config {
   hermesExecutable?: string
   hermesHome?: string
   opencodeExecutable?: string
+  qoderExecutable?: string
   zcodeAuthDirectory?: string
   zcodeBuiltinConfig?: string
   /** @deprecated Accepted for old deployments only; never read or forwarded. */
@@ -121,7 +140,10 @@ declare module '@deepseek-ai/dsh-jobs' {
 }
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
-    /** CLI worker operation could not proceed. */ 'cliworker/unavailable': { reason: string }
+    /** CLI worker operation could not proceed; unknown delivery must not be resent. */ 'cliworker/unavailable': {
+      reason: string
+      deliveryUnknown?: boolean
+    }
   }
 }
 
@@ -130,8 +152,28 @@ const preferenceSchema = validate.object({
   model: validate.string().min(1),
   effort: validate.enum(EFFORTS),
 })
+const messageSubmissionSchema = validate
+  .object({
+    id: validate.uuid(),
+    clientId: validate.uuid(),
+    sequence: validate.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    prompt: validate
+      .string()
+      .min(1)
+      .max(100_000)
+      .refine((text) => !!text.trim()),
+    mode: validate.enum(RUNNING_MESSAGE_MODES),
+    intent: validate.enum(['direct', 'running']),
+    expectedRunId: validate.string().min(1).max(128),
+  })
+  .strict()
 const failure = (error: unknown) =>
-  new RemoteError('cliworker/unavailable', String(error), { reason: String(error) })
+  new RemoteError('cliworker/unavailable', String(error), {
+    reason: String(error),
+    ...(error && typeof error === 'object' && 'code' in error && error.code === 'STEER_UNKNOWN'
+      ? { deliveryUnknown: true }
+      : {}),
+  })
 
 /** Cancel a question/wait independently; late answers cannot commit a selection. */
 function waitForInput<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -171,6 +213,7 @@ export class CliWorkerService extends TypertRemoteService {
     hermesExecutable: z.string(),
     hermesHome: z.string(),
     opencodeExecutable: z.string(),
+    qoderExecutable: z.string().min(1).default('qoder'),
     zcodeAuthDirectory: z.string(),
     zcodeBuiltinConfig: z.string(),
     zaiCredentialRef: z.string(),
@@ -189,11 +232,16 @@ export class CliWorkerService extends TypertRemoteService {
   private backend: ProcessBackend
   private pending = new Map<string, number>()
   private dispatchWaits = new Map<string, Promise<void>>()
+  private messageSubmissions = new Map<string, { request: string; done: Promise<string> }>()
   private selectionBindings = new WeakMap<Preference, string>()
   private selectionProjects = new WeakMap<Preference, string>()
   private displayedBindings = new Map<string, string>()
   private settingsCatalogs?: SettingsCatalogCache
   private disposed = new AbortController()
+  private harnessConversation?: HarnessConversationApi
+  private harnessConversationStore?: HarnessConversationStore
+  private nativeRunDone = new Map<string, Promise<Worker>>()
+  private repairingDisplays = new Set<string>()
 
   /** @param ctx - Harness services. @param config - Validated deployment options. */
   constructor(ctx: Context, config: Config) {
@@ -214,6 +262,291 @@ export class CliWorkerService extends TypertRemoteService {
       this.backend,
       this.options,
     )
+    this.ctx.inject(['sessionController', 'subagents', 'llm'], (scope) => {
+      const records = new HarnessConversationStore(this.runtime.storage.directory)
+      this.harnessConversationStore = records
+      const bridge = createHarnessConversationBridge(scope, {
+        bindings: () => records.list(),
+        bind: async (record) => {
+          const worker = this.runtime.get(record.parentSessionId, record.workerId)
+          // Public capability metadata is derived by the bridge, never used as authority.
+          const publicBinding = worker.harnessConversation
+          if (publicBinding && publicBinding.sessionId !== record.sessionId)
+            throw new Error('Worker 原生会话身份不匹配')
+          records.save(record)
+          this.runtime.changed()
+        },
+        unbind: async (record) => {
+          records.remove(record)
+          const worker = this.runtime.get(record.parentSessionId, record.workerId)
+          if (worker.harnessConversation?.sessionId === record.sessionId) {
+            delete worker.harnessConversation
+            this.runtime.storage.save(worker)
+            this.runtime.changed()
+          }
+        },
+        replaceBinding: async (previous, next) => {
+          const worker = this.runtime.get(previous.parentSessionId, previous.workerId)
+          if (worker.harnessConversation?.sessionId !== previous.sessionId)
+            throw new Error('Worker 原生会话替换的当前身份不匹配')
+          records.replace(previous, next)
+          // The private CAS is authoritative. Publish only after its atomic commit.
+          const previousBinding = worker.harnessConversation
+          worker.harnessConversation = {
+            ...previousBinding,
+            sessionId: next.sessionId,
+          }
+          try {
+            this.runtime.storage.save(worker)
+          } catch (error) {
+            worker.harnessConversation = previousBinding
+            const rollback = {
+              ...previous,
+              retiredSessionIds: [...(previous.retiredSessionIds ?? []), next.sessionId],
+            }
+            try {
+              records.replace(next, rollback)
+            } catch (cleanup) {
+              throw new AggregateError([error, cleanup], '原生会话绑定替换及回滚未完成')
+            }
+            throw error
+          }
+          this.runtime.changed()
+        },
+        getWorker: (parent, id) => this.runtime.get(parent, id),
+        busy: (record) => {
+          const snapshot = this.runtime.snapshot(record.parentSessionId, record.workerId)
+          return (
+            !!snapshot.selectedBusy &&
+            !(this.repairingDisplays.has(record.workerId) && snapshot.selectedBusyReason === 'preparing')
+          )
+        },
+        events: (record, runId, afterSeq) =>
+          this.runtime.storage
+            .history(record.workerId)
+            .filter((event) => event.runId === runId && event.seq > afterSeq),
+        subscribe: (listener) => this.runtime.subscribe(listener),
+        receipt: (record, prompt, requestId) =>
+          !!this.runtime.directMessageReceipt(record.parentSessionId, record.workerId, prompt, requestId),
+        admitted: (record, batchId) => this.runtime.storage.history(record.workerId)
+          .some((event) => event.kind === 'user' && event.queuedFollowupId === batchId),
+        steering: (record) => this.runtime.nativeSteeringState(record.parentSessionId, record.workerId),
+        steer: async (record, prompt, runId, requestId, signal) => {
+          await this.steerMessage(record.parentSessionId, record.workerId, prompt, runId, requestId, signal)
+        },
+        permission: async (record, mode, signal) => {
+          const worker = this.runtime.get(record.parentSessionId, record.workerId)
+          if (worker.harnessConversation?.sessionId !== record.sessionId)
+            throw new Error('CLI 子会话绑定已改变，未修改权限')
+          if (mode !== undefined) {
+            const saved = JSON.parse(await this.configureWorkerPermission(record.parentSessionId, record.workerId, mode, signal)) as Worker
+            return `当前 CLI 权限：${workerPermissionOptions(saved).find((option) => option.value === saved.mode)?.name ?? saved.mode}`
+          }
+          const state = JSON.parse(await this.permissionForWorker(record.parentSessionId, record.workerId, signal)) as WorkerPermissionState
+          return `当前 CLI 权限：${state.currentValue}。可用模式：${state.options.map((option) => `${option.value}（${option.name}）`).join('、')}${state.reason ? `。${state.reason}` : ''}`
+        },
+        run: async (record, prompt, requestId, signal) => {
+          const parent = await this.parent(record.parentSessionId)
+          signal.throwIfAborted()
+          const worker = this.runtime.get(parent.id, record.workerId)
+          if (worker.harnessConversation?.sessionId !== record.sessionId)
+            throw new Error('CLI 子会话绑定已改变，未启动任务')
+          const previous = this.runtime.directMessageReceipt(parent.id, worker.id, prompt, requestId)
+          if (previous?.runId) return { runId: previous.runId, done: this.waitHarnessRun(record, previous.runId) }
+          // The native Agent has claimed this message. Reuse the same launch
+          // checks and process lifetime, without a second conversation queue.
+          const receipt = JSON.parse(await this.launch(
+            parent, worker.title, prompt, worker.preference, worker.mode,
+            worker.id, undefined, signal, undefined, undefined, undefined, requestId,
+          )) as { runId: string }
+          return { runId: receipt.runId, done: this.waitHarnessRun(record, receipt.runId) }
+        },
+        wait: (record, runId) => this.waitHarnessRun(record, runId),
+        stop: async (record, runId) => {
+          const current = this.runtime.get(record.parentSessionId, record.workerId)
+          // A late projection from the previous run cannot cancel a new turn.
+          if (current.runId === runId) await this.runtime.stop(record.parentSessionId, record.workerId)
+        },
+      })
+      this.harnessConversation = bridge
+      const removeModelGuard = installHarnessModelGuard(scope)
+      const removePreparation = this.runtime.setHarnessPreparation(async (worker, signal, input) => {
+        const parent = await this.parent(worker.parentSessionId)
+        const binding = await bridge.ensure(parent, worker, {
+          nativeSubmissionId: input.submissionId,
+          initialRunId: worker.runId,
+          projectRun: true,
+          signal,
+        })
+        // Runtime owns this exact mutable Worker for the duration of the run.
+        worker.harnessConversation = binding
+        this.runtime.storage.save(worker)
+        this.runtime.changed()
+        const cli = cliOf(worker.preference)
+        const child = this.ctx.agents.get(binding.sessionId as Agent['id'])
+        if (!child) throw new Error('原生子 Agent 尚未就绪，未启动 CLI 工具桥')
+        setSandboxMode(
+          child.session,
+          worker.mode === 'plan'
+            ? 'read-only'
+            : parent.ctx.get('sandboxPolicy')!.resolve({ session: parent.session }).mode,
+        )
+        child.ctx.get('planMode')?.set(child, worker.mode === 'plan')
+        const support = nativeHarnessToolCapability(cli)
+        if (!support.transport) {
+          worker.harnessConversation = {
+            ...binding,
+            reasons: {
+              ...binding.reasons,
+              tools: support.reason,
+              skills: support.reason,
+            },
+          }
+          this.runtime.storage.save(worker)
+          this.runtime.changed()
+          return undefined
+        }
+        // Public scoped presentation affects only this internal child. Tool policy
+        // and inherited restrictions still run inside tools.execute.
+        const resetPresentation = child.ctx.tools.presentAs('native')
+        let lease: Awaited<ReturnType<typeof createNativeHarnessTools>>
+        try {
+          // The real child scope owns its tool/MCP catalog. Refresh for every
+          // bridge operation so an old grant cannot outlive a policy change.
+          const tools = () => {
+            const schemas = child.ctx.tools.schemas(child)
+            return schemas.map((tool) => ({
+              name: tool.name,
+              description: tool.description,
+              inputSchema: tool.parameters,
+              execution: classifyHarnessTool(tool.name, schemas),
+            }))
+          }
+          const skills = child.ctx.get('skills') as
+            | {
+                list(options: { cwd: string; scope: Agent; signal: AbortSignal }): Promise<
+                  Array<{
+                    name: string
+                    description: string
+                    invocation: { modelInvocable: boolean }
+                  }>
+                >
+                get(
+                  name: string,
+                  options: { cwd: string; scope: Agent; signal: AbortSignal },
+                ): Promise<
+                  | (NativeHarnessSkill & {
+                      invocation: { modelInvocable: boolean }
+                    })
+                  | undefined
+                >
+              }
+            | undefined
+          const skillOptions = (control: AbortSignal) => ({
+            cwd: worker.project,
+            scope: child,
+            signal: control,
+          })
+          lease = await createNativeHarnessTools({
+            binding: {
+              parentSessionId: parent.id,
+              harnessSessionId: binding.sessionId,
+              workerId: worker.id,
+              runId: worker.runId,
+              cli,
+            },
+            tools,
+            signal,
+            executionReady: ['codex', 'claude', 'opencode', 'mimo', 'pi'].includes(cli),
+            authorize: async (identity) => {
+              signal.throwIfAborted()
+              const current = this.runtime.get(parent.id, worker.id)
+              if (
+                current.runId !== identity.runId ||
+                current.harnessConversation?.sessionId !== identity.harnessSessionId ||
+                this.ctx.agents.get(binding.sessionId as Agent['id']) !== child ||
+                !['queued', 'running'].includes(current.status)
+              )
+                throw new Error('工具桥运行身份已失效')
+              this.assertExecution(parent)
+              if (this.project(parent) !== worker.project) throw new Error('工具桥项目已变更')
+              this.runtime.assertCliEnabled(cli)
+            },
+            execute: async (call) =>
+              withinCliTool(worker.runId, async () =>
+                child.ctx.tools.execute({
+                  callId: ToolCallId(`cliworker:${call.callId}`),
+                  name: call.name,
+                  arguments: call.arguments,
+                  agent: child,
+                  signal: call.signal,
+                }),
+              ),
+            ...(skills
+              ? {
+                  skills: {
+                    list: async (control: AbortSignal) =>
+                      (await skills.list(skillOptions(control)))
+                        .filter((skill) => skill.invocation.modelInvocable)
+                        .map(({ name, description }) => ({
+                          name,
+                          description,
+                        })),
+                    get: async (name: string, control: AbortSignal) => {
+                      const skill = await skills.get(name, skillOptions(control))
+                      return skill?.invocation.modelInvocable ? skill : undefined
+                    },
+                  },
+                }
+              : {}),
+          })
+        } catch (error) {
+          resetPresentation()
+          throw error
+        }
+        if (worker.harnessConversation) {
+          worker.harnessConversation = {
+            ...worker.harnessConversation,
+            capabilities: {
+              ...worker.harnessConversation.capabilities,
+              tools: lease.capabilities.ready && lease.capabilities.toolCount > 0,
+              skills: lease.capabilities.ready && lease.capabilities.skills,
+            },
+            reasons: {
+              ...worker.harnessConversation.reasons,
+              tools: lease.capabilities.ready
+                ? '共享当前子 Agent 获准的 DSH 工具与 MCP；每次执行仍走宿主权限和审批链，未接通的模型辅助与递归派遣不可用'
+                : lease.capabilities.reason,
+              skills: lease.capabilities.ready
+                ? '当前子 Agent 没有可供模型读取的 DSH 技能'
+                : lease.capabilities.reason,
+            },
+          }
+          this.runtime.storage.save(worker)
+        }
+        this.runtime.changed()
+        return {
+          connection: lease.connection,
+          close: async () => {
+            try {
+              await lease.close()
+            } finally {
+              resetPresentation()
+            }
+          },
+        }
+      })
+      scope.effect(() => async () => {
+        removePreparation()
+        if (this.harnessConversation === bridge) this.harnessConversation = undefined
+        if (this.harnessConversationStore === records) this.harnessConversationStore = undefined
+        try {
+          await bridge.dispose()
+        } finally {
+          removeModelGuard()
+        }
+      })
+    })
     this.runtime.setFollowupLauncher(async (worker, item, admission, signal) => {
       const agent = await this.parent(worker.parentSessionId)
       const control = AbortSignal.any([signal, this.disposed.signal])
@@ -457,6 +790,7 @@ export class CliWorkerService extends TypertRemoteService {
     restartSourceId?: string,
     queuedAdmission?: { id: string; expectedRunId: string; priority?: boolean },
     preparationId?: string,
+    submissionId?: string,
   ): Promise<string> {
     if (workerId && !preparationId)
       return this.runtime.prepareFollowup(
@@ -476,6 +810,7 @@ export class CliWorkerService extends TypertRemoteService {
             restartSourceId,
             queuedAdmission,
             id,
+            submissionId,
           ),
         queuedAdmission?.priority ? queuedAdmission.id : undefined,
       )
@@ -527,6 +862,7 @@ export class CliWorkerService extends TypertRemoteService {
           binding,
           queuedAdmission,
           preparationId,
+          submissionId,
         )
         submission = submitted
         return {
@@ -558,7 +894,31 @@ export class CliWorkerService extends TypertRemoteService {
       },
     })
     if (!submission) throw new Error('Harness did not publish the worker job')
-    this.runtime.attachJob(submission.worker, id)
+    this.nativeRunDone.set(submission.worker.runId, submission.done)
+    const runId = submission.worker.runId
+    void submission.done.then(
+      () => {
+        this.nativeRunDone.delete(runId)
+      },
+      () => {
+        this.nativeRunDone.delete(runId)
+      },
+    )
+    try {
+      this.runtime.attachJob(submission.worker, id)
+    } catch (error) {
+      // Admission already happened. Do not leave a process running without a
+      // receipt when the job binding cannot be persisted.
+      const admitted = submission
+      const outcomes = await Promise.allSettled([
+        Promise.resolve().then(() => admitted.cancel()),
+        admitted.done,
+      ])
+      const failures = outcomes.filter((item): item is PromiseRejectedResult => item.status === 'rejected')
+      if (failures.length)
+        throw new AggregateError([error, ...failures.map((item) => item.reason)], '任务登记失败；取消或清理报告异常')
+      throw error
+    }
     return JSON.stringify({
       cli: cliOf(submission.worker.preference),
       workerId: submission.worker.id,
@@ -569,6 +929,99 @@ export class CliWorkerService extends TypertRemoteService {
       model: submission.worker.preference.model,
       effort: submission.worker.preference.effort,
     })
+  }
+  private waitHarnessRun(record: HarnessConversationRecord, runId: string): Promise<Worker> {
+    const running = this.nativeRunDone.get(runId)
+    if (running) return running.then((worker) => structuredClone(worker))
+    const worker = this.runtime.get(record.parentSessionId, record.workerId)
+    if (worker.runId !== runId) return Promise.reject(new Error('原生会话目标轮次已变化，未重放任务'))
+    if (['queued', 'running', 'stopping'].includes(worker.status))
+      return Promise.reject(new Error('无法接管缺少完成凭据的运行，请等待现有任务结束'))
+    return Promise.resolve(structuredClone(worker))
+  }
+  /** @param parentSessionId - Owning Harness parent. @param workerId - Existing Worker identity. @param signal - View lifetime. @returns Real native child binding; opening never submits the user task again. */
+  @Remote('ensureHarnessConversation')
+  async ensureHarnessConversation(
+    parentSessionId: string,
+    workerId: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    try {
+      const parent = await this.parent(parentSessionId)
+      const worker = this.runtime.get(parent.id, workerId)
+      if (this.project(parent) !== worker.project) throw new Error('项目已变更，请在原项目打开会话')
+      if (!this.harnessConversation) throw new Error('当前 Harness 原生会话服务未就绪')
+      const ensured = await this.harnessConversation.ensure(parent, worker, {
+        initialRunId: worker.runId,
+        signal,
+      })
+      const current = this.runtime.get(parent.id, workerId)
+      const previous = current.harnessConversation
+      const binding =
+        previous?.sessionId === ensured.sessionId
+          ? {
+              ...ensured,
+              capabilities: {
+                ...ensured.capabilities,
+                tools: previous.capabilities.tools,
+                skills: previous.capabilities.skills,
+              },
+              reasons: {
+                ...ensured.reasons,
+                tools: previous.reasons?.tools,
+                skills: previous.reasons?.skills,
+              },
+            }
+          : ensured
+      current.harnessConversation = binding
+      this.runtime.storage.save(current)
+      this.runtime.changed()
+      return JSON.stringify(binding)
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Exact owning parent. @param workerId - Existing Worker. @param expectedSessionId - Failed display binding shown by this Client. @param signal - Explicit repair lifetime. @returns Replacement display binding; never submits a CLI prompt. */
+  @Remote('repairHarnessConversation')
+  async repairHarnessConversation(
+    parentSessionId: string,
+    workerId: string,
+    expectedSessionId: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    try {
+      const parent = await this.parent(parentSessionId)
+      const worker = this.runtime.get(parent.id, workerId)
+      if (this.project(parent) !== worker.project) throw new Error('项目已变更，请在原项目修复显示会话')
+      if (!this.harnessConversation) throw new Error('当前 Harness 原生会话服务未就绪')
+      if (this.runtime.snapshot(parent.id, workerId).selectedBusy)
+        throw new Error('当前任务仍在执行、提交或清理，请结束后再修复显示会话')
+      return await this.runtime.prepareFollowup(
+        parent.id,
+        workerId,
+        AbortSignal.any([signal, this.disposed.signal]),
+        async (control) => {
+          this.repairingDisplays.add(workerId)
+          try {
+            const binding = await this.harnessConversation!.repairDisplay(
+              parent,
+              worker,
+              expectedSessionId,
+              control,
+            )
+            const current = this.runtime.get(parent.id, workerId)
+            current.harnessConversation = binding
+            this.runtime.storage.save(current)
+            this.runtime.changed()
+            return JSON.stringify(binding)
+          } finally {
+            this.repairingDisplays.delete(workerId)
+          }
+        },
+      )
+    } catch (error) {
+      throw failure(error)
+    }
   }
   private registerTools(): void {
     const output = {
@@ -725,11 +1178,15 @@ export class CliWorkerService extends TypertRemoteService {
   async *watch(parentSessionId: string, workerId: string, signal: AbortSignal): AsyncIterable<string> {
     let wake: (() => void) | undefined
     let dirty = true
+    let observedSessionId: string | undefined
     const notify = () => {
       dirty = true
       wake?.()
     }
     const unsubscribe = this.runtime.subscribe(notify)
+    const unsubscribeSession = this.ctx.on('session/event', (session, event) => {
+      if (session.id === observedSessionId && event.type === 'turn/end') notify()
+    }, { global: true })
     const lifetime = AbortSignal.any([signal, this.disposed.signal])
     lifetime.addEventListener('abort', notify)
     try {
@@ -741,13 +1198,53 @@ export class CliWorkerService extends TypertRemoteService {
         wake = undefined
         if (lifetime.aborted) return
         dirty = false
+        const snapshot = this.runtime.snapshot(parentSessionId, workerId || undefined)
+        const selected = snapshot.selected
+        const binding = selected?.harnessConversation
+        observedSessionId = binding?.parentSessionId === parentSessionId ? binding.sessionId : undefined
+        let record = binding && this.harnessConversationStore?.list().find((entry) =>
+          entry.sessionId === binding.sessionId && entry.workerId === selected.id && entry.parentSessionId === parentSessionId)
+        const events = selected ? this.runtime.storage.history(selected.id) : []
+        const needsRecovery = record?.nativeInputs?.some((input) => input.accepted && events.some((event) =>
+          event.kind === 'user' && event.queuedFollowupId === input.batchId && event.admittedRunId === event.runId &&
+          !record?.turnRuns?.some((entry) => entry.runId === event.runId)))
+        let externalTurnAnswer: import('../shared/native-turn-answer.ts').ExternalTurnAnswer | undefined
+        if (record && selected && (record.turnRuns?.length || (!snapshot.selectedBusy && needsRecovery))) {
+          const query = this.ctx?.get('sessionQuery') as { observeSession(
+            id: SessionId, options: { signal: AbortSignal; projectionMode: 'none' },
+          ): Promise<Disposable & HarnessTurnObservation> } | undefined
+          if (query) {
+            try {
+              const observation = await query.observeSession(SessionId(record.sessionId), { signal: lifetime, projectionMode: 'none' })
+              try {
+                if (!snapshot.selectedBusy && needsRecovery) record = recoverHarnessTurnRuns(record, selected, events, observation)
+                externalTurnAnswer = projectExternalTurnAnswer(record, selected, events, observation)
+              } finally { observation[Symbol.dispose]() }
+            } catch {
+              if (lifetime.aborted) return
+              // Read failures are not permission to guess or rewrite an old turn.
+            }
+            if (this.runtime.snapshot(parentSessionId, workerId || undefined).revision !== snapshot.revision) {
+              dirty = true
+              continue
+            }
+          }
+        }
         yield JSON.stringify({
-          ...this.runtime.snapshot(parentSessionId, workerId || undefined),
+          ...snapshot,
+          ...(selected && binding?.parentSessionId === parentSessionId ? {
+            externalRequestState: projectRequestState(selected, events),
+            externalTurnAnswer,
+            externalTurnUsage: projectExternalTurnUsage(record, selected, !!snapshot.selectedBusy,
+              events,
+              (runId) => this.runtime.runUsage(parentSessionId, selected.id, runId)),
+          } : {}),
           configuring: this.pending.has(parentSessionId),
         })
       }
     } finally {
       unsubscribe()
+      unsubscribeSession()
       lifetime.removeEventListener('abort', notify)
     }
   }
@@ -1183,6 +1680,7 @@ export class CliWorkerService extends TypertRemoteService {
           cli,
           project: worker.project,
           signal: control,
+          selfVerifiedDiscovery: cli === 'qoder',
           binding: async () => {
             const current = await readCliAccountBinding(
               cli,
@@ -1229,6 +1727,7 @@ export class CliWorkerService extends TypertRemoteService {
         project,
         signal: control,
         refresh,
+        selfVerifiedDiscovery: id === 'qoder',
         binding: () => readCliAccountBinding(id, this.backend, this.options, project, control),
         discover: () => this.queryCatalog(id, this.backend, this.options, project, control),
       })
@@ -1290,9 +1789,273 @@ export class CliWorkerService extends TypertRemoteService {
       validatePreference(preference, catalog)
       signal.throwIfAborted()
       this.runtime.assertCliEnabled(cliOf(preference))
+      this.assertNativeWorkerSettingsIdle(worker)
       return JSON.stringify(
         this.runtime.configureWorker(agent.id, workerId, resolveModel(preference, catalog.models)),
       )
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  private assertNativeWorkerSettingsIdle(worker: Worker): void {
+    const id = worker.harnessConversation?.sessionId
+    if (!id) return
+    const child = this.ctx.agents.get(id as Agent['id'])
+    if (child && (child.status !== 'idle' || child.inbox.nextTurn.length || child.inbox.nextStep.length))
+      throw new Error('请等待原生对话结束，并发送或移除原生待发消息后再修改设置')
+  }
+  /** Update a cold child's real Session without activating an Agent or delivering input. */
+  private async configureColdWorkerPermission(
+    parent: Agent,
+    worker: Worker,
+    selected: TaskMode,
+    signal: AbortSignal,
+  ): Promise<Worker> {
+    const sessionId = SessionId(worker.harnessConversation!.sessionId)
+    return this.runtime.prepareFollowup(
+      parent.id,
+      worker.id,
+      AbortSignal.any([signal, this.disposed.signal]),
+      async (control, preparationId) => {
+        const persistence = this.ctx.get('sessionPersistence')
+        const sessions = this.ctx.get('sessions')
+        const query = this.ctx.get('sessionQuery')
+        const projections = this.ctx.get('sessionProjections')
+        if (!persistence || !sessions || !query || !projections)
+          throw new Error('原生历史会话服务尚未就绪，未修改权限')
+        const validateCurrent = () => {
+          control.throwIfAborted()
+          if (this.ctx.agents.get(parent.id) !== parent)
+            throw new Error('所属主对话已关闭，未修改权限')
+          this.assertExecution(parent)
+          const current = this.runtime.get(parent.id, worker.id)
+          const record = this.harnessConversation?.lookup(sessionId)
+          if (
+            this.project(parent) !== current.project ||
+            current.project !== worker.project ||
+            current.harnessConversation?.sessionId !== sessionId ||
+            current.harnessConversation.parentSessionId !== parent.id ||
+            record?.sessionId !== sessionId ||
+            record.workerId !== worker.id ||
+            record.parentSessionId !== parent.id
+          )
+            throw new Error('CLI 子会话所属主对话不匹配，未修改权限')
+          this.assertNativeWorkerSettingsIdle(current)
+        }
+        validateCurrent()
+        // The public writer is the exclusive cold-session mutation lease. It
+        // also prevents a concurrent native resume from using an older mode.
+        const writer = await persistence.open(sessionId, 'write', { signal: control })
+        let detach: (() => void) | undefined
+        try {
+          validateCurrent()
+          const read = await writer.read(0, undefined, { signal: control })
+          validateCurrent()
+          if (
+            writer.header.origin !== 'subagent' ||
+            writer.header.parentSession !== parent.id ||
+            writer.header.cwd !== worker.project ||
+            this.ctx.agents.get(sessionId)
+          )
+            throw new Error('CLI 子会话所属主对话不匹配，未修改权限')
+          const session = sessions.prepare(sessionId, {
+            seed: read.events,
+            meta: structuredClone(writer.header),
+            inheritedEventCount: writer.inheritedEventCount,
+            eventState: read.eventState,
+          })
+          const inbox = projections.stateOf(session, 'inbox')
+          const turn = projections.stateOf(session, 'turnBoundary')
+          const plan = projections.stateOf(session, 'plan')
+          if (!inbox || !turn || !plan)
+            throw new Error('原生历史会话投影尚未就绪，未修改权限')
+          if (plan.running !== null)
+            throw new Error('原生规划命令尚未完成，未修改权限')
+          if (inbox['next-turn'].length || inbox['next-step'].length || turn.openTurnStartSeq !== null)
+            throw new Error('请等待原生对话结束，并发送或移除原生待发消息后再修改设置')
+          detach = sessions.enter(session)
+          // Native restore may append a lifecycle marker before publication.
+          // Read that suffix through the public query rather than private logs.
+          const observation = await query.observeSession(sessionId, { signal: control, projectionMode: 'none' })
+          try {
+            const suffix = observation.events.slice(read.events.length)
+            if (suffix.length) await writer.append(suffix, { signal: control })
+          } finally { observation[Symbol.dispose]() }
+          validateCurrent()
+          sessions.announce(session)
+          validateCurrent()
+          const saved = this.runtime.configureWorkerPermission(parent.id, worker.id, selected, preparationId)
+          const sandbox = selected === 'plan' ? 'read-only' :
+            parent.ctx.get('sandboxPolicy')!.resolve({ session: parent.session }).mode
+          if (parent.ctx.get('sandboxPolicy')!.resolve({ session }).mode !== sandbox)
+            setSandboxMode(session, sandbox)
+          // This is the native persisted collaboration event. There is no
+          // Agent to queue a pending intent or inject a synthetic user message.
+          if (plan.active !== (selected === 'plan') || plan.wanted !== null)
+            session.append('plan/mode', { active: selected === 'plan' })
+          if (!(await sessions.flush(session)))
+            throw new Error('原生会话权限持久化服务不可用，请重新读取当前状态')
+          return saved
+        } finally {
+          // Finish the writer even on cancellation/failure before releasing the
+          // Session and the outer Worker preparation lease.
+          try { await writer.close() } finally { detach?.() }
+        }
+      },
+    )
+  }
+  /** @param parentSessionId - Owning parent. @param workerId - Exact Worker. @param signal - Read lifetime. @returns Native permission control data; no task or permission change. */
+  @Remote('permissionForWorker')
+  async permissionForWorker(parentSessionId: string, workerId: string, signal: AbortSignal): Promise<string> {
+    try {
+      const parent = await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      const worker = this.runtime.get(parent.id, workerId)
+      if (this.project(parent) !== worker.project) throw new Error('项目已变更，请在原项目继续')
+      let reason: string | undefined
+      try {
+        this.assertExecution(parent)
+        this.assertNativeWorkerSettingsIdle(worker)
+        const snapshot = this.runtime.snapshot(parent.id, worker.id)
+        if (snapshot.selectedBusy) throw new Error('请等待本轮结束后再修改权限')
+        if (snapshot.queuedFollowups?.length)
+          throw new Error('请先发送或取消待发送消息（包含已暂停消息），再修改权限')
+      } catch (error) { reason = error instanceof Error ? error.message : String(error) }
+      const state: WorkerPermissionState = {
+        currentValue: worker.mode, options: workerPermissionOptions(worker), writable: !reason, ...(reason ? { reason } : {}),
+      }
+      return JSON.stringify(state)
+    } catch (error) { throw failure(error) }
+  }
+  /** @param parentSessionId - Owning parent. @param workerId - Exact idle Worker. @param mode - An advertised native CLI mode. @param signal - Save lifetime. @returns Saved Worker; no task is launched. */
+  @Remote('configureWorkerPermission')
+  async configureWorkerPermission(parentSessionId: string, workerId: string, mode: string, signal: AbortSignal): Promise<string> {
+    try {
+      const parent = await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      this.assertExecution(parent)
+      const worker = this.runtime.get(parent.id, workerId)
+      if (this.project(parent) !== worker.project) throw new Error('项目已变更，请在原项目继续')
+      const selected = validate.enum(['plan', 'accept-edits']).parse(mode)
+      if (!workerPermissionOptions(worker).some((option) => option.value === selected))
+        throw new Error('当前 CLI 通路不支持此权限模式')
+      this.assertNativeWorkerSettingsIdle(worker)
+      const binding = worker.harnessConversation
+      const child = binding && this.ctx.agents.get(binding.sessionId as Agent['id'])
+      if (
+        binding &&
+        (binding.parentSessionId !== parent.id ||
+          binding.sessionId === parent.id ||
+          (child &&
+            (child.session.header.origin !== 'subagent' ||
+              child.session.header.parentSession !== parent.id ||
+              !this.ctx.agents.isOwnedBy(child.id, parent))))
+      )
+        throw new Error('CLI 子会话所属主对话不匹配，未修改权限')
+      if (binding && !child)
+        return JSON.stringify(await this.configureColdWorkerPermission(parent, worker, selected, signal))
+      const saved = this.runtime.configureWorkerPermission(parent.id, worker.id, selected)
+      if (child) {
+        // Keep the real session projection and tool policy aligned with the
+        // saved CLI mode while idle; the next run rechecks the same parent policy.
+        const sandbox =
+          selected === 'plan'
+            ? 'read-only'
+            : parent.ctx.get('sandboxPolicy')!.resolve({ session: parent.session }).mode
+        if (child.ctx.get('sandboxPolicy')!.resolve({ session: child.session }).mode !== sandbox)
+          setSandboxMode(child.session, sandbox)
+        child.ctx.get('planMode')?.set(child, selected === 'plan')
+      }
+      return JSON.stringify(saved)
+    } catch (error) { throw failure(error) }
+  }
+  /** @param parentSessionId - Owning parent. @param workerId - Conversation identity. @param requestJSON - Immutable click identity, text, mode and destination. @param signal - Admission lifetime. @returns Exact message acceptance receipt, not native completion. */
+  @Remote('submitMessage')
+  async submitMessage(
+    parentSessionId: string,
+    workerId: string,
+    requestJSON: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    try {
+      const request = messageSubmissionSchema.parse(JSON.parse(requestJSON))
+      const key = `${parentSessionId}:${workerId}:${request.id}`
+      const canonical = JSON.stringify(request)
+      const submissions = (this.messageSubmissions ??= new Map())
+      const prior = submissions.get(key)
+      if (prior) {
+        if (prior.request === canonical) return await prior.done
+        const original = messageSubmissionSchema.parse(JSON.parse(prior.request))
+        const promotion =
+          original.mode === 'queue' &&
+          original.intent === 'running' &&
+          request.mode === 'interrupt' &&
+          request.intent === 'running' &&
+          request.prompt === original.prompt &&
+          request.clientId === original.clientId &&
+          request.sequence > original.sequence
+        if (!promotion) throw new Error('重复提交标识对应的消息不同')
+      }
+      // Occupancy and the Stop boundary must exist before parent lookup or model preparation awaits.
+      const reservation = this.runtime.reserveSubmission(parentSessionId, workerId, request.id)
+      const control = AbortSignal.any([signal, this.disposed.signal, reservation.signal])
+      const done = (async () => {
+        const agent = await this.parent(parentSessionId)
+        control.throwIfAborted()
+        reservation.assertCurrent()
+        this.assertExecution(agent)
+        const worker = this.runtime.get(agent.id, workerId)
+        if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目继续')
+        if (this.accounts.isBusy(cliOf(worker.preference))) throw new Error('请先关闭账号终端')
+        if (request.intent === 'direct') {
+          const receipt = this.runtime.directMessageReceipt(agent.id, workerId, request.prompt, request.id)
+          if (receipt) return JSON.stringify({ ...receipt, revision: this.runtime.revision })
+          return await this.launch(
+            agent,
+            worker.title,
+            request.prompt,
+            worker.preference,
+            worker.mode,
+            workerId,
+            undefined,
+            control,
+            undefined,
+            undefined,
+            undefined,
+            request.id,
+          )
+        }
+        if (request.mode === 'interrupt')
+          return JSON.stringify(
+            this.runtime.interruptMessage(
+              agent.id,
+              workerId,
+              request.prompt,
+              request.id,
+              request.clientId,
+              request.sequence,
+              control,
+            ),
+          )
+        const receipt = await this.runtime.sendRunningMessage(
+          agent.id,
+          workerId,
+          request.prompt,
+          request.expectedRunId,
+          request.id,
+          control,
+          request.mode,
+        )
+        return JSON.stringify({ ...(receipt ?? { accepted: true }), revision: this.runtime.revision })
+      })()
+      const operation = { request: canonical, done }
+      submissions.set(key, operation)
+      try {
+        return await done
+      } finally {
+        if (submissions.get(key) === operation) submissions.delete(key)
+        reservation.release()
+      }
     } catch (error) {
       throw failure(error)
     }
@@ -1314,6 +2077,44 @@ export class CliWorkerService extends TypertRemoteService {
       const worker = this.runtime.get(agent.id, workerId)
       if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目继续')
       return JSON.stringify(this.runtime.queueFollowup(agent.id, workerId, prompt, expectedRunId, requestId))
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param workerId - Current native Worker. @param prompt - Current-run input. @param expectedRunId - Exact target run. @param requestId - Stable steering identity. @param signal - Receipt lifetime. @returns Native acceptance; never creates or schedules a later turn. */
+  @Remote('steerMessage')
+  async steerMessage(
+    parentSessionId: string,
+    workerId: string,
+    prompt: string,
+    expectedRunId: string,
+    requestId: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    try {
+      validate.uuid().parse(requestId)
+      validate
+        .string()
+        .min(1)
+        .max(100_000)
+        .refine((text) => !!text.trim())
+        .parse(prompt)
+      const observed = this.runtime.get(parentSessionId, workerId)
+      if (observed.runId !== expectedRunId) throw new Error('本轮状态已变化，请核对当前运行后发送引导')
+      const control = AbortSignal.any([signal, this.disposed.signal])
+      const agent = await this.parent(parentSessionId)
+      control.throwIfAborted()
+      this.assertExecution(agent)
+      const worker = this.runtime.get(agent.id, workerId)
+      if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目继续')
+      if (this.accounts.isBusy(cliOf(worker.preference))) throw new Error('请先关闭账号终端')
+      await this.runtime.steerMessage(agent.id, workerId, prompt, expectedRunId, requestId, control)
+      return JSON.stringify({
+        accepted: true,
+        requestId,
+        runId: expectedRunId,
+        revision: this.runtime.revision,
+      })
     } catch (error) {
       throw failure(error)
     }

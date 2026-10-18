@@ -8,8 +8,14 @@ import { CLI_IDS } from '../src/shared/types.ts'
 vi.mock('../src/host/adapters.ts', async (original) => ({
   ...(await original<object>()),
   catalogFor: vi.fn(),
+  resolveCliExecutable: vi.fn(async () => '/synthetic/qoder'),
 }))
 vi.mock('../src/host/cli-account-binding.ts', () => ({ readCliAccountBinding: vi.fn() }))
+// The full Qoder source/transport proof is exercised in qoder-accounts.test.ts.
+vi.mock('../src/host/qoder-accounts.ts', async (original) => ({
+  ...(await original<object>()),
+  withQoderCatalogSnapshot: async (_backend: unknown, _config: unknown, _executable: unknown, _project: unknown, _signal: unknown, operation: () => Promise<unknown>) => operation(),
+}))
 // Only metadata doubles; no accounts, network or native processes.
 const backend = { spawn: vi.fn(), resolveExecutable: vi.fn() } as unknown as ProcessBackend
 const signal = () => new AbortController().signal

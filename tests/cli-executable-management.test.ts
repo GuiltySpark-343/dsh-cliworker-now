@@ -12,7 +12,7 @@ import {
   type ProcessBackend,
   type RuntimeConfig,
 } from '../src/host/process.ts'
-import { WorkerRuntime } from '../src/host/runtime.ts'
+import { WorkerRuntime } from './fixtures/legacy-runtime.ts'
 import { WorkerStorage } from '../src/host/storage.ts'
 import type { Worker } from '../src/shared/types.ts'
 

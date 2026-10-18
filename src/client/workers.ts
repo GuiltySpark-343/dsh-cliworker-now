@@ -2,9 +2,19 @@ import { useEffect, useState } from 'react'
 import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { Worker, WorkerSnapshot } from '../shared/types.ts'
+import type { TaskMode } from '../shared/types.ts'
 
 export type Snapshot = WorkerSnapshot & { configuring?: boolean }
-export type API = Pick<ClientRemote, '$stream' | 'cliworker'>
+export type API = Pick<ClientRemote, '$stream'> & {
+  cliworker: Omit<ClientRemote['cliworker'], 'ensureHarnessConversation' | 'repairHarnessConversation' | 'permissionForWorker' | 'configureWorkerPermission'> & {
+    /** Optional until an older Host has upgraded its native-conversation bridge. */
+    ensureHarnessConversation?: (parentId: string, workerId: string) => Promise<RemoteResult<string>>
+    /** Explicitly repair an unreadable owned display binding; never submits a CLI prompt. */
+    repairHarnessConversation?: (parentId: string, workerId: string, expectedSessionId: string, signal: AbortSignal) => Promise<RemoteResult<string>>
+    permissionForWorker?: (parentId: string, workerId: string, signal: AbortSignal) => Promise<RemoteResult<string>>
+    configureWorkerPermission?: (parentId: string, workerId: string, mode: TaskMode, signal: AbortSignal) => Promise<RemoteResult<string>>
+  }
+}
 export const value = <T>(result: RemoteResult<T>): T => {
   if (!result.ok) throw new Error(result.error.message)
   return result.value

@@ -1,0 +1,110 @@
+import { afterEach, expect, it } from 'vitest'
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
+import { normalizeHostClient, verifyHostRuntime } from '../scripts/host-runtime.mjs'
+import { inspectHostRuntimeEntries } from '../scripts/host-extension-guard.mjs'
+import { selectBuildDependencies } from '../scripts/build-dependencies.mjs'
+
+const root = resolve('.')
+const ids = ['ui-session', 'ui-conversation', 'ui-subagent', 'ui-chat']
+const temporary: string[] = []
+afterEach(() => { for (const directory of temporary.splice(0)) rmSync(directory, { recursive: true, force: true }) })
+function fixture() {
+  const directory = mkdtempSync(join(tmpdir(), 'cwn-native-package-'))
+  temporary.push(directory)
+  cpSync(join(root, 'runtime-host'), join(directory, 'runtime-host'), { recursive: true })
+  return directory
+}
+function rows(directory = root) {
+  return ids.map(id => ({ id, name: pathToFileURL(join(directory, 'runtime-host', `dsh-client-${id}`, 'lib/index.js')).href,
+    inject: ['cliworkerNativeReady'] }))
+}
+const entries = (items: ReturnType<typeof rows>) => items.map(options => ({ options, disabled: false }))
+
+it('ships four canonical browser packages, exact source provenance, licenses and no private build input', () => {
+  const manifest = verifyHostRuntime(root)
+  expect(manifest.packages.map((pkg: any) => pkg.name)).toEqual(ids.map(id => `@deepseek-ai/dsh-client-${id}`))
+  expect(manifest.upstream.commit).toBe('687f282e8625c6b8d11ff58211a90524be2e4317')
+  expect(manifest.packages.find((pkg: any) => pkg.id === 'ui-chat').externalRequirements['@tanstack/react-virtual']).toBe('3.14.10')
+  expect(manifest.files.some((file: any) => /build-inputs|\.map$|node_modules|\.cache/.test(file.path))).toBe(false)
+  for (const pkg of manifest.packages) expect(readFileSync(join(root, 'runtime-host', pkg.directory, 'LICENSE'), 'utf8')).toContain('MIT')
+  const json = JSON.stringify(manifest)
+  expect(json).not.toMatch(/\/Users\/|\/home\/|installedDesktopBuildCommit/)
+})
+
+it('only normalizes generated region comments and removes an unused map link', () => {
+  const source = '\t//#region \\0dsh-css:/Users/example/project/.cache/host/packages/client/ui-chat/a.css.mjs\nconst value = 7;\n//# sourceMappingURL=client.js.map\n'
+  expect(normalizeHostClient(source)).toBe('\t//#region \\0dsh-css:packages/client/ui-chat/a.css.mjs\nconst value = 7;\n')
+  expect(normalizeHostClient('const value = "/Users/example/important";\n')).toBe('const value = "/Users/example/important";\n')
+})
+
+it('refuses changed or extra runtime files instead of shipping an unverified extension', () => {
+  const directory = fixture()
+  writeFileSync(join(directory, 'runtime-host/dsh-client-ui-chat/lib/client.js'), 'changed')
+  expect(() => verifyHostRuntime(directory)).toThrow('runtime-content-mismatch')
+  cpSync(join(root, 'runtime-host/dsh-client-ui-chat/lib/client.js'), join(directory, 'runtime-host/dsh-client-ui-chat/lib/client.js'))
+  writeFileSync(join(directory, 'runtime-host/private.json'), '{}')
+  expect(() => verifyHostRuntime(directory)).toThrow('runtime-inventory-mismatch')
+})
+
+it('keeps effective per-entry settings and refuses silently discarded earlier settings', () => {
+  const selected = rows()
+  const raw = [...ids.map(id => ({ id, name: `@deepseek-ai/dsh-client-${id}` })), ...selected]
+  Object.assign(selected[3]!, { config: { transcriptView: 'detailed' }, isolate: { ui: 'existing' } })
+  expect(inspectHostRuntimeEntries(entries(selected), raw, [{ id: 'ui-chat', config: { transcriptView: 'detailed' } }], root)).toBe(true)
+  expect((selected[3] as any).config).toEqual({ transcriptView: 'detailed' })
+  Object.assign(raw[0]!, { config: { existing: true } })
+  expect(() => inspectHostRuntimeEntries(entries(selected), raw, [], root)).toThrow('preexisting-entry-settings (ui-session)')
+})
+
+it('refuses foreign sources, duplicate canonical identities, disabled interfaces and skipped source assertions', () => {
+  const selected = rows()
+  const active = entries(selected)
+  expect(() => inspectHostRuntimeEntries([...active, { options: { ...selected[0], id: 'custom-native-ui-session' }, disabled: false }], selected, [], root)).toThrow('duplicate-module-source (ui-session)')
+  expect(() => inspectHostRuntimeEntries(active.map((entry, index) => index ? entry : { ...entry, disabled: true }), selected, [], root)).toThrow('missing-module-source (ui-session)')
+  expect(() => inspectHostRuntimeEntries(active, selected, [{ id: 'ui-chat', name: '@deepseek-ai/dsh-client-ui-chat', config: { transcriptView: 'compact' } }], root)).toThrow('setting-source-assertion (ui-chat)')
+  const foreign = active.map((entry, index) => index ? entry : { ...entry, options: { id: 'ui-session', name: '@deepseek-ai/dsh-client-ui-session' } })
+  expect(() => inspectHostRuntimeEntries(foreign, selected, [], root)).toThrow('external-module-override (ui-session)')
+})
+
+it('activates the real official Loader without a ready-service cycle and restores official identities on cold restart', async () => {
+  const directory = fixture()
+  const guard = join(directory, 'lib/native-runtime-guard')
+  mkdirSync(guard, { recursive: true })
+  cpSync(join(root, 'scripts/host-extension-guard.mjs'), join(guard, 'index.mjs'))
+  cpSync(join(root, 'scripts/host-runtime.mjs'), join(guard, 'host-runtime.mjs'))
+  writeFileSync(join(guard, 'package.json'), JSON.stringify({ name: 'dsh-cliworker-native-preflight', type: 'module' }))
+  const selected = selectBuildDependencies(root)
+  // The in-memory Loader has no launcher interception; give this temporary
+  // package the same verified SDK graph without changing its installed files.
+  symlinkSync(selected.modules, join(directory, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
+  const installAnchor = selected.require.resolve('@deepseek-ai/dsh/package.json')
+  const require = createRequire(installAnchor)
+  const { Context } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')).href)
+  const { Loader } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis-plugin-loader')).href)
+  const { ClientModuleRegistry } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-client-modules')).href)
+  const original = ids.map(id => ({ id, name: pathToFileURL(require.resolve(`@deepseek-ai/dsh-client-${id}`)).href }))
+  async function mount(embedded: boolean) {
+    const ctx = new Context()
+    ctx.baseUrl = pathToFileURL(directory + '/').href
+    ctx.provide('profileContext', { installAnchor, patchPath: join(directory, 'user.patch.yml'), home: directory, overlays: [] })
+    await ctx.plugin(Loader)
+    try {
+      const configured = embedded ? [...original, { id: 'cliworker-native-preflight', name: pathToFileURL(join(guard, 'index.mjs')).href }, ...rows(directory)] : original
+      await ctx.loader.root.update(configured)
+      await ctx.loader.await()
+      if (embedded) expect(ctx.cliworkerNativeReady).toEqual({ verified: true })
+      // FiberState is a const enum, erased from official runtime exports.
+      for (const entry of ctx.loader.entries()) expect(entry.fiber?.state, `${embedded ? 'embedded' : 'official'} ${entry.options.id}`).toBe(2)
+      await ctx.plugin(ClientModuleRegistry)
+      expect(ctx.clientModules.graph().entries.map((entry: any) => entry.id).sort()).toEqual(ids.map(id => `@deepseek-ai/dsh-client-${id}`).sort())
+      const clientPath = ctx.clientModules.clientPath('@deepseek-ai/dsh-client-ui-session')
+      expect(clientPath.includes('runtime-host')).toBe(embedded)
+    } finally { ctx.loader.root.stop(); await ctx.fiber.dispose() }
+  }
+  await mount(true)
+  await mount(false)
+})

@@ -1,4 +1,4 @@
-import type { Telemetry, TokenUsage } from './telemetry.ts'
+import type { ConversationTelemetryCheckpoint, ContextTelemetryCheckpoint, LastRunUsageSnapshot, Telemetry, TokenUsage } from './telemetry.ts'
 import type { RunningMessageMode } from './running-message.ts'
 export const EFFORTS = [
   'default',
@@ -23,6 +23,7 @@ export const CLI_IDS = [
   'pi',
   'hermes',
   'opencode',
+  'qoder',
 ] as const
 export type ActiveCliId = (typeof CLI_IDS)[number]
 /** Retired IDs remain readable in existing worker history, never selectable for execution. */
@@ -43,6 +44,7 @@ export const CLI_LABELS: Record<CliId, string> = {
   hermes: 'Hermes Agent',
   harness: 'Harness（已移除）',
   opencode: 'OpenCode',
+  qoder: 'Qoder CLI',
 }
 /** Short CLI stems used for automatic Worker names; protocol IDs remain unchanged. */
 export const CLI_SHORT_NAMES: Record<CliId, string> = {
@@ -58,6 +60,7 @@ export const CLI_SHORT_NAMES: Record<CliId, string> = {
   hermes: 'hermes',
   harness: 'harness',
   opencode: 'opencode',
+  qoder: 'qoder',
 }
 export const cliOf = (preference: Preference): CliId => preference.cli ?? 'antigravity'
 export const effortLabel = (effort: string) =>
@@ -120,6 +123,18 @@ export interface Worker {
   preference: Preference
   mode: TaskMode
   conversationId?: string
+  /** A session receipt is replaced, never added to another invocation's cumulative receipt. */
+  conversationTelemetry?: ConversationTelemetryCheckpoint
+  /** Last full run receipt, kept independently from session cumulative accounting. */
+  lastRunUsageSnapshot?: LastRunUsageSnapshot
+  /** Last verified native window; never derived from cumulative accounting. */
+  contextTelemetry?: ContextTelemetryCheckpoint
+  /** Changing the selected model invalidates this run's context, including after restart. */
+  contextInvalidatedRunId?: string
+  /** Harness owns this child; the CLI's native conversationId remains separate. */
+  harnessConversation?: HarnessConversationBinding
+  /** Native transport is pinned per Worker; missing values retain legacy sessions. */
+  transport?: string
   status: WorkerStatus
   createdAt: string
   updatedAt: string
@@ -130,6 +145,14 @@ export interface Worker {
   interruptionReason?: 'user'
   observedModel?: string
   lastResult?: string
+}
+export type HarnessConversationFeature = 'send' | 'queue' | 'steer' | 'stop' | 'model' | 'permission' | 'plan' | 'attachments' | 'fork' | 'skills' | 'tools'
+export interface HarnessConversationBinding {
+  sessionId: string
+  parentSessionId: string
+  mode: 'continuable'
+  capabilities: Record<HarnessConversationFeature, boolean>
+  reasons?: Partial<Record<HarnessConversationFeature, string>>
 }
 /** Exact legacy stop messages are compatible; other interrupted outcomes stay diagnostic. */
 export const isUserInterrupted = (worker: Pick<Worker, 'status' | 'error' | 'interruptionReason'>) =>
@@ -146,7 +169,35 @@ export type DeliveryState =
   | 'cancelled'
   | 'failed'
   | 'completed'
+/** Only explicitly published native tool fields; absent identity never creates a parent edge. */
+export interface PublicToolCall {
+  callId?: string
+  parentCallId?: string
+  name?: string
+  input?: unknown
+  output?: unknown
+  command?: string
+  exitCode?: number
+}
+/** One proven CLI model response. Counts are disjoint, never run/session totals. */
+export interface NativeResponseUsage {
+  inputTokens: number
+  outputTokens: number
+  totalTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  reasoningTokens?: number
+}
+export interface NativeResponseIdentity {
+  id: string
+  blockId: string
+  index: number
+  /** The producer observed the response boundary, not merely one display row ending. */
+  complete?: true
+  usage?: NativeResponseUsage
+}
 export interface WorkerEvent {
+  requestState?: import('./native-request-state.ts').NativeRequestState
   seq: number
   runId: string
   time: string
@@ -156,6 +207,10 @@ export interface WorkerEvent {
   step?: number
   state?: string
   detail?: string
+  toolCall?: PublicToolCall
+  response?: NativeResponseIdentity
+  /** Whether the terminal body covers all response segments or only the final response. */
+  resultScope?: 'run' | 'response'
   /** Exact persisted outbox item admitted into this run; admission is not native delivery. */
   queuedFollowupId?: string
   /** Submission intent is distinct from a native run. */
@@ -166,6 +221,7 @@ export interface WorkerEvent {
   submissionSequence?: number
 }
 export interface TimelineItem {
+  response?: NativeResponseIdentity
   usage?: TokenUsage
   /** Duration reported for this individual response step; never added to session totals. */
   durationSeconds?: number
@@ -177,10 +233,13 @@ export interface TimelineItem {
   time: string
   state?: string
   detail?: string
+  toolCall?: PublicToolCall
   queuedFollowupId?: string
   deliveryState?: DeliveryState
   deliveryError?: string
   admittedRunId?: string
+  submissionClientId?: string
+  submissionSequence?: number
   /** Run ended without a final tool status; the observed CLI state stays intact. */
   runStatus?: WorkerStatus
   runStartedAt?: string
@@ -195,6 +254,13 @@ export interface QueuedFollowup {
   pauseReason?: string
 }
 export interface WorkerSnapshot {
+  externalRequestState?: import('./native-request-state.ts').ExternalRequestState
+  /** Exact selected child turn/run totals; never added to native response usage. */
+  externalTurnUsage?: import('./native-turn-usage.ts').ExternalTurnUsage
+  externalTurnAnswer?: import('./native-turn-answer.ts').ExternalTurnAnswer
+  /** Includes early acceptance, preparation, pending work and process cleanup. */
+  selectedBusy?: boolean
+  selectedBusyReason?: 'accepting' | 'preparing' | 'queued' | 'running' | 'stopping' | 'priority'
   telemetry?: Telemetry
   workers: Worker[]
   archivedWorkers?: Worker[]
@@ -205,6 +271,7 @@ export interface WorkerSnapshot {
   queuedFollowups?: QueuedFollowup[]
   /** Current project/CLI preference for submissions during an active turn. */
   runningMessageMode?: RunningMessageMode
+  runningMessageModeReason?: string
   timeline: TimelineItem[]
   revision: number
   truncated: boolean
@@ -258,6 +325,8 @@ export function foldEvents(
         deliveryState: event.deliveryState,
         deliveryError: event.deliveryError,
         admittedRunId: event.admittedRunId,
+        submissionClientId: event.submissionClientId,
+        submissionSequence: event.submissionSequence,
       })
       submissions.set(event.queuedFollowupId, row)
       continue
@@ -291,31 +360,61 @@ export function foldEvents(
         (row) => row.kind === 'assistant' && row.id.startsWith(event.runId + ':'),
       )
       if (lastAssistant) {
-        // agy may repeat all earlier response steps in its final response.
-        // Strip only exact earlier prefixes, leaving interleaved tool rows intact.
-        let finalText = event.text.trimStart()
+        // An aggregate receipt cannot extend a response with its own explicit
+        // content identity and boundary. Its body may include earlier calls.
+        if (lastAssistant.response) continue
         const earlier = rows.filter(
           (row) => row !== lastAssistant && row.kind === 'assistant' && row.id.startsWith(event.runId + ':'),
         )
-        for (const row of earlier) {
-          const prefix = row.text.trim()
-          if (!prefix) continue
-          if (finalText.startsWith(prefix)) finalText = finalText.slice(prefix.length).trimStart()
-          else break
+        let finalText: string | undefined = event.text
+        if (earlier.length && event.resultScope === 'run') {
+          const prefix = earlier.map((row) => row.text).join('')
+          // An explicit aggregate must agree with every observed segment.
+          finalText = event.text.startsWith(prefix) ? event.text.slice(prefix.length) : undefined
+        } else if (earlier.length && !event.resultScope && cli === 'antigravity') {
+          // Older AGY aggregates insert whitespace between response steps.
+          // This compatibility rule is confined to that verified CLI format.
+          let remaining = event.text.trimStart()
+          for (const row of earlier) {
+            const prefix = row.text.trim()
+            if (!prefix) continue
+            if (!remaining.startsWith(prefix)) {
+              remaining = ''
+              break
+            }
+            remaining = remaining.slice(prefix.length).trimStart()
+          }
+          finalText = remaining || undefined
+        } else if (earlier.length && !event.resultScope && !event.text.startsWith(lastAssistant.text)) {
+          // Historical receipts without scope cannot prove an aggregate boundary.
+          finalText = undefined
         }
-        if (event.text) lastAssistant.text = finalText
+        if (event.text && finalText !== undefined && finalText.startsWith(lastAssistant.text))
+          lastAssistant.text = finalText
         continue
       }
     }
-    const key =
-      event.step === undefined
+    const key = event.response
+      ? `${event.runId}:response:${JSON.stringify([event.response.id, event.response.blockId])}`
+      : event.step === undefined
         ? `${event.runId}:event:${event.seq}`
         : `${event.runId}:${event.kind}:${event.step}`
     const existing = steps.get(key)
     if (existing) {
+      if (event.response && (existing.kind !== event.kind || existing.response?.index !== event.response.index))
+        throw new Error('CLI response block identity changed')
+      if (event.response?.usage && existing.response?.usage &&
+        JSON.stringify(event.response.usage) !== JSON.stringify(existing.response.usage))
+        throw new Error('CLI response usage changed')
       if (event.kind === 'assistant') existing.text += event.text
       else if (event.text) existing.text = event.text
       if (event.state) existing.state = event.state
+      if (event.response) existing.response = { ...existing.response, ...event.response }
+      if (event.toolCall)
+        existing.toolCall = {
+          ...existing.toolCall,
+          ...Object.fromEntries(Object.entries(event.toolCall).filter(([, value]) => value !== undefined)),
+        }
       // Public reasoning carries a complete visible-text snapshot. An empty
       // snapshot can withdraw a block; never append or retain its older text.
       if (event.detail || (event.kind === 'reasoning' && event.detail !== undefined))
@@ -328,7 +427,10 @@ export function foldEvents(
         time: event.time,
         state: event.state,
         detail: event.detail,
+        toolCall: event.toolCall,
+        response: event.response,
         queuedFollowupId: event.queuedFollowupId,
+        admittedRunId: event.admittedRunId,
       }
       steps.set(key, row)
       rows.push(row)
@@ -338,7 +440,11 @@ export function foldEvents(
   const timing = new Map<string, { runStartedAt?: string; runEndedAt?: string; runOutcome?: WorkerStatus }>()
   for (const event of events) {
     const run = timing.get(event.runId) ?? {}
-    if (event.kind === 'user' && !run.runStartedAt) run.runStartedAt = event.time
+    if (
+      (event.kind === 'user' || (event.kind === 'status' && (event.state ?? event.text) === 'queued')) &&
+      !run.runStartedAt
+    )
+      run.runStartedAt = event.time
     if (
       event.kind === 'status' &&
       ['completed', 'failed', 'interrupted', 'uncertain'].includes(event.state ?? event.text)

@@ -215,3 +215,34 @@ it('remembers a first dispatch directory only if its source revision remains cur
   )
   expect(f.cache.display(f.root, 'codex', 'synthetic-binding')).toBeUndefined()
 })
+
+it('lets Qoder self-verified cold/forced discovery own authorization while preserving fresh warm binding checks', async () => {
+  const f = fixture(), qoder = { ...catalog, cli: 'qoder' as const }
+  const input = { ...f.input, cli: 'qoder' as const, selfVerifiedDiscovery: true,
+    discover: vi.fn(async () => ({ catalog: qoder, binding: 'synthetic-binding' })) }
+  await f.cache.get(input)
+  expect(input.binding).not.toHaveBeenCalled()
+  await f.cache.get(input)
+  expect(input.binding).toHaveBeenCalledTimes(1)
+  expect(input.discover).toHaveBeenCalledTimes(1)
+  await f.cache.get({ ...input, refresh: true })
+  expect(input.binding).toHaveBeenCalledTimes(1)
+  expect(input.discover).toHaveBeenCalledTimes(2)
+  input.binding.mockRejectedValue(new Error('Synthetic logged out'))
+  await expect(f.cache.get(input)).rejects.toThrow('logged out')
+  expect(input.discover).toHaveBeenCalledTimes(2)
+})
+it('does not extend self-verified discovery bypass to other CLIs or allow stale revisions/empty Qoder catalogs', async () => {
+  const f = fixture()
+  await f.cache.get({ ...f.input, selfVerifiedDiscovery: true })
+  expect(f.input.binding).toHaveBeenCalledTimes(1)
+  const input = { ...f.input, cli: 'qoder' as const, selfVerifiedDiscovery: true,
+    discover: vi.fn(async () => ({ catalog: { ...catalog, cli: 'qoder' as const }, binding: 'synthetic-binding' })) }
+  input.discover.mockImplementationOnce(async () => {
+    f.cache.invalidate('qoder')
+    return { catalog: { ...catalog, cli: 'qoder' }, binding: 'synthetic-binding' }
+  })
+  await expect(f.cache.get(input)).rejects.toThrow('来源已变化')
+  input.discover.mockResolvedValueOnce({ catalog: { ...catalog, cli: 'qoder', models: [] }, binding: 'synthetic-binding' })
+  await expect(f.cache.get(input)).rejects.toThrow('来源已变化')
+})

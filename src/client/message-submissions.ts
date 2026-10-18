@@ -4,6 +4,21 @@ import type { RunningMessageMode } from '../shared/running-message.ts'
 import { operationMessage } from './operation-error.ts'
 import { value, type API, type Snapshot } from './workers.ts'
 
+/** Cancelling an undispatched request must not wait for an older cleanup gate. */
+async function waitForAdmission(done: Promise<void>, signal: AbortSignal) {
+  signal.throwIfAborted()
+  let abort!: () => void
+  const cancelled = new Promise<never>((_resolve, reject) => {
+    abort = () => reject(signal.reason)
+    signal.addEventListener('abort', abort, { once: true })
+  })
+  try {
+    await Promise.race([done, cancelled])
+  } finally {
+    signal.removeEventListener('abort', abort)
+  }
+}
+
 export interface MessageSubmission {
   id: string
   worker: Worker
@@ -11,6 +26,12 @@ export interface MessageSubmission {
   createdAt: string
   route: 'followup' | 'running' | 'queue' | 'interrupt'
   mode: RunningMessageMode
+  /** Frozen at the click. RPC admission and later preferences never reclassify this view. */
+  intent: 'direct' | 'running'
+  presentation: 'bubble' | 'queue'
+  sequence: number
+  receiptRevision?: number
+  admitted?: boolean
   state: 'pending' | 'accepted' | 'failed' | 'cancelled'
   error?: string
   uncertain?: boolean
@@ -28,6 +49,8 @@ export interface MessageSubmission {
   priorityRevision?: number
   superseded?: boolean
   stopped?: boolean
+  /** The Host confirmed this steer's native run exited; its unknown history remains local. */
+  runEnded?: boolean
   releaseAdmission?: () => void
 }
 
@@ -50,9 +73,6 @@ export function useMessageSubmissions(
   const update = () => {
     if (alive.current) render((n) => n + 1)
   }
-  // Claim each new user event only once, including identical consecutive prompts.
-  // Keep claims across revisions so one event cannot confirm a later local message.
-  const claimed = useRef(new Set<string>())
   const reconcile = (current: Snapshot) => {
     const workerId = current.selected?.id
     if (!workerId) return
@@ -81,6 +101,9 @@ export function useMessageSubmissions(
         createdAt: event.time,
         route: 'interrupt',
         mode: 'interrupt',
+        intent: 'running',
+        presentation: 'bubble',
+        sequence: event.submissionSequence ?? 0,
         state: 'accepted',
         deliveryState: event.deliveryState,
         confirmed: true,
@@ -95,12 +118,20 @@ export function useMessageSubmissions(
     for (const message of records.current) {
       if (message.worker.id !== workerId) continue
       if (message.redirected) continue
+      if (
+        message.route === 'running' &&
+        message.mode === 'steer' &&
+        current.selected!.runId !== message.originalRunId
+      ) {
+        message.runEnded = true
+        if (message.uncertain && !message.error?.startsWith('原轮已结束'))
+          message.error = `原轮已结束，引导结果仍待核查；不会转发到新轮。${message.error ?? ''}`
+      }
       if (message.route === 'interrupt') {
         const event = current.timeline.find(
           (item) => item.kind === 'user' && item.queuedFollowupId === message.id && item.deliveryState,
         )
         if (event) {
-          claimed.current.add(`${workerId}:${event.id}`)
           message.confirmed = true
           message.priorityRevision ??= current.revision
           // A stale pending snapshot cannot undo a later local priority click.
@@ -126,29 +157,25 @@ export function useMessageSubmissions(
         }
         continue
       }
+      const user = current.timeline.find(
+        (item) => item.kind === 'user' && item.queuedFollowupId === message.id,
+      )
+      if (user) {
+        message.confirmed = true
+        message.admitted = true
+        message.state = 'accepted'
+        message.uncertain = false
+        message.error = undefined
+        message.acceptedRunId = user.admittedRunId ?? message.acceptedRunId
+        continue
+      }
       if (message.confirmed) continue
       if (current.queuedFollowups?.some((item) => item.id === message.id)) {
         message.confirmed = true
+        message.state = 'accepted'
+        message.uncertain = false
+        message.error = undefined
         continue
-      }
-      // Queued messages are acknowledged by their stable outbox identity. A
-      // same-text user event might belong to an earlier queued turn instead.
-      if (message.mode === 'queue' && message.route !== 'followup') continue
-      const event = current.timeline.find(
-        (item) =>
-          item.kind === 'user' &&
-          item.text === message.prompt &&
-          (!item.queuedFollowupId || item.queuedFollowupId === message.id) &&
-          !message.baseline.has(item.id) &&
-          !claimed.current.has(`${workerId}:${item.id}`) &&
-          (message.route !== 'running' ||
-            message.mode !== 'steer' ||
-            item.id.startsWith(`${message.originalRunId}:`)) &&
-          (!message.acceptedRunId || item.id.startsWith(`${message.acceptedRunId}:`)),
-      )
-      if (event) {
-        claimed.current.add(`${workerId}:${event.id}`)
-        message.confirmed = true
       }
     }
   }
@@ -161,7 +188,8 @@ export function useMessageSubmissions(
         // A persisted priority request belongs to the Host once submitted.
         // Closing this view only releases local waiters; explicit Stop cancels it.
         if (message.route === 'interrupt') message.releaseAdmission?.()
-        else if (message.state === 'pending' && !message.redirected) message.controller.abort()
+        // Ordinary submissions also belong to their Worker after the click.
+        // Closing a view is not an explicit stop and must not revoke them.
       }
     }
   }, [])
@@ -184,7 +212,11 @@ export function useMessageSubmissions(
     }
   }
 
-  function interruptMessage(worker: Worker, prompt: string, id: string = crypto.randomUUID()): MessageSubmission {
+  function interruptMessage(
+    worker: Worker,
+    prompt: string,
+    id: string = crypto.randomUUID(),
+  ): MessageSubmission {
     const existing = records.current.find(
       (item) => item.worker.id === worker.id && item.id === id && item.route === 'interrupt',
     )
@@ -210,6 +242,9 @@ export function useMessageSubmissions(
       createdAt: new Date().toISOString(),
       route: 'interrupt',
       mode: 'interrupt',
+      intent: 'running',
+      presentation: 'bubble',
+      sequence: ++source.current.sequence,
       state: 'pending',
       deliveryState: 'pending',
       originalRunId: worker.runId,
@@ -221,26 +256,32 @@ export function useMessageSubmissions(
       message.releaseAdmission = resolve
     })
     records.current.push(message)
-    const sequence = ++source.current.sequence
     const stopBarrier = stopBarriers.current.get(worker.id)
     message.done = admission
     void (async () => {
       let rejectedByHost = false
       try {
-        if (stopBarrier) await stopBarrier.done
+        if (stopBarrier) await waitForAdmission(stopBarrier.done, message.controller.signal)
         // A later explicit Stop cancels requests still waiting for its predecessor
         // to be confirmed. Releasing that barrier must not dispatch cancelled text.
         if (message.stopped) return
-        const response = await api.cliworker.interruptMessage(
+        const response = await api.cliworker.submitMessage(
           sessionId,
           worker.id,
-          prompt,
-          id,
-          source.current.id,
-          sequence,
+          JSON.stringify({
+            id,
+            prompt,
+            clientId: source.current.id,
+            sequence: message.sequence,
+            mode: message.mode,
+            intent: message.intent,
+            expectedRunId: message.originalRunId,
+          }),
           message.controller.signal,
         )
-        rejectedByHost = !response.ok
+        rejectedByHost =
+          !response.ok &&
+          (response.error.details as { deliveryUnknown?: boolean } | undefined)?.deliveryUnknown !== true
         const receipt = JSON.parse(value(response)) as {
           messageId: string
           revision: number
@@ -294,24 +335,21 @@ export function useMessageSubmissions(
   ): MessageSubmission | undefined {
     if (route === 'interrupt' || (route === 'running' && mode === 'interrupt'))
       return interruptMessage(worker, prompt)
-    if (records.current.some((item) => item.worker.id === worker.id && item.uncertain && !item.redirected))
+    if (route === 'running' && mode === 'steer') return steerMessage(worker, prompt, retry)
+    if (
+      records.current.some(
+        (item) => item.worker.id === worker.id && item.uncertain && !item.redirected && !item.runEnded,
+      )
+    )
       return undefined
     if (retry?.state === 'pending') return undefined
-    const failed =
-      retry ??
-      records.current.findLast(
-        (item) =>
-          item.worker.id === worker.id &&
-          item.prompt === prompt &&
-          item.state === 'failed' &&
-          item.route !== 'interrupt' &&
-          !item.redirected &&
-          !item.confirmed,
-      )
+    const failed = retry
     if (failed?.uncertain) return undefined
     let predecessor = records.current.findLast(
       (item) =>
         item.worker.id === worker.id &&
+        !(item.route === 'running' && item.mode === 'steer') &&
+        !item.stopped &&
         !item.redirected &&
         (item.state === 'pending' ||
           (item.route === 'interrupt' && !item.admissionSettled) ||
@@ -329,6 +367,9 @@ export function useMessageSubmissions(
       createdAt: new Date().toISOString(),
       route,
       mode,
+      intent: route === 'followup' ? 'direct' : 'running',
+      presentation: route !== 'followup' && mode === 'queue' ? 'queue' : 'bubble',
+      sequence: ++source.current.sequence,
       state: 'pending',
       baseline: new Set((snapshots.current.get(worker.id)?.timeline ?? []).map((item) => item.id)),
       controller: new AbortController(),
@@ -336,8 +377,8 @@ export function useMessageSubmissions(
     }
     message.controller = new AbortController()
     if (failed) {
-      // Keep the stable identity for Host receipt lookup, but do not keep sending
-      // a stale expected run after the selected Worker has advanced.
+      // A retry keeps the original route and identity. A different current run
+      // cannot silently turn an earlier steer into a new request.
       const latest = snapshots.current.get(worker.id)?.selected
       if (latest) message.worker = { ...latest }
     }
@@ -352,7 +393,7 @@ export function useMessageSubmissions(
       try {
         if (predecessor) {
           while (true) {
-            await predecessor.done
+            await waitForAdmission(predecessor.done, message.controller.signal)
             message.controller.signal.throwIfAborted()
             const latestPriority = records.current.findLast(
               (item) => item.worker.id === worker.id && item.route === 'interrupt',
@@ -371,44 +412,27 @@ export function useMessageSubmissions(
         }
         if (message.redirected) return
         message.controller.signal.throwIfAborted()
-        const current = snapshots.current.get(worker.id)
-        const latest = current?.selected ?? worker
-        const preparedRun =
-          predecessor?.acceptedRunId ??
-          (predecessor && predecessor.worker.runId !== worker.runId ? predecessor.worker.runId : undefined)
-        if (preparedRun) {
-          // The stream may be a tick behind the receipt. Use its actual run identity,
-          // never issue a second ordinary followup against the old completed turn.
-          const observedNewRun = latest.runId !== worker.runId
-          message.worker = { ...latest, runId: observedNewRun ? latest.runId : preparedRun }
-          message.route = observedNewRun && !active(latest.status) ? 'followup' : 'running'
-        }
-        if (message.route === 'running' && message.mode === 'interrupt') {
-          await interruptMessage(message.worker, prompt, message.id).done
-          return
-        }
+        const stopBarrier = stopBarriers.current.get(worker.id)
+        if (stopBarrier) await waitForAdmission(stopBarrier.done, message.controller.signal)
+        message.controller.signal.throwIfAborted()
         attempted = true
-        const response =
-          message.route === 'followup'
-            ? await api.cliworker.followup(sessionId, worker.id, prompt, message.controller.signal)
-            : message.route === 'running'
-              ? await api.cliworker.sendRunningMessage(
-                  sessionId,
-                  worker.id,
-                  prompt,
-                  message.worker.runId,
-                  message.id,
-                  message.controller.signal,
-                )
-              : await api.cliworker.queueFollowup(
-                  sessionId,
-                  worker.id,
-                  prompt,
-                  message.worker.runId,
-                  message.id,
-                  message.controller.signal,
-                )
-        rejectedByHost = !response.ok
+        const response = await api.cliworker.submitMessage(
+          sessionId,
+          worker.id,
+          JSON.stringify({
+            id: message.id,
+            prompt,
+            clientId: source.current.id,
+            sequence: message.sequence,
+            mode: message.mode,
+            intent: message.intent,
+            expectedRunId: message.originalRunId,
+          }),
+          message.controller.signal,
+        )
+        rejectedByHost =
+          !response.ok &&
+          (response.error.details as { deliveryUnknown?: boolean } | undefined)?.deliveryUnknown !== true
         if (message.redirected) return
         const raw = value(response)
         if (typeof raw !== 'string') throw new Error('发送回执无法核对，请停止后确认消息状态')
@@ -419,7 +443,7 @@ export function useMessageSubmissions(
           revision?: number
         }
         if (receipt.runId) message.acceptedRunId = receipt.runId
-        if (receipt.id === message.id) message.confirmed = true
+        if (Number.isSafeInteger(receipt.revision)) message.receiptRevision = receipt.revision
         message.state = 'accepted'
         const received = snapshots.current.get(worker.id)
         if (received) reconcile(received)
@@ -430,15 +454,122 @@ export function useMessageSubmissions(
         if (message.confirmed) message.state = 'accepted'
         else if (message.controller.signal.aborted && !/清理|cleanup/i.test(operationMessage(error))) {
           message.state = 'cancelled'
-          restore.current(worker.id, prompt)
+          if (
+            !records.current.some((item) => item.worker.id === worker.id && item.sequence > message.sequence)
+          )
+            restore.current(worker.id, prompt)
         } else {
           message.state = 'failed'
-          message.uncertain = attempted && message.route === 'followup' && !rejectedByHost
+          message.uncertain = attempted && !rejectedByHost
           message.error = message.uncertain
             ? `发送结果待确认，请停止后重试或核对记录。${operationMessage(error)}`
             : operationMessage(error)
-          if (!message.uncertain) restore.current(worker.id, prompt)
+          if (
+            !message.uncertain &&
+            !records.current.some((item) => item.worker.id === worker.id && item.sequence > message.sequence)
+          )
+            restore.current(worker.id, prompt)
         }
+      } finally {
+        update()
+      }
+    })()
+    update()
+    return message
+  }
+
+  /** A steer belongs only to the current native run and waits only for its own ACK. */
+  function steerMessage(
+    worker: Worker,
+    prompt: string,
+    retry?: MessageSubmission,
+  ): MessageSubmission | undefined {
+    if (
+      !canSteer(worker.id) ||
+      retry?.state === 'pending' ||
+      records.current.some(
+        (item) => item.worker.id === worker.id && item.uncertain && !item.redirected && !item.runEnded,
+      )
+    )
+      return undefined
+    const message: MessageSubmission = retry ?? {
+      id: crypto.randomUUID(),
+      worker: { ...worker },
+      prompt,
+      originalRunId: worker.runId,
+      createdAt: new Date().toISOString(),
+      route: 'running',
+      mode: 'steer',
+      intent: 'running',
+      presentation: 'bubble',
+      sequence: ++source.current.sequence,
+      state: 'pending',
+      baseline: new Set(),
+      controller: new AbortController(),
+      done: Promise.resolve(),
+    }
+    if (snapshots.current.get(worker.id)?.selected?.runId !== message.originalRunId) return undefined
+    message.controller = new AbortController()
+    message.state = 'pending'
+    message.error = undefined
+    if (!retry) records.current.push(message)
+    message.done = (async () => {
+      let attempted = false
+      let rejectedByHost = false
+      try {
+        message.controller.signal.throwIfAborted()
+        attempted = true
+        const response = await api.cliworker.steerMessage(
+          sessionId,
+          worker.id,
+          prompt,
+          message.originalRunId,
+          message.id,
+          message.controller.signal,
+        )
+        rejectedByHost =
+          !response.ok &&
+          (response.error.details as { deliveryUnknown?: boolean } | undefined)?.deliveryUnknown !== true
+        const receipt = JSON.parse(value(response)) as {
+          accepted: boolean
+          requestId: string
+          runId: string
+          revision?: number
+        }
+        if (
+          receipt.accepted !== true ||
+          receipt.requestId !== message.id ||
+          receipt.runId !== message.originalRunId
+        )
+          throw new Error('引导回执无法核对，请停止后确认消息状态')
+        message.acceptedRunId = receipt.runId
+        if (Number.isSafeInteger(receipt.revision)) message.receiptRevision = receipt.revision
+        message.state = 'accepted'
+        message.uncertain = false
+        message.error = undefined
+        const current = snapshots.current.get(worker.id)
+        if (current) reconcile(current)
+      } catch (error) {
+        const current = snapshots.current.get(worker.id)
+        if (current) reconcile(current)
+        if (message.confirmed) message.state = 'accepted'
+        else if (message.controller.signal.aborted) message.state = 'cancelled'
+        else {
+          message.state = 'failed'
+          message.uncertain = attempted && !rejectedByHost
+          message.error = message.uncertain
+            ? `发送结果待确认，请停止后重试或核对记录。${operationMessage(error)}`
+            : operationMessage(error)
+          if (message.runEnded && message.uncertain)
+            message.error = `原轮已结束，引导结果仍待核查；不会转发到新轮。${operationMessage(error)}`
+        }
+        if (
+          !message.confirmed &&
+          !message.runEnded &&
+          !message.uncertain &&
+          !records.current.some((item) => item.worker.id === worker.id && item.sequence > message.sequence)
+        )
+          restore.current(worker.id, prompt)
       } finally {
         update()
       }
@@ -452,11 +583,12 @@ export function useMessageSubmissions(
       (item) =>
         item.worker.id === workerId &&
         !item.redirected &&
+        !item.runEnded &&
         (item.state === 'pending' || (item.route === 'interrupt' && !item.admissionSettled)),
     )
     for (const message of pending) {
+      message.stopped = true
       if (message.route === 'interrupt') {
-        message.stopped = true
         applyPriorityState(message, 'cancelled')
       }
       message.controller.abort(new Error('用户已停止发送'))
@@ -476,6 +608,18 @@ export function useMessageSubmissions(
     if (current) reconcile(current)
     for (const message of records.current) {
       if (!scope.has(message) || message.redirected) continue
+      if (
+        message.worker.id === workerId &&
+        message.route === 'running' &&
+        message.mode === 'steer' &&
+        message.originalRunId === stoppedRunId &&
+        message.uncertain
+      ) {
+        message.runEnded = true
+        if (!message.error?.startsWith('原轮已结束'))
+          message.error = `原轮已结束，引导结果仍待核查；不会转发到新轮。${message.error ?? ''}`
+        continue
+      }
       if (message.worker.id === workerId && message.route === 'interrupt') {
         if (
           !['running', 'completed', 'superseded', 'failed'].includes(message.deliveryState ?? 'pending') ||
@@ -498,21 +642,28 @@ export function useMessageSubmissions(
         message.state = 'cancelled'
         message.error = undefined
         message.releaseAdmission?.()
-        if (message.route !== 'interrupt') restore.current(workerId, message.prompt)
+        if (
+          message.route !== 'interrupt' &&
+          !records.current.some((item) => item.worker.id === workerId && item.sequence > message.sequence)
+        )
+          restore.current(workerId, message.prompt)
       }
     }
     update()
   }
   const visible = records.current.filter(
-    (item) => item.worker.id === snapshot.selected?.id && !item.confirmed && !item.redirected,
+    (item) =>
+      item.worker.id === snapshot.selected?.id &&
+      !item.confirmed &&
+      !item.redirected &&
+      (item.state !== 'cancelled' || item.presentation === 'bubble'),
   )
-  const localQueue = visible.filter(
-    (item) => item.mode === 'queue' && item.route !== 'followup' && item.route !== 'interrupt',
-  )
+  const localQueue = visible.filter((item) => item.presentation === 'queue')
   const localMessages = visible.filter((item) => !localQueue.includes(item))
   const optimisticTimeline: TimelineItem[] = localMessages.map((item) => ({
     id: `local-${item.id}:user`,
     kind: 'user',
+    queuedFollowupId: item.id,
     text: item.prompt,
     time: item.createdAt,
     deliveryState: item.deliveryState,
@@ -523,10 +674,56 @@ export function useMessageSubmissions(
     prompt: item.prompt,
     createdAt: item.createdAt,
     state: item.state === 'failed' || item.state === 'cancelled' ? 'paused' : 'pending',
-    pauseReason: item.state === 'failed' ? item.error : item.state === 'cancelled' ? '已停止发送' : undefined,
+    pauseReason: item.state === 'failed' ? item.error : undefined,
   }))
+  function busyFor(workerId: string): boolean {
+    const current = snapshots.current.get(workerId)
+    return (
+      !!current?.selectedBusy ||
+      !!(current?.selected && active(current.selected.status)) ||
+      stopBarriers.current.has(workerId) ||
+      records.current.some(
+        (item) =>
+          item.worker.id === workerId &&
+          !item.redirected &&
+          !item.stopped &&
+          !item.runEnded &&
+          (item.state === 'pending' ||
+            (item.route === 'interrupt' && !item.admissionSettled) ||
+            (item.state === 'accepted' &&
+              !item.confirmed &&
+              (item.acceptedRunId
+                ? item.acceptedRunId !== current?.selected?.runId &&
+                  (!current?.selected || current.selected.runId === item.originalRunId)
+                : item.receiptRevision !== undefined
+                  ? current?.revision === undefined || current.revision < item.receiptRevision
+                  : true))),
+      )
+    )
+  }
+  function canSteer(workerId: string): boolean {
+    const current = snapshots.current.get(workerId)
+    return (
+      current?.selected?.status === 'running' &&
+      !['accepting', 'preparing', 'queued', 'stopping', 'priority'].includes(
+        current.selectedBusyReason ?? '',
+      ) &&
+      !stopBarriers.current.has(workerId) &&
+      !records.current.some(
+        (item) =>
+          item.worker.id === workerId &&
+          !item.redirected &&
+          !item.stopped &&
+          ((item.route === 'interrupt' && !item.admissionSettled) ||
+            (item.intent === 'direct' && item.state === 'pending')),
+      )
+    )
+  }
   return {
+    busyFor,
+    canSteer,
     submit,
+    steerMessage,
     interruptQueued: (worker: Worker, item: QueuedFollowup) => interruptMessage(worker, item.prompt, item.id),
     cancelPending,
     confirmStopped,
@@ -557,6 +754,7 @@ export function useMessageSubmissions(
     stopUnconfirmed: stopBarriers.current.has(snapshot.selected?.id ?? ''),
     stopScope: (workerId: string) => new Set(records.current.filter((item) => item.worker.id === workerId)),
     discard,
+    recover: (message: MessageSubmission) => restore.current(message.worker.id, message.prompt),
     localMessages,
     localQueue,
     optimisticTimeline,
@@ -579,7 +777,7 @@ export function useMessageSubmissions(
         !records.current.some(
           (message) =>
             message.worker.id === snapshot.selected?.id &&
-            message.route === 'interrupt' &&
+            (message.route === 'interrupt' || message.admitted) &&
             message.id === item.id,
         ),
     ),
@@ -590,12 +788,14 @@ export function useMessageSubmissions(
         (!item.admissionSettled || item.uncertain),
     ),
     uncertain: records.current.some(
-      (item) => item.worker.id === snapshot.selected?.id && !item.redirected && item.uncertain,
+      (item) =>
+        item.worker.id === snapshot.selected?.id && !item.redirected && !item.runEnded && item.uncertain,
     ),
     pending: records.current.some(
       (item) =>
         item.worker.id === snapshot.selected?.id &&
         !item.redirected &&
+        !item.runEnded &&
         (item.state === 'pending' || (item.route === 'interrupt' && !item.admissionSettled)),
     ),
   }

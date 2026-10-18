@@ -20,9 +20,11 @@ const itemSchema = z.object({
   createdAt: z.string(),
   state: z.enum(['pending', 'sending', 'paused']),
   pauseReason: z.string().optional(),
+  generation: z.number().int().nonnegative().default(0),
 })
 const queueSchema = z.object({
   policy: z.literal(1),
+  generation: z.number().int().nonnegative().default(0),
   items: z.array(itemSchema).max(20),
   receipts: z
     .array(
@@ -36,6 +38,8 @@ const queueSchema = z.object({
     .max(200),
 })
 type StoredQueue = z.infer<typeof queueSchema>
+const publicItem = ({ generation: _, ...item }: StoredQueue['items'][number]): QueuedFollowup =>
+  structuredClone(item)
 
 function readQueue(path: string): StoredQueue {
   const limit = 16_100_000
@@ -108,7 +112,22 @@ export class FollowupQueue {
     this.queues.set(workerId, queue)
   }
   list(workerId: string): QueuedFollowup[] {
-    return structuredClone(this.queues.get(workerId)?.items ?? [])
+    return (this.queues.get(workerId)?.items ?? []).map(publicItem)
+  }
+  generation(workerId: string): number {
+    return this.queues.get(workerId)?.generation ?? 0
+  }
+  generationOf(workerId: string, id: string): number | undefined {
+    return this.queues.get(workerId)?.items.find((item) => item.id === id)?.generation
+  }
+  advanceGeneration(workerId: string): number {
+    const queue = structuredClone(
+      this.queues.get(workerId) ?? { policy: 1 as const, generation: 0, items: [], receipts: [] },
+    )
+    const previous = queue.generation
+    queue.generation++
+    this.save(workerId, queue)
+    return previous
   }
   receipt(
     workerId: string,
@@ -122,14 +141,14 @@ export class FollowupQueue {
     if (!receipt) {
       if (!item) return undefined
       if (item.prompt !== prompt) throw new Error('重复提交标识对应的消息不同')
-      return { delivery: 'queue', item: structuredClone(item) }
+      return { delivery: 'queue', item: publicItem(item) }
     }
     if (receipt.digest !== createHash('sha256').update(prompt).digest('hex'))
       throw new Error('重复提交标识对应的消息不同')
     return {
       delivery: receipt.delivery ?? 'queue',
       acknowledged: receipt.acknowledged,
-      item: structuredClone(item),
+      item: item ? publicItem(item) : undefined,
     }
   }
   /** Reserve the identity before native delivery; an uncertain receipt must never be resent as a queue item. */
@@ -137,7 +156,7 @@ export class FollowupQueue {
     const previous = this.receipt(workerId, prompt, requestId)
     if (previous && previous.delivery !== 'steer') throw new Error('这条消息已经排队，请刷新会话')
     const queue = structuredClone(
-      this.queues.get(workerId) ?? { policy: 1 as const, items: [], receipts: [] },
+      this.queues.get(workerId) ?? { policy: 1 as const, generation: 0, items: [], receipts: [] },
     )
     const receipt = {
       id: requestId,
@@ -159,13 +178,13 @@ export class FollowupQueue {
     z.uuid().parse(requestId)
     if (!prompt.trim() || prompt.length > 100_000) throw new Error('消息须包含 1–100000 个字符')
     const queue = structuredClone(
-      this.queues.get(workerId) ?? { policy: 1 as const, items: [], receipts: [] },
+      this.queues.get(workerId) ?? { policy: 1 as const, generation: 0, items: [], receipts: [] },
     )
     const digest = createHash('sha256').update(prompt).digest('hex')
     const pending = queue.items.find((item) => item.id === requestId)
     if (pending) {
       if (pending.prompt !== prompt) throw new Error('重复提交标识对应的消息不同')
-      return structuredClone(pending)
+      return publicItem(pending)
     }
     const previous = queue.receipts.find((receipt) => receipt.id === requestId)
     if (previous) {
@@ -173,28 +192,29 @@ export class FollowupQueue {
       if (previous.delivery === 'steer') throw new Error('这条引导消息已经提交，请核查本轮记录')
       const item = queue.items.find((item) => item.id === requestId)
       if (!item) throw new Error('这条消息已经处理，请刷新会话')
-      return structuredClone(item)
+      return publicItem(item)
     }
     if (queue.items.length >= 20) throw new Error('最多可保留 20 条待发送消息，请先发送或取消')
-    const paused = queue.items.find((item) => item.state === 'paused')
-    const item: QueuedFollowup = {
+    const paused = queue.items.find((item) => item.state === 'paused' && item.generation === queue.generation)
+    const item = {
       id: requestId,
       prompt,
       createdAt: new Date().toISOString(),
-      state: paused ? 'paused' : 'pending',
+      state: paused ? ('paused' as const) : ('pending' as const),
+      generation: queue.generation,
       ...(paused ? { pauseReason: paused.pauseReason } : {}),
     }
     queue.items.push(item)
     queue.receipts = [...queue.receipts, { id: requestId, digest }].slice(-200)
     this.save(workerId, queue)
-    return structuredClone(item)
+    return publicItem(item)
   }
   /** Moving a message to durable conversation history consumes its outbox identity. */
   consume(workerId: string, prompt: string, requestId: string): void {
     const prior = this.receipt(workerId, prompt, requestId)
     if (prior?.delivery === 'steer') throw new Error('这条引导消息已经提交，请核查本轮记录')
     const queue = structuredClone(
-      this.queues.get(workerId) ?? { policy: 1 as const, items: [], receipts: [] },
+      this.queues.get(workerId) ?? { policy: 1 as const, generation: 0, items: [], receipts: [] },
     )
     queue.items = queue.items.filter((item) => item.id !== requestId)
     if (!queue.receipts.some((receipt) => receipt.id === requestId))
@@ -227,10 +247,26 @@ export class FollowupQueue {
     queue.items = queue.items.filter((item) => item.id !== id)
     this.save(workerId, queue)
   }
-  update(workerId: string, state: 'pending' | 'paused', pauseReason?: string): void {
+  update(
+    workerId: string,
+    state: 'pending' | 'paused',
+    pauseReason?: string,
+    throughGeneration = this.generation(workerId),
+  ): void {
     const queue = structuredClone(this.queues.get(workerId))
     if (!queue?.items.length) return
-    queue.items = queue.items.map((item) => ({ ...item, state, pauseReason }))
+    queue.items = queue.items.map((item) =>
+      item.generation <= throughGeneration
+        ? { ...item, state, pauseReason, ...(state === 'pending' ? { generation: queue.generation } : {}) }
+        : item,
+    )
+    this.save(workerId, queue)
+  }
+  releaseClaim(workerId: string, id: string): void {
+    const queue = structuredClone(this.queues.get(workerId))
+    const item = queue?.items.find((entry) => entry.id === id)
+    if (!queue || item?.state !== 'sending') return
+    item.state = 'pending'
     this.save(workerId, queue)
   }
   /** Explicit interruption may activate one message without resuming an already paused queue. */
@@ -256,14 +292,14 @@ export class FollowupQueue {
     delete item.pauseReason
     queue.items.unshift(item)
     this.save(workerId, queue)
-    return structuredClone(item)
+    return publicItem(item)
   }
   claim(workerId: string): QueuedFollowup | undefined {
     const queue = structuredClone(this.queues.get(workerId))
-    const item = queue?.items[0]
+    const item = queue?.items.find((entry) => entry.state === 'pending')
     if (!queue || item?.state !== 'pending') return undefined
     item.state = 'sending'
     this.save(workerId, queue)
-    return structuredClone(item)
+    return publicItem(item)
   }
 }

@@ -28,6 +28,7 @@ import { hermesUnsuppressedEnvironment, projectHermesUnsuppressedAuth } from './
 import { readZCodeBindingMaterial, zcodeAuthDirectory } from './zcode-adapter.ts'
 import { ProcessCleanupUnconfirmedError, type ProcessBackend, type RuntimeConfig } from './process.ts'
 import { ensureHermesNousFresh, HermesRenewalError } from './hermes-renewal.ts'
+import { readQoderAccountBindingMaterial, QoderAccountError } from './qoder-accounts.ts'
 
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v)
 const text = (v: unknown): v is string => typeof v === 'string' && !!v.trim()
@@ -296,6 +297,10 @@ async function material(
   selectedClaudeRoute?: ClaudeOwnRoute,
 ): Promise<BindingMaterial> {
   const home = homedir()
+  if (cli === 'qoder') {
+    const executable = await resolveCliExecutable(cli, backend, config, signal)
+    return readQoderAccountBindingMaterial(executable, signal, { backend, config, project })
+  }
   if (cli === 'antigravity') {
     await assertAgyNativeAccountRoute(signal, home)
     if (process.platform === 'win32') {
@@ -590,6 +595,7 @@ export async function readCliAccountBinding(
       error instanceof KimiOAuthModelError ||
       error instanceof ClaudeOwnRouteError ||
       error instanceof HermesRenewalError
+      || error instanceof QoderAccountError
     )
       throw error
     throw new CliAccountBindingError(cli)

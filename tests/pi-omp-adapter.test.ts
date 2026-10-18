@@ -23,6 +23,10 @@ import { preparePiOmp, discoverPiOmp, type PiOmpInput, type PiOmpCli } from '../
 import { extendedCatalog, extendedLaunch } from '../src/host/extended-adapters.ts'
 import { DEFAULT_CONFIG, ProcessCleanupUnconfirmedError } from '../src/host/process.ts'
 import { foldEvents, type WorkerEvent } from '../src/shared/types.ts'
+import { foldNativeFrames } from './fixtures/bridge-timeline.ts'
+import { createNativeHarnessTools } from '../src/host/native-harness-tools.ts'
+import { HARNESS_CONNECTION_ENV } from '../src/host/native-harness-mcp.mjs'
+import { nativeHarnessExtensionToolName } from '../src/host/native-harness-extension.mjs'
 
 const exec = promisify(execFile)
 const roots: string[] = []
@@ -43,7 +47,9 @@ afterEach(async () => {
 const fixtureKey = 'SYNTHETIC_TEST_KEY_NOT_A_CREDENTIAL'
 const fixtureEnvironment = (home: string | undefined, env: Record<string, string> = {}) => ({
   PATH: process.env.PATH ?? '/usr/bin:/bin',
-  ...(process.platform === 'win32' ? { SYSTEMROOT: process.env.SYSTEMROOT ?? process.env.SystemRoot ?? '' } : {}),
+  ...(process.platform === 'win32'
+    ? { SYSTEMROOT: process.env.SYSTEMROOT ?? process.env.SystemRoot ?? '' }
+    : {}),
   HOME: home ?? '/private/tmp',
   LANG: 'C',
   ...env,
@@ -96,7 +102,10 @@ async function fixture(cli: PiOmpCli, scenario = 'success', version = '1.0.2') {
     response.end(JSON.stringify({ data: catalog.map((model) => ({ id: model.id })) }))
   })
   servers.push(server)
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve() })
+  })
   const address = server.address() as { port: number }
   const account = join(stateDirectory, 'accounts', cli, 'agent')
   await mkdir(account, { recursive: true, mode: 0o700 })
@@ -139,11 +148,14 @@ import {mkdirSync,writeFileSync,existsSync} from 'node:fs';import {join} from 'n
 const cli=${JSON.stringify(cli)},scenario=${JSON.stringify(scenario)},marker=${JSON.stringify(join(root, 'native-stopped'))};
 const provider=${JSON.stringify(provider)},modelId=${JSON.stringify(modelId)},agent=process.env.PI_CODING_AGENT_DIR;
 if(process.argv.includes('models')){
-if(scenario==='catalog-cancel'){writeFileSync(${JSON.stringify(join(root, 'catalog-started'))},'STARTED');setInterval(()=>{},1000);process.on('SIGTERM',()=>setTimeout(()=>{writeFileSync(marker,'STOPPED');process.exit(143)},80));}
+if(scenario==='catalog-cancel'){writeFileSync(${JSON.stringify(join(root, 'catalog-pid'))},String(process.pid));writeFileSync(${JSON.stringify(join(root, 'catalog-started'))},'STARTED');setInterval(()=>{},1000);process.on('SIGTERM',()=>setTimeout(()=>{writeFileSync(marker,'STOPPED');process.exit(143)},80));}
+else if(scenario==='catalog-refresh'&&!process.argv.includes('refresh')){process.stdout.write('[]');process.exit(0);}
+else if(scenario==='catalog-refresh'){writeFileSync(join(agent,'refreshed-model-registry.json'),JSON.stringify(${JSON.stringify(catalog)}));process.stdout.write(JSON.stringify(${JSON.stringify(catalog)}));process.exit(0);}
 else if(scenario==='secret-model-error'){process.stdout.write('{SYNTHETIC_TEST_KEY_NOT_A_CREDENTIAL');process.exit(0);}
 else{process.stdout.write(JSON.stringify(${JSON.stringify(catalog)}));process.exit(0);}
 }
 else {
+if(scenario==='catalog-refresh'&&!existsSync(join(agent,'refreshed-model-registry.json')))process.exit(3);
 mkdirSync(join(agent,'sessions'),{recursive:true});
 const path=join(agent,'sessions','fixture.jsonl');const resumed=process.argv.includes(cli==='pi'?'--session':'--resume');
 if(resumed&&!existsSync(path))process.exit(2);
@@ -157,9 +169,11 @@ const finishSteer=()=>{streaming=false;send({type:'message_end',message:{role:'a
 if(cli==='omp')send({type:'ready'});
 const input=createInterface({input:process.stdin});
 input.on('line',line=>{const cmd=JSON.parse(line);if(cmd.type==='get_state'){send({id:cmd.id,type:'response',command:cmd.type,success:true,data:state()});return}
+if(cmd.type==='get_session_stats'){if(scenario==='usage-timeout')return;send({id:cmd.id,type:'response',command:cmd.type,success:scenario!=='usage-unavailable',data:{tokens:{input:7,output:3,cacheRead:2,cacheWrite:1,total:13},contextUsage:{tokens:10,contextWindow:128000,percent:0.0078125},sessionFile:'PRIVATE_PATH_MUST_NOT_LEAK'}});return}
 if(cmd.type==='set_model'){model={provider:cmd.provider,id:cmd.modelId};send({id:cmd.id,type:'response',command:cmd.type,success:true,data:model});return}
 if(cmd.type==='set_thinking_level'){thinkingLevel=cmd.level;send({id:cmd.id,type:'response',command:cmd.type,success:true});return}
 if(cmd.type==='get_available_models'){send({id:cmd.id,type:'response',command:cmd.type,success:true,data:{models:[model]}});return}
+if(cmd.type==='abort'){writeFileSync(${JSON.stringify(join(root, 'native-aborted'))},'ABORT');send({id:cmd.id,type:'response',command:'abort',success:true});return}
 if(cmd.type==='steer'){
 steers.push(cmd.message);writeFileSync(join(agent,'observed-steers.json'),JSON.stringify(steers));
 steerIds.push(cmd.id);writeFileSync(join(agent,'observed-steer-ids.json'),JSON.stringify(steerIds));
@@ -179,7 +193,7 @@ send({type:'message_update',assistantMessageEvent:{type:'thinking_delta',content
 send({type:'message_update',assistantMessageEvent:{type:'thinking_end',contentIndex:0,content:'模拟公开过程（完成）'}});
 send({type:'message_update',assistantMessageEvent:{type:'thinking_delta',contentIndex:2,delta:'REDACTED_TEXT',partial:{content:[null,null,{redacted:true,thinkingSignature:'OPAQUE_SIGNATURE'}]}}});
 }
-send({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:resumed?'RESUMED':'HELLO'}});
+for(const delta of scenario==='fragmented'?['H','E','L','L','O']:[resumed?'RESUMED':'HELLO'])send({type:'message_update',assistantMessageEvent:{type:'text_delta',delta}});
 if(scenario==='cancel'||scenario.startsWith('steer-'))return;
 if(scenario==='tool-error'){send({type:'tool_execution_start',toolCallId:'t',toolName:'write'});send({type:'tool_execution_end',toolCallId:'t',toolName:'write',isError:true,result:{content:[{type:'text',text:'denied'}]}})}
 if(scenario==='malformed'){process.stdout.write('not-json\\n');return}
@@ -258,6 +272,35 @@ async function prepareConfirmed(input: PiOmpInput) {
   )
 }
 describe('Pi/OMP bridge with simulated native RPC processes', () => {
+  it('Pi explicitly whitelists run tools without persisting the connection', async () => {
+    const cli = 'pi'
+    const { input } = await fixture(cli)
+    // Provider snapshots must never override the Host's per-run capability.
+    await writeFile(join(input.accountRoot!, 'accounts', cli, 'agent/.env'), `FIXTURE_API_KEY=${fixtureKey}\nCLIWORKER_HARNESS_TOOLS=UNTRUSTED_ACCOUNT_VALUE\n`, { mode: 0o600 })
+    const bridge = await createNativeHarnessTools({ binding: { parentSessionId: 'simulated-parent', harnessSessionId: 'simulated-child', workerId: 'simulated-worker', runId: 'simulated-run', cli },
+      tools: [{ name: 'simulated_tool', description: 'Synthetic only', inputSchema: { type: 'object' }, execution: 'host' }], authorize() {}, execute: async () => 'synthetic', executionReady: true })
+    let prepared: Awaited<ReturnType<typeof prepareConfirmed>> | undefined
+    try {
+      prepared = await prepareConfirmed({ ...input, harnessTools: bridge.connection })
+      const requestText = await readFile(prepared.argv[2]!, 'utf8'), request = JSON.parse(requestText)
+      expect(requestText).not.toContain(bridge.connection.token)
+      expect(prepared.env?.[HARNESS_CONNECTION_ENV]).toBe(JSON.stringify(bridge.connection))
+      await exec(prepared.argv[0]!, prepared.argv.slice(1), { env: fixtureEnvironment(input.nativeHome, prepared.env), timeout: 10000 })
+      const argv = JSON.parse(await readFile(join(request.stateDirectory, 'agent/observed-argv.json'), 'utf8'))
+      expect(argv).toContain('--no-extensions')
+      expect(argv[argv.indexOf('--extension') + 1]).toMatch(/native-harness-extension\.mjs$/u)
+      expect(argv[argv.indexOf('--tools') + 1].split(',')).toContain(nativeHarnessExtensionToolName('simulated_tool'))
+      expect(await readFile(join(request.stateDirectory, 'agent/native-env.json'), 'utf8')).not.toContain(bridge.connection.token)
+    } finally { await prepared?.cleanup(); await bridge.close() }
+  })
+  it.each(['pi', 'omp'] as const)('%s folds token-sized updates into the native message identity', async (cli) => {
+    const { input } = await fixture(cli, 'fragmented')
+    const result = await launch(input)
+    expect(result.code).toBe(0)
+    const replies = foldNativeFrames(result.frames).filter((row) => row.kind === 'assistant')
+    expect(replies).toHaveLength(1)
+    expect(replies[0]?.text).toBe('HELLO')
+  })
   it.each(['pi', 'omp'] as const)(
     '%s accepts native guidance once without restarting its process',
     async (cli) => {
@@ -315,7 +358,7 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
       const done = new Promise<number | null>((resolve) => child.once('close', resolve))
       try {
         await vi.waitFor(() => expect(stdout).toContain('HELLO'), { timeout: 5000 })
-        const error = await prepared.steer!('SIMULATED GUIDE', scenario).catch(error => error)
+        const error = await prepared.steer!('SIMULATED GUIDE', scenario).catch((error) => error)
         expect(error).toBeInstanceOf(Error)
         expect(error.code).toBe(scenario === 'steer-reject' ? 'STEER_REJECTED' : undefined)
         expect(await done).toBe(scenario === 'steer-close' ? 1 : 0)
@@ -333,20 +376,30 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
   it('retries definite native guidance rejection with a fresh native request id', async () => {
     const { input } = await fixture('pi', 'steer-retry')
     const prepared = await prepareConfirmed(input)
-    const child = spawn(prepared.argv[0]!, prepared.argv.slice(1), { env: fixtureEnvironment(input.nativeHome, prepared.env) })
+    const child = spawn(prepared.argv[0]!, prepared.argv.slice(1), {
+      env: fixtureEnvironment(input.nativeHome, prepared.env),
+    })
     let stdout = ''
-    child.stdout.on('data', chunk => { stdout += chunk })
-    const done = new Promise<number | null>(resolve => child.once('close', resolve))
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk
+    })
+    const done = new Promise<number | null>((resolve) => child.once('close', resolve))
     try {
       await vi.waitFor(() => expect(stdout).toContain('HELLO'), { timeout: 5000 })
-      await expect(prepared.steer!('SIMULATED RETRY', 'same-request')).rejects.toMatchObject({ code: 'STEER_REJECTED' })
+      await expect(prepared.steer!('SIMULATED RETRY', 'same-request')).rejects.toMatchObject({
+        code: 'STEER_REJECTED',
+      })
       await expect(prepared.steer!('SIMULATED RETRY', 'same-request')).resolves.toBeUndefined()
       expect(await done).toBe(0)
       const requestRoot = dirname(dirname(prepared.argv.at(-1)!))
       const ids = JSON.parse(await readFile(join(requestRoot, 'agent/observed-steer-ids.json'), 'utf8'))
       expect(ids).toHaveLength(2)
       expect(ids[0]).not.toBe(ids[1])
-    } finally { child.kill('SIGTERM'); await done; await prepared.cleanup() }
+    } finally {
+      child.kill('SIGTERM')
+      await done
+      await prepared.cleanup()
+    }
   })
 
   it.each(['pi', 'omp'] as const)(
@@ -646,13 +699,42 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
       },
     ])
   })
+  it('refreshes stale OMP candidates in the registry later used by initial and resumed RPC', async () => {
+    const { input } = await fixture('omp', 'catalog-refresh')
+    const first = await launch(input)
+    expect(first.code).toBe(0)
+    expect(first.frames.at(-1)).toMatchObject({ status: 'SUCCESS', response: 'HELLO' })
+    const resumed = await launch({ ...input, conversationId: 'fixture-id' })
+    expect(resumed.code).toBe(0)
+    expect(resumed.frames.at(-1)).toMatchObject({ status: 'SUCCESS', response: 'RESUMED' })
+  })
+  it('cancels native OMP metadata refresh and waits for the native child to exit', async () => {
+    const { root, input } = await fixture('omp', 'catalog-cancel')
+    const { queryNativeCandidates } = await import('../src/host/pi-native-catalog.mjs')
+    const controller = new AbortController()
+    const pending = queryNativeCandidates('omp', input.executable, root,
+      fixtureEnvironment(root), () => {}, { refresh: true, signal: controller.signal })
+    // Attach rejection before cancellation so the test never leaves it unhandled.
+    const rejected = expect(pending).rejects.toThrow('无法读取 Pi/OMP 原生模型目录')
+    await vi.waitFor(async () => expect(await readFile(join(root, 'catalog-started'), 'utf8')).toBe('STARTED'))
+    controller.abort()
+    await rejected
+    const nativePid = Number(await readFile(join(root, 'catalog-pid'), 'utf8'))
+    expect(nativePid).toBeGreaterThan(0)
+    expect(() => process.kill(nativePid, 0)).toThrow()
+    if (process.platform !== 'win32')
+      expect(await readFile(join(root, 'native-stopped'), 'utf8')).toBe('STOPPED')
+  })
   it.each(['pi', 'omp'] as const)(
     '%s persists the returned session path and resumes without guessing it',
     async (cli) => {
       const { input } = await fixture(cli)
       const first = await launch(input)
       expect(first.code).toBe(0)
-      expect(first.frames.at(-1)).toEqual({ type: 'result', status: 'SUCCESS', response: 'HELLO' })
+      expect(first.frames.at(-1)).toEqual({ type: 'result', status: 'SUCCESS', response: 'HELLO', resultScope: 'run' })
+      expect(first.frames.find((frame: any) => frame.record?.type === 'cliworker.rpc_usage')?.record)
+        .toMatchObject({ cli, sessionId: 'fixture-id', usage: { total: 13 }, contextUsage: { tokens: 10, contextWindow: 128000 } })
+      expect(first.stdout).not.toContain('PRIVATE_PATH_MUST_NOT_LEAK')
       expect(first.stdout).not.toContain('SECRET_REASONING_FIXTURE')
       expect(first.stdout).not.toContain(fixtureKey)
       const resumed = await launch({ ...input, conversationId: 'fixture-id' })
@@ -675,6 +757,15 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
     expect(result.code).toBe(1)
     expect(result.frames.at(-1)).toMatchObject({ status: 'ERROR' })
     expect(result.frames.some((frame: any) => frame.event?.state === 'FAILED')).toBe(true)
+  })
+  it.each(['pi', 'omp'] as const)('%s keeps optional unavailable/timed-out usage independent of native success', async (cli) => {
+    for (const scenario of ['usage-unavailable', 'usage-timeout']) {
+      const { input } = await fixture(cli, scenario)
+      const result = await launch(input)
+      expect(result.code).toBe(0)
+      expect(result.frames.at(-1)).toMatchObject({ status: 'SUCCESS', response: 'HELLO' })
+      expect(result.frames.some((frame: any) => frame.record?.type === 'cliworker.rpc_usage')).toBe(false)
+    }
   })
   it('Pi agent_end alone cannot become a completed task', async () => {
     const { input } = await fixture('pi', 'unsettled')
@@ -720,28 +811,62 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
   })
   // Node kill(SIGTERM) is TerminateProcess on Windows, not a delivered signal.
   // Windows SDK Job cancellation is covered by windows-process.test.ts instead.
-  it.skipIf(process.platform === 'win32')('waits for native SIGTERM cleanup before bridge termination', async () => {
-    const { root, input } = await fixture('pi', 'cancel')
-    const prepared = await prepareConfirmed(input)
-    const child = spawn(prepared.argv[0]!, prepared.argv.slice(1), {
-      env: fixtureEnvironment(input.nativeHome, prepared.env),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    let output = '',
-      sent = false
-    child.stdout.setEncoding('utf8')
-    child.stdout.on('data', (chunk) => {
-      output += chunk
-      if (!sent && output.includes('HELLO')) {
-        sent = true
-        child.kill('SIGTERM')
+  it.skipIf(process.platform === 'win32')(
+    'waits for native SIGTERM cleanup before bridge termination',
+    async () => {
+      const { root, input } = await fixture('pi', 'cancel')
+      const prepared = await prepareConfirmed(input)
+      const child = spawn(prepared.argv[0]!, prepared.argv.slice(1), {
+        env: fixtureEnvironment(input.nativeHome, prepared.env),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let output = '',
+        sent = false
+      child.stdout.setEncoding('utf8')
+      child.stdout.on('data', (chunk) => {
+        output += chunk
+        if (!sent && output.includes('HELLO')) {
+          sent = true
+          child.kill('SIGTERM')
+        }
+      })
+      const code = await new Promise((resolve) => child.once('close', resolve))
+      expect(code).toBe(1)
+      expect(await readFile(join(root, 'native-stopped'), 'utf8')).toBe('STOPPED')
+      expect(JSON.parse(output.trim().split('\n').at(-1)!)).toMatchObject({ status: 'ERROR' })
+    },
+  )
+  it.each(['pi', 'omp'] as const)(
+    'sends %s native abort through its scoped stop channel before teardown',
+    async (cli) => {
+      const { root, input } = await fixture(cli, 'cancel')
+      const prepared = await prepareConfirmed(input)
+      const child = spawn(prepared.argv[0]!, prepared.argv.slice(1), {
+        env: fixtureEnvironment(input.nativeHome, prepared.env),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let output = '',
+        stop: Promise<void> | undefined
+      child.stdout.setEncoding('utf8')
+      child.stdout.on('data', (chunk) => {
+        output += chunk
+        if (!stop && output.includes('HELLO')) {
+          stop = prepared.stop!()
+          void stop.catch(() => undefined)
+        }
+      })
+      try {
+        const code = await new Promise((resolve) => child.once('close', resolve))
+        await stop
+        expect(code).not.toBe(0)
+        expect(await readFile(join(root, 'native-aborted'), 'utf8')).toBe('ABORT')
+        expect(JSON.parse(output.trim().split('\n').at(-1)!)).toMatchObject({ status: 'ERROR' })
+      } finally {
+        child.kill('SIGKILL')
+        await prepared.cleanup()
       }
-    })
-    const code = await new Promise((resolve) => child.once('close', resolve))
-    expect(code).toBe(1)
-    expect(await readFile(join(root, 'native-stopped'), 'utf8')).toBe('STOPPED')
-    expect(JSON.parse(output.trim().split('\n').at(-1)!)).toMatchObject({ status: 'ERROR' })
-  })
+    },
+  )
   it('rejects unselected routes and unsupported efforts before spawning', async () => {
     const { input } = await fixture('pi')
     await expect(
@@ -857,37 +982,40 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
       error: '无法读取 Pi/OMP 原生模型目录，请检查本机配置',
     })
   })
-  it.skipIf(process.platform === 'win32')('cleans up OMP native metadata queries when the bridge is stopped', async () => {
-    const { root, input } = await fixture('omp', 'catalog-cancel')
-    const prepared = await preparePiOmp(input)
-    const request = JSON.parse(await readFile(prepared.argv[2]!, 'utf8'))
-    await writeFile(
-      prepared.argv[2]!,
-      JSON.stringify({ ...request, discover: true, metadataPhase: 'native-candidates' }),
-      { mode: 0o600 },
-    )
-    const processHandle = spawn(prepared.argv[0]!, prepared.argv.slice(1), {
-      env: fixtureEnvironment(input.nativeHome, prepared.env),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    let stdout = '',
-      stderr = ''
-    processHandle.stdout.on('data', (data) => {
-      stdout += data
-    })
-    processHandle.stderr.on('data', (data) => {
-      stderr += data
-    })
-    await vi.waitFor(async () =>
-      expect(await readFile(join(root, 'catalog-started'), 'utf8')).toBe('STARTED'),
-    )
-    processHandle.kill('SIGTERM')
-    const code = await new Promise((resolve) => processHandle.once('close', resolve))
-    expect(code).toBe(1)
-    expect(await readFile(join(root, 'native-stopped'), 'utf8')).toBe('STOPPED')
-    expect(stderr).not.toContain('TypeError')
-    expect(stdout).not.toContain(fixtureKey)
-  })
+  it.skipIf(process.platform === 'win32')(
+    'cleans up OMP native metadata queries when the bridge is stopped',
+    async () => {
+      const { root, input } = await fixture('omp', 'catalog-cancel')
+      const prepared = await preparePiOmp(input)
+      const request = JSON.parse(await readFile(prepared.argv[2]!, 'utf8'))
+      await writeFile(
+        prepared.argv[2]!,
+        JSON.stringify({ ...request, discover: true, metadataPhase: 'native-candidates' }),
+        { mode: 0o600 },
+      )
+      const processHandle = spawn(prepared.argv[0]!, prepared.argv.slice(1), {
+        env: fixtureEnvironment(input.nativeHome, prepared.env),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let stdout = '',
+        stderr = ''
+      processHandle.stdout.on('data', (data) => {
+        stdout += data
+      })
+      processHandle.stderr.on('data', (data) => {
+        stderr += data
+      })
+      await vi.waitFor(async () =>
+        expect(await readFile(join(root, 'catalog-started'), 'utf8')).toBe('STARTED'),
+      )
+      processHandle.kill('SIGTERM')
+      const code = await new Promise((resolve) => processHandle.once('close', resolve))
+      expect(code).toBe(1)
+      expect(await readFile(join(root, 'native-stopped'), 'utf8')).toBe('STOPPED')
+      expect(stderr).not.toContain('TypeError')
+      expect(stdout).not.toContain(fixtureKey)
+    },
+  )
   it.each(['pi', 'omp'] as const)(
     '%s preserves native env credentials across continuation without injecting a Host CN key into another provider',
     async (cli) => {

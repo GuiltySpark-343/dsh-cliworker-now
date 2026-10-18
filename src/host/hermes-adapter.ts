@@ -300,8 +300,9 @@ export type HermesRecord =
       duration_ms?: number
     }
 
-/** Map only counters actually reported by the native final envelope. These are run totals,
- * not a model context-window occupancy estimate and not per-message counters.
+/** Canonical Hermes stdio/database input excludes both cache buckets. Normalize
+ * to the inclusive input used by the HTTP adapter and shared Hermes telemetry.
+ * These remain run totals, never context occupancy or per-response counters.
  */
 export function hermesTokenUsage(tokens: unknown): TokenUsage | undefined {
   if (!record(tokens)) return undefined
@@ -309,11 +310,15 @@ export function hermesTokenUsage(tokens: unknown): TokenUsage | undefined {
     typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
   const total = count(tokens.total)
   if (total === undefined) return undefined
+  const input = count(tokens.input), cacheRead = count(tokens.cache_read), cacheWrite = count(tokens.cache_write)
+  const prompt = input !== undefined && cacheRead !== undefined && cacheWrite !== undefined
+    ? input + cacheRead + cacheWrite : undefined
   return {
     total,
-    input: count(tokens.input),
+    input: prompt !== undefined && Number.isSafeInteger(prompt) ? prompt : undefined,
     output: count(tokens.output),
-    cacheRead: count(tokens.cache_read),
+    cacheRead,
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
     scope: 'run',
   }
 }

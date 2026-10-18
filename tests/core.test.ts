@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream'
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { AgyProtocol, type EventInput } from '../src/host/protocol.ts'
 import { WorkerStorage } from '../src/host/storage.ts'
-import { WorkerRuntime } from '../src/host/runtime.ts'
+import { WorkerRuntime } from './fixtures/legacy-runtime.ts'
 import { DEFAULT_CONFIG, projectDirectory, agyArguments, type ProcessBackend } from '../src/host/process.ts'
 import { foldEvents, type Worker } from '../src/shared/types.ts'
 const cleanups: (() => void | Promise<void>)[] = []
@@ -168,7 +168,8 @@ describe('private durable storage', () => {
     cleanups.push(() => restored.close())
     expect(restored.workers.get(worker.id)?.status).toBe('interrupted')
     expect(restored.history(worker.id).at(-1)?.state).toBe('interrupted')
-    if (process.platform !== 'win32') expect(statSync(join(directory, `${worker.id}.worker.json`)).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32')
+      expect(statSync(join(directory, `${worker.id}.worker.json`)).mode & 0o777).toBe(0o600)
     restored.close()
     const reopened = new WorkerStorage(directory)
     cleanups.push(() => reopened.close())
@@ -324,7 +325,7 @@ it('does not repeat earlier streamed steps when final response aggregates them',
     { kind: 'assistant', step: 3, text: 'Done.' },
     { kind: 'result', text: 'Working.\nDone.' },
   ].map((e, i) => ({ ...e, runId: 'r', seq: i + 1, time: '' }))
-  const rows = foldEvents(events as import('../src/shared/types.ts').WorkerEvent[])
+  const rows = foldEvents(events as import('../src/shared/types.ts').WorkerEvent[], undefined, 'antigravity')
   expect(rows.filter((e) => e.kind === 'assistant').map((e) => e.text)).toEqual(['Working.', 'Done.'])
 })
 

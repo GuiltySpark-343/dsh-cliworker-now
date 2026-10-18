@@ -12,6 +12,7 @@ import pi from './assets/pi.png'
 import hermes from './assets/hermes.png'
 import opencode from './assets/opencode.png'
 import grok from './assets/grok.png'
+import qoder from './assets/qoder.png'
 import projectLogo from './assets/cliworker-now-logo.png'
 
 const icons: Partial<Record<CliId, string>> = {
@@ -25,6 +26,7 @@ const icons: Partial<Record<CliId, string>> = {
   pi,
   hermes,
   opencode,
+  qoder,
 }
 
 const optical: Partial<Record<CliId, { scale: number; x: number; y: number; mono: boolean }>> = {
@@ -34,9 +36,10 @@ const optical: Partial<Record<CliId, { scale: number; x: number; y: number; mono
   hermes: { scale: 0.9518, x: -1.8595773524720893, y: -0.15180223285486444, mono: true },
   opencode: { scale: 1.2087, x: -0.048193779904306226, y: 0.0, mono: true },
   grok: { scale: 0.8523, x: -1.1214473684210524, y: 0.7136483253588516, mono: true },
+  qoder: { scale: 0.8272, x: 0.5442, y: 0, mono: true },
 }
 
-/** User-provided transparent PNGs, bundled locally without remote asset requests. */
+/** Transparent PNGs, bundled locally without remote asset requests. */
 export function BrandIcon({
   cli,
   size = cli ? 22 : 32,

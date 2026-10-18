@@ -11,6 +11,7 @@ import { prepareMimoAccountTerminal } from '../src/host/first-party-account-cont
 import { claudeManagedSettingsPath, readFirstPartyModelSources } from '../src/host/first-party-models.ts'
 import { nativeAccountAncestors, inspectPiOmpNativeAccount } from '../src/host/pi-omp-native.ts'
 import { readHermesAccount } from '../src/host/hermes-accounts.ts'
+import { readQoderAccount } from '../src/host/qoder-accounts.ts'
 import { inspectOpenCodeProfile } from '../src/host/opencode-native.ts'
 import { zcodeGrokAccountStatus } from '../src/host/zcode-grok-accounts.ts'
 import { DEFAULT_CONFIG, type RuntimeConfig } from '../src/host/process.ts'
@@ -19,6 +20,7 @@ import { CLI_IDS, type CliId } from '../src/shared/types.ts'
 // Real platform filesystem, synthetic accounts only. No CLI, network, model
 // generation, symlink privilege, or POSIX permission-bit assertion is required.
 let root: string, project: string, config: RuntimeConfig
+let qoderAccountInfo: { userId: string; email: string } | undefined
 const signal = () => new AbortController().signal
 const jwt = (sub: string, extra: Record<string, unknown> = {}) =>
   `e30.${Buffer.from(JSON.stringify({ sub, ...extra })).toString('base64url')}.synthetic`
@@ -31,6 +33,7 @@ const write = async (path: string, value: unknown, raw = false) => {
 }
 
 beforeEach(async () => {
+  qoderAccountInfo = undefined
   root = await realpath(await mkdtemp(join(tmpdir(), 'cwn-windows-accounts-synthetic-')))
   vi.stubEnv('HOME', root)
   vi.stubEnv('USERPROFILE', root)
@@ -39,7 +42,7 @@ beforeEach(async () => {
   // operating system did not accept the isolated home environment.
   expect(await realpath(homedir())).toBe(root)
   for (const key of Object.keys(process.env))
-    if (/ANTHROPIC|CLAUDE_CODE_(?:OAUTH|USE_|API)|AWS_|GOOGLE_|CLOUD_ML|API_KEY|BEARER_TOKEN/.test(key))
+    if (/ANTHROPIC|CLAUDE_CODE_(?:OAUTH|USE_|API)|AWS_|GOOGLE_|CLOUD_ML|API_KEY|BEARER_TOKEN|^QODER(?:CN|CLI)?_/.test(key))
       vi.stubEnv(key, '')
   for (const key of [
     'OPENAI_API_KEY',
@@ -76,6 +79,7 @@ beforeEach(async () => {
   vi.stubEnv('KIMI_CODE_HOME', join(root, '.kimi-code'))
   vi.stubEnv('MIMOCODE_HOME', join(root, '.mimocode-native'))
   vi.stubEnv('HERMES_HOME', join(root, '.hermes'))
+  vi.stubEnv('QODER_CONFIG_DIR', join(root, '.qoder'))
   vi.stubEnv('XDG_CONFIG_HOME', join(root, '.config'))
   vi.stubEnv('XDG_DATA_HOME', join(root, '.local/share'))
   project = join(root, 'project')
@@ -132,6 +136,16 @@ async function configured(cli: CliId): Promise<boolean> {
       'authenticated'
     )
   if (cli === 'hermes') return (await readHermesAccount(config, signal())).state === 'authenticated'
+  if (cli === 'qoder')
+    return (
+      (await readQoderAccount('/synthetic/qoder.js', signal(), {
+        directory: join(root, '.qoder'),
+        project,
+        // Simulate only the SDK account_info response; the real reader still
+        // checks Qoder's own live encrypted-user file before consulting it.
+        query: () => qoderAccountInfo,
+      })).state === 'authenticated'
+    )
   if (cli === 'opencode')
     return (
       (
@@ -176,6 +190,11 @@ async function ownAccount(cli: CliId, identity = 'own'): Promise<string> {
       refresh_token: 'synthetic-refresh',
       expires_at: 4e9,
     })
+  } else if (cli === 'qoder') {
+    path = join(root, '.qoder/.auth/user')
+    await write(path, `synthetic-encrypted-${key}`, true)
+    await write(join(root, '.qoder/.auth/machine_id'), 'synthetic-machine-identity', true)
+    qoderAccountInfo = { userId: identity, email: `${identity}@example.invalid` }
   } else if (cli === 'mimo') {
     path = join(root, '.mimocode-native/data/auth.json')
     await write(path, { xiaomi: { type: 'api', key } })

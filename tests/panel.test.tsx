@@ -1,4 +1,4 @@
-import { createElement, forwardRef } from 'react'
+import { createElement, forwardRef, type ReactNode } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, expect, it, vi } from 'vitest'
 import { Panel } from '../src/client/panel.tsx'
@@ -7,7 +7,8 @@ import { CLI_IDS, type Worker, type HistoryPage } from '../src/shared/types.ts'
 
 const clipboard = vi.hoisted(() => vi.fn().mockResolvedValue(true))
 // Only the native control skins is replaced; actual Panel, hooks and stream consumer run.
-vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => ({
+  ...(await import('./fixtures/process-primitives.tsx')).processPrimitives,
   writeClipboard: clipboard,
   Tooltip: ({ children }: any) => children,
   StateDot: () => createElement('span', { 'data-loading': true }),
@@ -138,11 +139,15 @@ async function setup(
   openNativeSettings?: () => void,
   snapshotWorkers = workers,
   cliworkerOverrides = {},
+  renderHarnessConversation?: (worker: Worker) => ReactNode,
 ) {
   clipboard.mockReset().mockResolvedValue(true)
   const streams: Stream[] = []
   const history = vi.fn()
-  const followup = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
+  const followup = vi.fn(async (_parent, id) => ({
+    ok: true,
+    value: JSON.stringify({ workerId: id, runId: `run-${id}` }),
+  }))
   const api = {
     $stream: () => {
       const s = new Stream()
@@ -151,6 +156,8 @@ async function setup(
     },
     cliworker: {
       followup,
+      sendRunningMessage: vi.fn().mockResolvedValue({ ok: true, value: '{}' }),
+      queueFollowup: vi.fn().mockResolvedValue({ ok: true, value: '{}' }),
       history,
       catalogForWorker: vi.fn(async (_parent, id) => ({
         ok: true,
@@ -183,6 +190,50 @@ async function setup(
       ...cliworkerOverrides,
     },
   } as unknown as API
+  // The synthetic Gateway adapts existing scenario stubs to the V1 fixed-intent envelope.
+  // Actual Client production calls only submitMessage; legacy stubs remain scenario controls.
+  if (!(api.cliworker as any).submitMessage)
+    (api.cliworker as any).submitMessage = vi.fn(
+      (parent: string, workerId: string, raw: string, signal: AbortSignal) => {
+        const request = JSON.parse(raw)
+        return request.intent === 'direct'
+          ? api.cliworker.followup(parent, workerId, request.prompt, signal)
+          : request.mode === 'interrupt'
+            ? api.cliworker.interruptMessage(
+                parent,
+                workerId,
+                request.prompt,
+                request.id,
+                request.clientId,
+                request.sequence,
+                signal,
+              )
+            : api.cliworker.sendRunningMessage(
+                parent,
+                workerId,
+                request.prompt,
+                request.expectedRunId,
+                request.id,
+                signal,
+              )
+      },
+    )
+  if (!(api.cliworker as any).steerMessage)
+    (api.cliworker as any).steerMessage = vi.fn(
+      async (...args: Parameters<API['cliworker']['sendRunningMessage']>) => {
+        const response = await api.cliworker.sendRunningMessage(...args)
+        if (!response.ok) return response
+        return {
+          ok: true,
+          value: JSON.stringify({
+            accepted: true,
+            requestId: args[4],
+            runId: args[3],
+            ...JSON.parse(response.value),
+          }),
+        }
+      },
+    )
   const feed = { scrollTop: 0, scrollHeight: 1400, clientHeight: 300 }
   const overviewFocus = vi.fn()
   const overview = {
@@ -191,19 +242,29 @@ async function setup(
   }
   let r!: ReactTestRenderer
   await act(async () => {
-    r = create(<Panel api={api} sessionId="parent" openNativeSettings={openNativeSettings} />, {
-      createNodeMock: (el) =>
-        el.props.className === 'cwn-feed'
-          ? feed
-          : el.props.className === 'cwn-overview-list'
-            ? overview
-            : el.props.className === 'cwn-compose'
-              ? {
-                  requestSubmit: () =>
-                    r.root.findByProps({ className: 'cwn-compose' }).props.onSubmit({ preventDefault() {} }),
-                }
-              : null,
-    })
+    r = create(
+      <Panel
+        api={api}
+        sessionId="parent"
+        openNativeSettings={openNativeSettings}
+        renderHarnessConversation={renderHarnessConversation}
+      />,
+      {
+        createNodeMock: (el) =>
+          el.props.className === 'cwn-feed'
+            ? feed
+            : el.props.className === 'cwn-overview-list'
+              ? overview
+              : el.props.className === 'cwn-compose'
+                ? {
+                    requestSubmit: () =>
+                      r.root
+                        .findByProps({ className: 'cwn-compose' })
+                        .props.onSubmit({ preventDefault() {} }),
+                  }
+                : null,
+      },
+    )
     mounted.push(r)
   })
   const snapshot = (id?: string, revision = 1, overrides: Partial<Worker> = {}): Snapshot => ({
@@ -261,6 +322,7 @@ async function setup(
     r,
     streams,
     api,
+    submitMessage: (api.cliworker as any).submitMessage as ReturnType<typeof vi.fn>,
     followup,
     history,
     feed,
@@ -277,6 +339,55 @@ async function setup(
     goBack,
   }
 }
+it('uses the complete native conversation without retaining a legacy sending composer', async () => {
+  const native = vi.fn((worker: Worker) => (
+    <section data-native-conversation={worker.id}>
+      <p>模拟完整原生对话；消息和队列由宿主会话控制。</p>
+    </section>
+  ))
+  const t = await setup(true, undefined, workers, {}, native)
+  expect(native.mock.calls.at(-1)).toEqual([expect.objectContaining({ id: 'a' })])
+  expect(t.r.root.findAllByProps({ className: 'cwn-feed' })).toHaveLength(0)
+  expect(t.r.root.findAllByProps({ className: 'cwn-compose' })).toHaveLength(0)
+  expect(t.r.root.findAllByType('textarea')).toHaveLength(0)
+  const models = t.r.root.findAllByType('button').filter((node) => node.props['aria-label'] === '模型与强度')
+  expect(models).toHaveLength(1)
+  expect(models[0]!.props.disabled).toBe(false)
+  expect(t.text()).not.toContain('answer-a')
+  expect(t.followup).not.toHaveBeenCalled()
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 2),
+      telemetry: { contextUsed: 287, contextCapacity: 1000, contextSource: '模拟 CLI 原生占用' },
+    }),
+  )
+  expect(t.r.root.findAllByProps({ className: 'cwn-native-stat-details' })).toHaveLength(0)
+  expect(t.r.root.findByProps({ className: 'cwn-head' }).findByType('h2').children.join('')).toContain('Worker a')
+  expect(t.r.root.findAllByProps({ className: 'cwn-context-header' })).toHaveLength(0)
+})
+it('keeps Worker preparation and old queues out of native session state and input actions', async () => {
+  const native = vi.fn((worker: Worker) => <section data-native-conversation={worker.id} />)
+  const stop = vi.fn().mockResolvedValue({ ok: true, value: JSON.stringify({ runId: 'run-a' }) })
+  const t = await setup(true, undefined, workers, { stop }, native)
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 2),
+      selectedBusy: true,
+      selectedBusyReason: 'accepting',
+      queuedFollowups: [{ id: 'paused-native', prompt: '模拟旧暂停消息', createdAt: '', state: 'paused' }],
+    }),
+  )
+  expect(native.mock.calls.at(-1)).toEqual([expect.objectContaining({ id: 'a' })])
+  expect(t.r.root.findAllByType('form')).toHaveLength(0)
+  expect(t.r.root.findAllByType('textarea')).toHaveLength(0)
+  expect(t.text()).not.toContain('模拟旧暂停消息')
+  const models = t.r.root.findAllByType('button').filter((node) => node.props['aria-label'] === '模型与强度')
+  expect(models).toHaveLength(1)
+  expect(models[0]!.props.disabled).toBe(true)
+  await t.push('a', 3, { status: 'stopping' })
+  expect(native.mock.calls.at(-1)).toEqual([expect.objectContaining({ id: 'a', status: 'stopping' })])
+  expect(stop).not.toHaveBeenCalled()
+})
 it.each([false, true])(
   'shows one neutral settings prompt while configuring (selected=%s)',
   async (selected) => {
@@ -359,15 +470,15 @@ it('retains a rejected queued draft and reuses its request identity on retry', a
   const t = await setup()
   const sendRunningMessage = vi
     .fn()
-    .mockRejectedValueOnce(new Error('模拟连接中断'))
+    .mockResolvedValueOnce({ ok: false, error: { message: '模拟明确拒绝' } })
     .mockResolvedValue({ ok: true, value: '{}' })
   Object.assign(t.api.cliworker, { sendRunningMessage })
   await t.push('a', 2, { status: 'queued', conversationId: undefined })
   await t.edit('send after the first turn')
   await t.submit()
   expect(t.input().props.value).toBe('send after the first turn')
-  expect(t.text()).toContain('模拟连接中断')
-  await t.submit()
+  expect(t.text()).toContain('模拟明确拒绝')
+  await t.click('重试发送 send after the first turn')
   expect(sendRunningMessage.mock.calls[1]!.slice(0, 5)).toEqual(sendRunningMessage.mock.calls[0]!.slice(0, 5))
   expect(t.input().props.value).toBe('')
 })
@@ -394,26 +505,29 @@ it('shows host queued messages with cancel and explicit resume after failure, wi
   expect(retryQueuedFollowups).not.toHaveBeenCalled()
   await t.edit('append after the paused message')
   await t.submit()
-  expect(queueFollowup.mock.calls[0]!.slice(0, 3)).toEqual(['parent', 'a', 'append after the paused message'])
-  expect(t.followup).not.toHaveBeenCalled()
+  expect(t.followup.mock.calls[0]!.slice(0, 3)).toEqual(['parent', 'a', 'append after the paused message'])
+  expect(queueFollowup).not.toHaveBeenCalled()
   await t.click('继续发送')
   expect(retryQueuedFollowups).toHaveBeenCalledWith('parent', 'a', 'run-a')
   await t.click('取消待发送消息 1')
   expect(cancelQueuedFollowup).toHaveBeenCalledWith('parent', 'a', 'pending-a')
 })
-it('does not submit queued guidance while stopping or disconnected', async () => {
+it('accepts queued guidance while stopping and keeps disconnected drafts local', async () => {
   const t = await setup()
-  const sendRunningMessage = vi.fn()
+  const sendRunningMessage = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
   Object.assign(t.api.cliworker, { sendRunningMessage })
   await t.edit('keep this draft')
   await t.push('a', 2, { status: 'stopping' })
-  expect(t.input().props.disabled).toBe(true)
+  expect(t.input().props.disabled).toBe(false)
   await t.submit()
+  expect(sendRunningMessage).toHaveBeenCalledOnce()
+  expect(t.r.root.findAllByProps({ className: 'cwn-followup-content' })).toHaveLength(1)
+  await t.edit('disconnected draft')
   await t.push('a', 3, { status: 'running' })
   await act(async () => t.streams.at(-1)!.fail())
   await t.submit()
-  expect(sendRunningMessage).not.toHaveBeenCalled()
-  expect(t.input().props.value).toBe('keep this draft')
+  expect(sendRunningMessage).toHaveBeenCalledOnce()
+  expect(t.input().props.value).toBe('disconnected draft')
 })
 it('allows cancelling queued metadata preparation but uses stop after runtime admission', async () => {
   const t = await setup()
@@ -546,6 +660,46 @@ const oldPage = (workerId = 'a'): HistoryPage => ({
   total: 2,
   hasOlder: false,
   hasNewer: true,
+})
+it('keeps old Worker history readable beside a native conversation without replay or a second composer', async () => {
+  const native = (worker: Worker) => <section data-native-conversation={worker.id} />
+  const t = await setup(true, undefined, workers, {}, native)
+  await act(async () => t.streams.at(-1)!.push({ ...t.snapshot('a', 2), truncated: true }))
+  t.history.mockResolvedValue({ ok: true, value: JSON.stringify(oldPage()) })
+  await t.click('旧历史')
+  expect(t.r.root.findByProps({ role: 'dialog', 'aria-label': '旧历史' })).toBeTruthy()
+  expect(t.text()).toContain('原生对话从本次挂接开始；更早记录见旧历史。')
+  await t.click('更早记录')
+  expect(t.history).toHaveBeenCalledWith('parent', 'a', 'message-a', 'before')
+  expect(t.text()).toContain('historical answer')
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 3),
+      timeline: [{ id: 'new-live-row', kind: 'assistant', text: 'new live answer', time: '' }],
+    }),
+  )
+  expect(t.text()).toContain('historical answer')
+  expect(t.text()).not.toContain('new live answer')
+  expect(t.r.root.findByProps({ 'data-native-conversation': 'a' })).toBeTruthy()
+  expect(t.r.root.findAllByProps({ className: 'cwn-compose' })).toHaveLength(0)
+  expect(t.followup).not.toHaveBeenCalled()
+  expect(t.submitMessage).not.toHaveBeenCalled()
+})
+it('discards a pending old-history receipt when its native Worker occurrence closes', async () => {
+  const native = (worker: Worker) => <section data-native-conversation={worker.id} />
+  const t = await setup(true, undefined, workers, {}, native)
+  await act(async () => t.streams.at(-1)!.push({ ...t.snapshot('a', 2), truncated: true }))
+  const delayed = deferred()
+  t.history.mockReturnValueOnce(delayed.promise)
+  await t.click('旧历史')
+  await t.click('更早记录')
+  await t.click('关闭旧历史')
+  await act(async () => delayed.resolve({ ok: true, value: JSON.stringify(oldPage()) }))
+  expect(t.text()).not.toContain('historical answer')
+  await t.select('b')
+  await t.push('b')
+  expect(t.r.root.findAllByProps({ role: 'dialog', 'aria-label': '旧历史' })).toHaveLength(0)
+  expect(t.followup).not.toHaveBeenCalled()
 })
 it('keeps historical content and reading position stable while live snapshots arrive', async () => {
   const t = await setup()
@@ -1156,6 +1310,24 @@ it('worker model preload rejects a different CLI and retries without admitting i
   expect(configureWorker).not.toHaveBeenCalled()
   expect(t.followup).not.toHaveBeenCalled()
 })
+
+it.each(['pending', 'paused', 'sending'] as const)(
+  'locks model changes while a %s queue item retains its selection and explains how to unlock',
+  async (state) => {
+    const t = await setup()
+    await act(async () =>
+      t.streams.at(-1)!.push({
+        ...t.snapshot('a', 2),
+        queuedFollowups: [{ id: 'synthetic-outbox', prompt: '模拟消息', state, createdAt: '' }],
+      }),
+    )
+    const model = () => t.r.root.findByProps({ 'aria-label': '模型与强度' })
+    expect(model().props.disabled).toBe(true)
+    expect(model().props.title).toBe('请先发送或取消待发送消息，再修改模型与强度')
+    await t.push('a', 3)
+    expect(model().props.disabled).toBe(false)
+  },
+)
 
 it('worker menu cancels a slow preload when changing conversations', async () => {
   const first = deferred()
@@ -1863,7 +2035,7 @@ it('immediately shows a pending user message and clears the composer before slow
   expect(t.input().props.value).toBe('newer draft')
 })
 
-it('serializes preparation and sends a second draft against the admitted run without locking another worker', async () => {
+it('synchronously places a second draft in queue and freezes its route before admission without locking another worker', async () => {
   const done = deferred()
   const sendRunningMessage = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
   const t = await setup(true, undefined, workers, { sendRunningMessage })
@@ -1875,6 +2047,8 @@ it('serializes preparation and sends a second draft against the admitted run wit
   expect(t.input().props.value).toBe('')
   expect(t.followup).toHaveBeenCalledOnce()
   expect(sendRunningMessage).not.toHaveBeenCalled()
+  expect(t.r.root.findAllByProps({ className: 'cwn-followup-content' })).toHaveLength(1)
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
   await t.select('b')
   await t.push('b')
   await t.edit('independent B')
@@ -1885,7 +2059,7 @@ it('serializes preparation and sends a second draft against the admitted run wit
     'parent',
     'a',
     'second instruction',
-    'admitted-a',
+    'run-a',
   ])
   expect(t.text()).not.toContain('second instruction')
 })
@@ -1898,7 +2072,7 @@ it('keeps one pending queue card until its actual Host identity appears and neve
   await t.edit('queued immediately')
   await t.submit()
   expect(t.input().props.value).toBe('')
-  expect(t.text()).toContain('正在加入待发送…')
+  expect(t.text()).not.toContain('正在加入待发送…')
   expect(t.r.root.findAllByProps({ className: 'cwn-followup-content' })).toHaveLength(1)
   expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(0)
   const id = sendRunningMessage.mock.calls[0]![4]
@@ -1914,7 +2088,7 @@ it('keeps one pending queue card until its actual Host identity appears and neve
   expect(t.text()).not.toContain('transport failure after acceptance')
 })
 
-it('matches identical optimistic steering messages to distinct actual events one at a time', async () => {
+it('sends identical steering actions concurrently and matches their distinct actual identities', async () => {
   const first = deferred(),
     second = deferred()
   const sendRunningMessage = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
@@ -1926,11 +2100,17 @@ it('matches identical optimistic steering messages to distinct actual events one
   await t.submit()
   await t.edit('same guidance')
   await t.submit()
-  expect(sendRunningMessage).toHaveBeenCalledOnce()
+  expect(sendRunningMessage).toHaveBeenCalledTimes(2)
   expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(2)
   const host = t.snapshot('a', 3, { status: 'running' })
   host.runningMessageMode = 'steer'
-  host.timeline.push({ id: 'run-a:first', kind: 'user', text: 'same guidance', time: '' })
+  host.timeline.push({
+    id: 'run-a:first',
+    queuedFollowupId: sendRunningMessage.mock.calls[0]![4],
+    kind: 'user',
+    text: 'same guidance',
+    time: '',
+  })
   await act(async () => t.streams.at(-1)!.push(host))
   expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(2)
   expect(
@@ -1943,7 +2123,16 @@ it('matches identical optimistic steering messages to distinct actual events one
     t.streams.at(-1)!.push({
       ...host,
       revision: 4,
-      timeline: [...host.timeline, { id: 'run-a:second', kind: 'user', text: 'same guidance', time: '' }],
+      timeline: [
+        ...host.timeline,
+        {
+          id: 'run-a:second',
+          queuedFollowupId: sendRunningMessage.mock.calls[1]![4],
+          kind: 'user',
+          text: 'same guidance',
+          time: '',
+        },
+      ],
     }),
   )
   await act(async () => second.resolve({ ok: true, value: '{}' }))
@@ -1965,12 +2154,13 @@ it('cancels preparation but keeps Stop disabled until the Host confirms cleanup'
   await t.submit()
   await t.click('停止')
   expect(t.followup.mock.calls[0]![3].aborted).toBe(true)
-  expect(t.input().props.disabled).toBe(true)
+  expect(t.input().props.disabled).toBe(false)
+  // A restored draft owns the one action button; the empty action remains disabled Stop.
+  await t.edit('')
   expect(t.r.root.findAllByProps({ className: 'cwn-send' }).at(-1)!.props.disabled).toBe(true)
   await act(async () => stopDone.resolve({ ok: true, value: '{}' }))
   expect(t.input().props.disabled).toBe(false)
-  expect(t.input().props.value).toBe('cancel during preparation')
-  expect(t.text()).toContain('已停止发送')
+  expect(t.text()).not.toContain('已停止发送')
   expect(t.text()).not.toContain('未发送：')
 })
 
@@ -2034,8 +2224,11 @@ it('does not replay an uncertain ordinary followup until Stop confirms the origi
     t.r.root.findAllByType('button').filter((button) => button.props.className === 'cwn-send')[0]!.props[
       'aria-label'
     ],
-  ).toBe('停止')
+  ).toBe('继续对话')
+  expect(t.r.root.findAllByProps({ className: 'cwn-send' })[0]!.props.disabled).toBe(true)
+  await t.edit('')
   await t.click('停止')
+  await t.edit('new draft while checking')
   await t.submit()
   expect(t.followup).toHaveBeenCalledTimes(2)
 })
@@ -2049,7 +2242,15 @@ it('does not use an old accepted receipt after a later queued run has completed'
   await act(async () =>
     t.streams.at(-1)!.push({
       ...t.snapshot('a', 2, { status: 'completed', runId: 'later-queued-run' }),
-      timeline: [{ id: 'first-admitted:user', kind: 'user', text: 'first accepted', time: '' }],
+      timeline: [
+        {
+          id: 'first-admitted:user',
+          queuedFollowupId: JSON.parse(t.submitMessage.mock.calls[0]![2]).id,
+          kind: 'user',
+          text: 'first accepted',
+          time: '',
+        },
+      ],
     }),
   )
   await t.edit('fresh followup after queue')
@@ -2059,7 +2260,7 @@ it('does not use an old accepted receipt after a later queued run has completed'
   expect(sendRunningMessage).not.toHaveBeenCalled()
 })
 
-it('retries a rejected running message with its stable identity against the current observed run', async () => {
+it('retries a rejected queued message with its stable identity and frozen destination', async () => {
   const sendRunningMessage = vi
     .fn()
     .mockResolvedValueOnce({ ok: false, error: { message: '本轮状态已变化，请刷新后重新发送' } })
@@ -2069,8 +2270,8 @@ it('retries a rejected running message with its stable identity against the curr
   await t.edit('retry current run')
   await t.submit()
   await t.push('a', 3, { status: 'running', runId: 'next-observed-run' })
-  await t.submit()
-  expect(sendRunningMessage.mock.calls[1]![3]).toBe('next-observed-run')
+  await t.click('重试发送 retry current run')
+  expect(sendRunningMessage.mock.calls[1]![3]).toBe('run-a')
   expect(sendRunningMessage.mock.calls[1]![4]).toBe(sendRunningMessage.mock.calls[0]![4])
 })
 
@@ -2084,13 +2285,24 @@ it('clears uncertain feedback when the actual user event arrives without restori
   await act(async () =>
     t.streams.at(-1)!.push({
       ...t.snapshot('a', 2, { runId: 'actually-admitted', status: 'completed' }),
-      timeline: [{ id: 'actually-admitted:user', kind: 'user', text: 'accepted but receipt lost', time: '' }],
+      timeline: [
+        {
+          id: 'actually-admitted:user',
+          queuedFollowupId: JSON.parse(t.submitMessage.mock.calls[0]![2]).id,
+          kind: 'user',
+          text: 'accepted but receipt lost',
+          time: '',
+        },
+      ],
     }),
   )
   expect(t.text()).not.toContain('发送结果待确认')
   expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
   expect(t.input().props.value).toBe('')
   expect(t.followup).toHaveBeenCalledOnce()
+  await t.edit('synthetic after confirmed delivery')
+  await t.submit()
+  expect(t.followup).toHaveBeenCalledTimes(2)
 })
 
 const priorityItem = (id: string, prompt = id) => ({ id, prompt, createdAt: '', state: 'pending' as const })
@@ -2149,12 +2361,12 @@ it('moves each consecutive priority click immediately and lets only the latest a
   await clickPriority(t, 'C')
   expect(interruptMessage.mock.calls.map((call) => [call[3], call[5]])).toEqual([
     ['A', 1],
-    ['B', 2],
-    ['C', 3],
+    ['B', 3],
+    ['C', 4],
   ])
   expect(new Set(interruptMessage.mock.calls.map((call) => call[4])).size).toBe(1)
   expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(3)
-  expect(t.text().match(/已被后续插队取消/g)).toHaveLength(2)
+  expect(t.text()).not.toContain('已被后续插队取消')
   expect(t.text()).not.toContain('正在发送…')
   for (const item of items)
     expect(t.r.root.findByProps({ 'data-queue-id': item.id }).props['data-exiting']).toBe(true)
@@ -2184,9 +2396,9 @@ it('moves each consecutive priority click immediately and lets only the latest a
       timeline: [...durable.slice(0, 2), priorityEvent('C', 'running', 'same text')],
     }),
   )
-  expect(sendRunningMessage.mock.calls[0]!.slice(0, 4)).toEqual(['parent', 'a', 'same text', 'native-C'])
+  expect(sendRunningMessage.mock.calls[0]!.slice(0, 4)).toEqual(['parent', 'a', 'same text', 'run-a'])
   expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(3)
-  expect(t.text().match(/已被后续插队取消/g)).toHaveLength(2)
+  expect(t.text()).not.toContain('已被后续插队取消')
 })
 
 it.each(['resolve', 'reject'] as const)(
@@ -2219,7 +2431,7 @@ it.each(['resolve', 'reject'] as const)(
     )
     expect(t.input().props.value).toBe('later draft')
     expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(2)
-    expect(t.text()).toContain('已被后续插队取消')
+    expect(t.text()).not.toContain('已被后续插队取消')
     expect(t.text()).not.toContain('late queue rejection')
     expect(t.r.root.findByProps({ 'data-queue-id': id }).props['data-exiting']).toBe(true)
     // Even an obsolete queue snapshot cannot recreate the transferred card.
@@ -2274,7 +2486,7 @@ it('restores durable cancelled history on a fresh view and keeps active admissio
   await act(async () =>
     t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'stopping' }), timeline: history }),
   )
-  expect(t.text()).toContain('已被后续插队取消')
+  expect(t.text()).not.toContain('已被后续插队取消')
   expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(2)
   await t.edit('after priority')
   await t.submit()
@@ -2291,7 +2503,7 @@ it('restores durable cancelled history on a fresh view and keeps active admissio
       timeline: [history[0]!, priorityEvent('B', 'running')],
     }),
   )
-  expect(sendRunningMessage.mock.calls[0]!.slice(0, 4)).toEqual(['parent', 'a', 'after priority', 'native-B'])
+  expect(sendRunningMessage.mock.calls[0]!.slice(0, 4)).toEqual(['parent', 'a', 'after priority', 'run-a'])
 })
 
 it('keeps an accepted priority alive when the panel closes', async () => {
@@ -2335,10 +2547,10 @@ it('keeps Stop and a newer priority available after a lost receipt without retur
   expect(t.text()).not.toContain('未发送：发送结果待确认')
   await clickPriority(t, 'B')
   expect(interruptMessage).toHaveBeenCalledTimes(2)
-  expect(t.text()).toContain('已被后续插队取消')
+  expect(t.text()).not.toContain('已被后续插队取消')
   await t.click('停止')
   expect(stop).toHaveBeenCalledOnce()
-  expect(t.text()).toContain('已停止发送')
+  expect(t.text()).not.toContain('已停止发送')
   for (const item of items)
     expect(t.r.root.findByProps({ 'data-queue-id': item.id }).props['data-exiting']).toBe(true)
 })
@@ -2396,12 +2608,8 @@ it('does not let an earlier Stop receipt cancel a newer priority click', async (
   )
   expect(interruptMessage.mock.calls.map((call) => call[3])).toEqual(['A', 'B', 'C'])
   const bubbles = t.r.root.findAllByProps({ className: 'cwn-message user' })
-  expect(JSON.stringify(bubbles[0]!.findAllByProps({ role: 'status' }).map((row) => row.children))).toContain(
-    '已停止发送',
-  )
-  expect(JSON.stringify(bubbles[1]!.findAllByProps({ role: 'status' }).map((row) => row.children))).toContain(
-    '已被后续插队取消',
-  )
+  expect(bubbles[0]!.findAllByProps({ role: 'status' })).toHaveLength(0)
+  expect(bubbles[1]!.findAllByProps({ role: 'status' })).toHaveLength(0)
   expect(bubbles[2]!.findAllByProps({ role: 'status' })).toHaveLength(0)
   await act(async () =>
     t.streams.at(-1)!.push({
@@ -2439,7 +2647,7 @@ it('accepts consecutive interrupt-mode input through the same priority API durin
     ['first input', 1],
     ['latest input', 2],
   ])
-  expect(t.text()).toContain('已被后续插队取消')
+  expect(t.text()).not.toContain('已被后续插队取消')
   expect(t.followup).not.toHaveBeenCalled()
 })
 
@@ -2496,7 +2704,7 @@ it('keeps the stop barrier after a failed receipt and only releases later uncanc
   expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
   await t.click('停止')
   expect(stop).toHaveBeenCalledTimes(2)
-  expect(t.text()).toContain('已停止发送')
+  expect(t.text()).not.toContain('已停止发送')
   await clickPriority(t, 'C')
   expect(interruptMessage).not.toHaveBeenCalled()
   await act(async () =>
@@ -2508,9 +2716,475 @@ it('keeps the stop barrier after a failed receipt and only releases later uncanc
   expect(interruptMessage.mock.calls.map((call) => call[3])).toEqual(['C'])
   const bubbles = t.r.root.findAllByProps({ className: 'cwn-message user' })
   expect(bubbles).toHaveLength(2)
-  expect(JSON.stringify(bubbles[0]!.findAllByProps({ role: 'status' }).map((row) => row.children))).toContain(
-    '已停止发送',
-  )
+  expect(bubbles[0]!.findAllByProps({ role: 'status' })).toHaveLength(0)
   expect(bubbles[1]!.findAllByProps({ role: 'status' })).toHaveLength(0)
   expect(t.r.root.findByProps({ 'data-queue-id': 'B' }).props['data-exiting']).toBe(true)
 })
+
+it('freezes the clicked queue mode while preparation and later settings change', async () => {
+  const preparing = deferred()
+  const submitMessage = vi
+    .fn()
+    .mockReturnValueOnce(preparing.promise)
+    .mockResolvedValue({ ok: true, value: '{}' })
+  const t = await setup(true, undefined, workers, { submitMessage })
+  await t.edit('synthetic first')
+  await t.submit()
+  await t.edit('synthetic queue')
+  await t.submit()
+  expect(submitMessage).toHaveBeenCalledOnce()
+  expect(t.r.root.findAllByProps({ className: 'cwn-followup-content' })).toHaveLength(1)
+  const before = t.r.root.findByProps({ className: 'cwn-followup-row' }).props['data-queue-id']
+  await act(async () => t.streams.at(-1)!.push({ ...t.snapshot('a', 2), runningMessageMode: 'interrupt' }))
+  await act(async () => preparing.resolve({ ok: true, value: JSON.stringify({ runId: 'admitted' }) }))
+  expect(JSON.parse(submitMessage.mock.calls[1]![2])).toMatchObject({
+    id: before,
+    prompt: 'synthetic queue',
+    mode: 'queue',
+    intent: 'running',
+    expectedRunId: 'run-a',
+  })
+  expect(t.r.root.findByProps({ className: 'cwn-followup-row' }).props['data-queue-id']).toBe(before)
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
+})
+
+it('uses Host accepting occupancy even when its selected Worker still looks completed', async () => {
+  const submitMessage = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
+  const t = await setup(true, undefined, workers, { submitMessage })
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 2),
+      selectedBusy: true,
+      selectedBusyReason: 'accepting',
+    }),
+  )
+  await t.edit('synthetic reserved Worker')
+  await t.submit()
+  expect(JSON.parse(submitMessage.mock.calls[0]![2])).toMatchObject({ intent: 'running', mode: 'queue' })
+  expect(t.r.root.findAllByProps({ className: 'cwn-followup-content' })).toHaveLength(1)
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(0)
+})
+
+it('explains the actual projected mode for a historical Worker without changing its submitted destination', async () => {
+  const submitMessage = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
+  const t = await setup(true, undefined, workers, { submitMessage })
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 2, { status: 'running' }),
+      runningMessageMode: 'queue',
+      runningMessageModeReason: '模拟：此历史会话使用旧协议，当前按排队发送。',
+    }),
+  )
+  expect(t.text()).toContain('此历史会话使用旧协议，当前按排队发送')
+  await t.edit('synthetic historical mode')
+  await t.submit()
+  expect(JSON.parse(submitMessage.mock.calls[0]![2])).toMatchObject({ intent: 'running', mode: 'queue' })
+})
+
+it('keeps a queued item through receipt and preparing snapshots, then admits one bubble by exact identity', async () => {
+  const submitMessage = vi
+    .fn()
+    .mockResolvedValue({ ok: true, value: JSON.stringify({ id: 'ignored-receipt-id' }) })
+  const t = await setup(true, undefined, workers, { submitMessage })
+  await t.push('a', 2, { status: 'running' })
+  await t.edit('synthetic admit once')
+  await t.submit()
+  const id = JSON.parse(submitMessage.mock.calls[0]![2]).id
+  const pending = { ...priorityItem(id, 'synthetic admit once'), state: 'sending' as const }
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 3, { status: 'queued', runId: 'metadata' }),
+      queuedFollowups: [pending],
+    }),
+  )
+  expect(t.r.root.findByProps({ 'data-queue-id': id }).props['data-exiting']).toBe(false)
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(0)
+  const admitted = {
+    ...t.snapshot('a', 4, { status: 'running', runId: 'native-admitted' }),
+    queuedFollowups: [],
+    timeline: [
+      {
+        id: 'native-admitted:user',
+        queuedFollowupId: id,
+        admittedRunId: 'native-admitted',
+        kind: 'user' as const,
+        text: 'synthetic admit once',
+        time: '',
+      },
+    ],
+  }
+  await act(async () => t.streams.at(-1)!.push(admitted))
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
+  expect(t.r.root.findByProps({ 'data-queue-id': id }).props['data-exiting']).toBe(true)
+  // An obsolete outbox row cannot undo execution admission or make a second bubble.
+  await act(async () => t.streams.at(-1)!.push({ ...admitted, revision: 5, queuedFollowups: [pending] }))
+  expect(t.r.root.findByProps({ 'data-queue-id': id }).props['data-exiting']).toBe(true)
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
+})
+
+it('preserves a not-ready steer draft without submitting or falling back during local preparation', async () => {
+  const preparing = deferred()
+  const submitMessage = vi.fn().mockReturnValue(preparing.promise)
+  const t = await setup(true, undefined, workers, { submitMessage })
+  await act(async () => t.streams.at(-1)!.push({ ...t.snapshot('a', 2), runningMessageMode: 'steer' }))
+  await t.edit('synthetic first preparation')
+  await t.submit()
+  await t.edit('synthetic cannot steer preparation')
+  await t.submit()
+  expect(submitMessage).toHaveBeenCalledOnce()
+  expect(t.input().props.value).toBe('synthetic cannot steer preparation')
+  expect(t.text()).toContain('当前运行尚未准备好接收引导')
+  expect(t.r.root.findAllByProps({ className: 'cwn-followup-content' })).toHaveLength(0)
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
+  await act(async () => preparing.resolve({ ok: true, value: JSON.stringify({ runId: 'admitted' }) }))
+})
+
+it('shows post-Stop input immediately and dispatches it only after cleanup without old draft restoration', async () => {
+  const stopping = deferred()
+  const stop = vi.fn().mockReturnValue(stopping.promise)
+  const submitMessage = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
+  const t = await setup(true, undefined, workers, { stop, submitMessage })
+  await t.push('a', 2, { status: 'running' })
+  await t.click('停止')
+  await t.edit('synthetic after Stop')
+  await t.submit()
+  expect(submitMessage).not.toHaveBeenCalled()
+  expect(t.input().props.value).toBe('')
+  expect(t.r.root.findAllByProps({ className: 'cwn-followup-content' })).toHaveLength(1)
+  const action = t.r.root.findByProps({ className: 'cwn-send' })
+  expect(action.props['aria-label']).toBe('停止')
+  expect(action.props.disabled).toBe(true)
+  await act(async () =>
+    stopping.resolve({ ok: true, value: JSON.stringify({ ...workers[0], status: 'interrupted' }) }),
+  )
+  expect(submitMessage).toHaveBeenCalledOnce()
+  expect(JSON.parse(submitMessage.mock.calls[0]![2])).toMatchObject({
+    prompt: 'synthetic after Stop',
+    intent: 'running',
+    mode: 'queue',
+  })
+  expect(t.input().props.value).toBe('')
+  expect(t.text()).not.toContain('已停止发送')
+})
+
+it('does not abort ordinary ownership when closing its view or overwrite a newer Worker draft', async () => {
+  const preparing = deferred()
+  const submitMessage = vi.fn().mockReturnValue(preparing.promise)
+  const t = await setup(true, undefined, workers, { submitMessage })
+  await t.edit('synthetic durable click')
+  await t.submit()
+  const signal = submitMessage.mock.calls[0]![3] as AbortSignal
+  await t.select('b')
+  await t.push('b')
+  await t.edit('synthetic Worker B draft')
+  await act(async () => preparing.resolve({ ok: false, error: { message: 'synthetic explicit rejection' } }))
+  expect(t.input().props.value).toBe('synthetic Worker B draft')
+  expect(signal.aborted).toBe(false)
+  await act(async () => t.r.unmount())
+  expect(signal.aborted).toBe(false)
+})
+
+it('offers recovery for unknown queued results while keeping retry disabled and its original identity', async () => {
+  const submitMessage = vi.fn().mockRejectedValue(new Error('synthetic lost queue receipt'))
+  const t = await setup(true, undefined, workers, { submitMessage })
+  await t.push('a', 2, { status: 'running' })
+  await t.edit('synthetic uncertain queue')
+  await t.submit()
+  const id = JSON.parse(submitMessage.mock.calls[0]![2]).id
+  expect(t.text()).toContain('发送结果待确认')
+  expect(t.input().props.value).toBe('')
+  await t.click('恢复内容 synthetic uncertain queue')
+  expect(t.input().props.value).toBe('synthetic uncertain queue')
+  expect(t.r.root.findByProps({ className: 'cwn-send' }).props.disabled).toBe(true)
+  await t.submit()
+  expect(submitMessage).toHaveBeenCalledOnce()
+  expect(t.r.root.findByProps({ 'data-queue-id': id }).props['data-exiting']).toBe(false)
+})
+
+it('keeps a structured native steer ACK loss uncertain even though the Gateway returns ok:false', async () => {
+  const steerMessage = vi.fn().mockResolvedValue({
+    ok: false,
+    error: { message: '模拟原生引导回执未知', details: { deliveryUnknown: true } },
+  })
+  const t = await setup(true, undefined, workers, { steerMessage })
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), runningMessageMode: 'steer' }),
+  )
+  await t.edit('synthetic native unknown')
+  await t.submit()
+  expect(t.input().props.value).toBe('')
+  expect(t.text()).toContain('发送结果待确认')
+  const retry = t.r.root
+    .findAllByType('button')
+    .find((button) => button.props['aria-label'] === '重试发送 synthetic native unknown')!
+  expect(retry.props.disabled).toBe(true)
+  await t.edit('different synthetic guidance')
+  await t.submit()
+  expect(steerMessage).toHaveBeenCalledOnce()
+  expect(t.input().props.value).toBe('different synthetic guidance')
+})
+
+it('treats retyped identical direct actions as distinct identities without text-based reconciliation', async () => {
+  const submitMessage = vi.fn().mockResolvedValue({ ok: true, value: JSON.stringify({ runId: 'run-a' }) })
+  const t = await setup(true, undefined, workers, { submitMessage })
+  for (let n = 0; n < 2; n++) {
+    await t.edit('synthetic same text')
+    await t.submit()
+  }
+  const [first, second] = submitMessage.mock.calls.map((call) => JSON.parse(call[2]))
+  expect(first.id).not.toBe(second.id)
+  expect(second.sequence).toBe(first.sequence + 1)
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 2),
+      timeline: [
+        {
+          id: 'native:first',
+          kind: 'user',
+          text: 'synthetic same text',
+          time: '',
+          queuedFollowupId: first.id,
+        },
+      ],
+    }),
+  )
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(2)
+  expect(
+    t.r.root.findAllByType('article').filter((node) => node.props['data-message-id']?.startsWith('local-')),
+  ).toHaveLength(1)
+})
+
+const nativeSteerReceipt = (call: unknown[]) => ({
+  ok: true,
+  value: JSON.stringify({ accepted: true, runId: call[3], requestId: call[4], revision: 3 }),
+})
+
+it('dispatches B steer before A native ACK and settles each independently without outbox RPCs', async () => {
+  const first = deferred(),
+    second = deferred()
+  const steerMessage = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+  const submitMessage = vi.fn()
+  const t = await setup(true, undefined, workers, { steerMessage, submitMessage })
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), runningMessageMode: 'steer' }),
+  )
+  await t.edit('synthetic steer A')
+  await t.submit()
+  await t.edit('synthetic steer B')
+  await t.submit()
+  expect(steerMessage).toHaveBeenCalledTimes(2)
+  expect(steerMessage.mock.calls.map((call) => call.slice(0, 4))).toEqual([
+    ['parent', 'a', 'synthetic steer A', 'run-a'],
+    ['parent', 'a', 'synthetic steer B', 'run-a'],
+  ])
+  expect(steerMessage.mock.calls[0]![4]).not.toBe(steerMessage.mock.calls[1]![4])
+  expect(submitMessage).not.toHaveBeenCalled()
+  expect(t.r.root.findAllByProps({ className: 'cwn-followup-content' })).toHaveLength(0)
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(2)
+  await act(async () => second.resolve(nativeSteerReceipt(steerMessage.mock.calls[1]!)))
+  expect(t.text()).not.toContain('结果待确认')
+  await act(async () => first.resolve(nativeSteerReceipt(steerMessage.mock.calls[0]!)))
+})
+
+it('sends steer independently of an ordinary queue receipt and old paused items', async () => {
+  const queue = deferred()
+  const submitMessage = vi.fn().mockReturnValue(queue.promise)
+  const steerMessage = vi.fn().mockImplementation(async (...call) => nativeSteerReceipt(call))
+  const t = await setup(true, undefined, workers, { submitMessage, steerMessage })
+  const paused = { id: 'synthetic-old-paused', prompt: '旧暂停消息', createdAt: '', state: 'paused' as const }
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 2, { status: 'running' }),
+      runningMessageMode: 'queue',
+      queuedFollowups: [paused],
+    }),
+  )
+  await t.edit('synthetic queue still waiting receipt')
+  await t.submit()
+  expect(submitMessage).toHaveBeenCalledOnce()
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 3, { status: 'running' }),
+      runningMessageMode: 'steer',
+      queuedFollowups: [paused],
+    }),
+  )
+  await t.edit('synthetic steer bypasses queue')
+  await t.submit()
+  expect(steerMessage).toHaveBeenCalledOnce()
+  expect(submitMessage).toHaveBeenCalledOnce()
+  expect(t.r.root.findAllByProps({ className: 'cwn-followup-content' })).toHaveLength(2)
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(1)
+  expect(t.input().props.value).toBe('')
+  await act(async () => queue.resolve({ ok: true, value: '{}' }))
+})
+
+it('does not make a queue wait for a prior pending steer ACK when the future mode changes to queue', async () => {
+  const native = deferred()
+  const steerMessage = vi.fn().mockReturnValue(native.promise)
+  const submitMessage = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
+  const t = await setup(true, undefined, workers, { submitMessage, steerMessage })
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), runningMessageMode: 'steer' }),
+  )
+  await t.edit('synthetic pending native ACK')
+  await t.submit()
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 3, { status: 'running' }), runningMessageMode: 'queue' }),
+  )
+  await t.edit('synthetic independent queued action')
+  await t.submit()
+  expect(submitMessage).toHaveBeenCalledOnce()
+  expect(JSON.parse(submitMessage.mock.calls[0]![2]).mode).toBe('queue')
+  expect(t.r.root.findAllByProps({ className: 'cwn-followup-content' })).toHaveLength(1)
+  await act(async () => native.resolve(nativeSteerReceipt(steerMessage.mock.calls[0]!)))
+})
+
+it.each(['run-a', 'later-run'])(
+  'keeps a steer pinned to its ended run and rejects without scheduling a later turn (observed %s)',
+  async (observedRunId) => {
+    const native = deferred()
+    const steerMessage = vi.fn().mockReturnValue(native.promise)
+    const submitMessage = vi.fn()
+    const t = await setup(true, undefined, workers, { steerMessage, submitMessage })
+    await act(async () =>
+      t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), runningMessageMode: 'steer' }),
+    )
+    await t.edit('synthetic run already ended')
+    await t.submit()
+    await t.push('a', 3, { status: 'completed', runId: observedRunId })
+    await act(async () =>
+      native.resolve({ ok: false, error: { message: '模拟：本轮已经结束，无法接收引导' } }),
+    )
+    expect(steerMessage.mock.calls[0]![3]).toBe('run-a')
+    expect(steerMessage).toHaveBeenCalledOnce()
+    expect(submitMessage).not.toHaveBeenCalled()
+    expect(t.input().props.value).toBe(observedRunId === 'run-a' ? 'synthetic run already ended' : '')
+    const retry = t.r.root
+      .findAllByType('button')
+      .find((button) => button.props['aria-label'] === '重试发送 synthetic run already ended')!
+    expect(retry.props.disabled).toBe(true)
+    if (observedRunId !== 'run-a') {
+      await t.click('恢复内容 synthetic run already ended')
+      expect(t.input().props.value).toBe('synthetic run already ended')
+      expect(steerMessage).toHaveBeenCalledOnce()
+    }
+    expect(t.text()).toContain('本轮已经结束')
+    expect(t.r.root.findAllByProps({ className: 'cwn-followup-content' })).toHaveLength(0)
+  },
+)
+
+it('treats an ACK for another run as unknown instead of confirming or scheduling the steer', async () => {
+  const steerMessage = vi.fn().mockImplementation(async (...call) => ({
+    ok: true,
+    value: JSON.stringify({ accepted: true, requestId: call[4], runId: 'different-native-run', revision: 3 }),
+  }))
+  const submitMessage = vi.fn()
+  const t = await setup(true, undefined, workers, { steerMessage, submitMessage })
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), runningMessageMode: 'steer' }),
+  )
+  await t.edit('synthetic mismatched native ACK')
+  await t.submit()
+  expect(t.input().props.value).toBe('')
+  expect(t.text()).toContain('发送结果待确认')
+  expect(t.text()).toContain('引导回执无法核对')
+  expect(submitMessage).not.toHaveBeenCalled()
+  expect(t.r.root.findAllByProps({ className: 'cwn-followup-content' })).toHaveLength(0)
+})
+
+it('cancels only pending current-run steer on Stop and never replays it after cleanup', async () => {
+  const stop = vi
+    .fn()
+    .mockResolvedValue({ ok: true, value: JSON.stringify({ ...workers[0], status: 'interrupted' }) })
+  const steerMessage = vi
+    .fn()
+    .mockImplementation(
+      (_p, _w, _text, _run, _id, signal: AbortSignal) =>
+        new Promise((_yes, no) => signal.addEventListener('abort', () => no(signal.reason), { once: true })),
+    )
+  const submitMessage = vi.fn()
+  const t = await setup(true, undefined, workers, { stop, steerMessage, submitMessage })
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), runningMessageMode: 'steer' }),
+  )
+  await t.edit('synthetic stop this native steer')
+  await t.submit()
+  await t.click('停止')
+  expect((steerMessage.mock.calls[0]![5] as AbortSignal).aborted).toBe(true)
+  await t.push('a', 3, { status: 'running', runId: 'new-native-run' })
+  expect(steerMessage).toHaveBeenCalledOnce()
+  expect(submitMessage).not.toHaveBeenCalled()
+  expect(t.r.root.findAllByProps({ className: 'cwn-followup-content' })).toHaveLength(0)
+  expect(t.text()).not.toContain('已停止发送')
+})
+
+it.each(['before', 'after'] as const)(
+  'retains old-run unknown history without locking a confirmed new run when its lost ACK arrives %s interrupt admission',
+  async (when) => {
+    const first = deferred()
+    const unknown = { ok: false, error: { message: '模拟旧轮ACK未知', details: { deliveryUnknown: true } } }
+    const steerMessage = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockImplementation(async (...call) => nativeSteerReceipt(call))
+    const interruptMessage = vi.fn().mockImplementation(async (_p, _w, _text, id) => priorityReply(id))
+    const sendRunningMessage = vi.fn().mockResolvedValue({ ok: true, value: '{}' })
+    const t = await setup(true, undefined, workers, { steerMessage, interruptMessage, sendRunningMessage })
+    await act(async () =>
+      t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), runningMessageMode: 'steer' }),
+    )
+    await t.edit('synthetic old-run native steer')
+    await t.submit()
+    const oldId = steerMessage.mock.calls[0]![4]
+    if (when === 'before') await act(async () => first.resolve(unknown))
+    await act(async () =>
+      t.streams
+        .at(-1)!
+        .push({ ...t.snapshot('a', 3, { status: 'running' }), runningMessageMode: 'interrupt' }),
+    )
+    await t.edit('synthetic priority starts new run')
+    await t.submit()
+    const priorityId = interruptMessage.mock.calls[0]![3]
+    const current = {
+      ...t.snapshot('a', 4, { status: 'running', runId: 'confirmed-new-run' }),
+      runningMessageMode: 'queue' as const,
+      timeline: [priorityEvent(priorityId, 'running', 'synthetic priority starts new run')],
+      queuedFollowups: [],
+    }
+    await act(async () => t.streams.at(-1)!.push(current))
+    if (when === 'after') await act(async () => first.resolve(unknown))
+    expect(t.text()).toContain('原轮已结束，引导结果仍待核查')
+    await t.edit('synthetic queue in confirmed new run')
+    await t.submit()
+    expect(sendRunningMessage).toHaveBeenCalledOnce()
+    expect(steerMessage).toHaveBeenCalledOnce()
+    expect(t.input().props.value).toBe('')
+    await act(async () => t.streams.at(-1)!.push({ ...current, revision: 5, runningMessageMode: 'steer' }))
+    await t.edit('synthetic new-run native steer')
+    await t.submit()
+    expect(steerMessage).toHaveBeenCalledTimes(2)
+    expect(steerMessage.mock.calls[1]![3]).toBe('confirmed-new-run')
+    expect(steerMessage.mock.calls[1]![4]).not.toBe(oldId)
+    await act(async () =>
+      t.streams.at(-1)!.push({
+        ...current,
+        revision: 6,
+        timeline: [
+          ...current.timeline,
+          {
+            id: 'old-native:user',
+            kind: 'user',
+            queuedFollowupId: oldId,
+            admittedRunId: 'run-a',
+            text: 'synthetic old-run native steer',
+            time: '',
+          },
+        ],
+      }),
+    )
+    expect(t.text()).not.toContain('原轮已结束，引导结果仍待核查')
+    expect(steerMessage).toHaveBeenCalledTimes(2)
+    expect(sendRunningMessage).toHaveBeenCalledOnce()
+  },
+)

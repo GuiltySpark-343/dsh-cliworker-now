@@ -2,7 +2,7 @@
 
 ## 目标与边界
 
-为 DeepSeek Harness 0.2.0-rc.2 提供独立的多 CLI 可视化插件，支持 Antigravity、Codex、Claude Code、Kimi、官方 MiMo Code、ZCode、Grok Build、OMP、Pi、Hermes Agent 和 OpenCode。支持明确派遣、项目级模型偏好、实时过程、两层任务树、停止及结束后续聊。遵循 `doc/design.md`；实施进度与实际验证写入 `doc/tasks.md`。
+为 DeepSeek Harness 0.2.0-rc.2 提供独立的多 CLI 可视化插件，支持 Antigravity、Codex、Claude Code、Kimi、官方 MiMo Code、ZCode、Grok Build、OMP、Pi、Hermes Agent、OpenCode 和 Qoder CLI。支持明确派遣、项目级模型偏好、实时过程、两层任务树、停止及结束后续聊。遵循 `doc/design.md`；实施进度与实际验证写入 `doc/tasks.md`。
 
 ## 开发约定
 
@@ -17,7 +17,7 @@
 
 ## 验证与交付
 
-- 当前开发版本为 `v0.7.9`。正式提交 GitHub 前不额外增加版本号，期间的修复与调整均属于该版本。GitHub 提交及发布须用户明确批准；允许按阶段本地 Git 提交，不自动推送或发布。
+- 当前开发版本为 `v0.8.1`，用于原生会话与工具桥迁移；此前 v0.7.10 已备份。下一次正式提交前的修复与调整均归入 v0.8.1，不额外增加版本号。GitHub 提交及发布须用户明确批准；允许按阶段本地 Git 提交，不自动推送或发布。
 - 日常修改只执行与影响范围对应的最小验收（关联回归、必要类型检查、隔离构建及必要平台检查）；全量验收在用户批准的正式 GitHub 提交之前执行。明确记录未执行的真实账号、模型与平台验证。
 - 常用命令：`pnpm typecheck`、`pnpm test`、`pnpm build:preview`、`pnpm build`、`pnpm smoke:extended --help`；真实模型调用需已有选型授权。
 - 测试应覆盖流解析、互斥、取消、恢复、权限边界、配置继承和安装协议。不要只验证实现细节。

@@ -1,5 +1,6 @@
 import { StringDecoder } from 'node:string_decoder'
 import type { WorkerEvent } from '../shared/types.ts'
+import { agyResponseUsage } from './native-response.mjs'
 
 const record = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -103,12 +104,17 @@ export class AgyProtocol {
         this.unclassifiedOrFailed = true
       if (step.step_type === 'agent_response') {
         const text = typeof step.text_delta === 'string' ? step.text_delta : ''
+        const usage = state === 'DONE' ? agyResponseUsage(step.usage) : undefined
         this.responses.set(number, (this.responses.get(number) ?? '') + text)
         this.emit({
           kind: 'assistant',
           step: number,
           state,
           text,
+          ...(number !== undefined && Number.isSafeInteger(number) && number >= 0 ? { response: {
+            id: `agy:${number}`, blockId: 'text', index: 0,
+            ...(state === 'DONE' ? { complete: true as const } : {}), ...(usage ? { usage } : {}),
+          } } : {}),
         })
       } else if (step.step_type === 'tool') {
         this.emit({

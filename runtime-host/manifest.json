@@ -1,0 +1,1088 @@
+{
+  "schema": 1,
+  "upstream": {
+    "repository": "https://github.com/deepseek-ai/deepseek-harness.git",
+    "tag": "dsh-v0.2.1-rc.2",
+    "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
+    "version": "0.2.1-rc.2"
+  },
+  "patch": {
+    "path": "source.patch",
+    "sha256": "1ec87419f17bc2ab05972196601329a7d8fcb00a20827114f8952cd5ba819aa1"
+  },
+  "normalization": [
+    "generated CSS region comments use repository-relative paths",
+    "unused sourceMappingURL comments and maps are omitted"
+  ],
+  "packages": [
+    {
+      "id": "ui-session",
+      "name": "@deepseek-ai/dsh-client-ui-session",
+      "version": "0.2.1-rc.2",
+      "directory": "dsh-client-ui-session",
+      "reviewedClientSha256": "e0ed691e5073d97412212af8c45aa7c54a626ab1a4576bfadb850e498ad40bac",
+      "clientSha256": "c9ed466e35ab4a0d86802d1eac807220efafd5be8415458e8cf18684456de6df",
+      "externalRequirements": {
+        "react": "^18.2.0"
+      },
+      "declarations": "inherited-official-baseline; extension interfaces are verified from source"
+    },
+    {
+      "id": "ui-conversation",
+      "name": "@deepseek-ai/dsh-client-ui-conversation",
+      "version": "0.2.1-rc.2",
+      "directory": "dsh-client-ui-conversation",
+      "reviewedClientSha256": "cf9bfa5c6da6225c0f7067ab6cef9027f6b891da1782eb0a4aa433208d2aa7c6",
+      "clientSha256": "cdb535654af46605e5ae8a5619ec61ea6428cdceee098fda359776a458dc9e14",
+      "externalRequirements": {
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0"
+      },
+      "declarations": "inherited-official-baseline; extension interfaces are verified from source"
+    },
+    {
+      "id": "ui-subagent",
+      "name": "@deepseek-ai/dsh-client-ui-subagent",
+      "version": "0.2.1-rc.2",
+      "directory": "dsh-client-ui-subagent",
+      "reviewedClientSha256": "d359e5167435f910c831edf96d5c794e79dd3ebaefd699ad7aaad20bb7e3aeed",
+      "clientSha256": "04791549afd807f8b1568bb220e6cbf1677f8b1de6e3bdcd2676df9ba9d9f755",
+      "externalRequirements": {
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0"
+      },
+      "declarations": "inherited-official-baseline; extension interfaces are verified from source"
+    },
+    {
+      "id": "ui-chat",
+      "name": "@deepseek-ai/dsh-client-ui-chat",
+      "version": "0.2.1-rc.2",
+      "directory": "dsh-client-ui-chat",
+      "reviewedClientSha256": "0ac73864fbd2a5eb4e4f41426e0279154bc0b12f349ddce109f61cf771c21607",
+      "clientSha256": "8939e3cc3d5975560427f6972b0167eaa329456ec153bf8d6ed531e302abd708",
+      "externalRequirements": {
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0",
+        "@tanstack/react-virtual": "3.14.10"
+      },
+      "declarations": "inherited-official-baseline; extension interfaces are verified from source"
+    }
+  ],
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 718,
+      "sha256": "697fc6aece90bda8f684993e7f1d337b0723c3d094cc6ad0bcb891efa3c097d2"
+    },
+    {
+      "path": "dsh-client-ui-chat/LICENSE",
+      "bytes": 1065,
+      "sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/client.js",
+      "bytes": 621910,
+      "sha256": "8939e3cc3d5975560427f6972b0167eaa329456ec153bf8d6ed531e302abd708"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/index.js",
+      "bytes": 3290,
+      "sha256": "90d584745ab80f5db1bcb397f7caf72910f08a9ec065f3c899763700d0e405f3"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/chat-settings.d.ts",
+      "bytes": 4648,
+      "sha256": "5fc7801d74a8589e2f56d046fef1ea68085ddba0079c66db76693caf940f0d04"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/apply.d.ts",
+      "bytes": 690,
+      "sha256": "aa6200d363975ec87566d93c1c2e109b86920081fb18e8824a3a4e806497c636"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/ApprovalCommand.d.ts",
+      "bytes": 977,
+      "sha256": "817e0055a679203e7ec2602dd2484f5dbf2ff614381012e67d0c96a988e83e0a"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/AssistantMarkdown.d.ts",
+      "bytes": 2761,
+      "sha256": "76b6d2d4722ebc10954b3fb268abbd87af4074657185355c5aea565b8310e66a"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/AssistantNodeView.d.ts",
+      "bytes": 798,
+      "sha256": "750abe8cfa8b07873f74cf3ed984fbba5c09fedab33664ac4a16ebe1f08129af"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/ChatFlow.d.ts",
+      "bytes": 622,
+      "sha256": "cf7361e611a67ad4babe2d39b0c6e37e1a96f2720c26759b32011b7fc59867d0"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/ChatGroupSeat.d.ts",
+      "bytes": 969,
+      "sha256": "2e2fdff7fa3f581506ea7d8a225da7b4a598c9b5ad28fa253ca290a1cedac613"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/ChatNodeSeat.d.ts",
+      "bytes": 1565,
+      "sha256": "2760787e35c39e8ad2f06c811ba7dd3d12b046d636529c6778ca5d59190fd8e2"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/ChatView.d.ts",
+      "bytes": 547,
+      "sha256": "aa56671c099d7feb4f1732d3d243e25212dfbaa7fb27ade224efd9564f30bd9c"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/CommandNodeView.d.ts",
+      "bytes": 790,
+      "sha256": "bed9df90df2bad0829c8bbe76d750c20d891e88ce828357f1cbd10f6865d587b"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/CompactionCommandCard.d.ts",
+      "bytes": 466,
+      "sha256": "c657aaad4fcb8641ade42c629acb9c418f72062760c1619f9dad3559f98ef946"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/CompactionItem.d.ts",
+      "bytes": 918,
+      "sha256": "02c2969d9412d20139ab94124b0f7050c1a35054d5ccff81f714652d1ef64502"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/ContextBody.d.ts",
+      "bytes": 5515,
+      "sha256": "596ec6d62045462c23d2dfe8eee8cc60ed8904c197b743f079d0e1ffeb384c30"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/ContextInjectionRow.d.ts",
+      "bytes": 1445,
+      "sha256": "78fe287decb185ce3470825e3fb386dcac19adfadadc7e79a01eb76b7574c28d"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/GenericCommandCard.d.ts",
+      "bytes": 787,
+      "sha256": "ccf961d2bdc2454e5f408fa99c8e0afdbfe2bb5c001d9dd04545822e0bcd4beb"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/MessageIconActions.d.ts",
+      "bytes": 1663,
+      "sha256": "cbab0c3f37e03c24f7827755eebc78ae9b20608be2399eead4069c4cb41b894c"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/MessageItem.d.ts",
+      "bytes": 3084,
+      "sha256": "815951647ecfbd230ac72945edb2405809a532a88ade23227a4a9e3bed37bd88"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/QuotaNoticeHost.d.ts",
+      "bytes": 436,
+      "sha256": "8cf81293ba460c2884a1b5ac47c0a78d278cdceb7f10cabef113f171f16be8e0"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/ReasoningContent.d.ts",
+      "bytes": 1156,
+      "sha256": "a3b40a7d0731965e9a6f9f596a28080f830d60e70b6fb5f9106439cd2414afc9"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/ReasoningRow.d.ts",
+      "bytes": 1478,
+      "sha256": "adbdcac76eb5674f557efa03a56922fac561f78bae1dc8caad1d84f7193af659"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/RunningStatus.d.ts",
+      "bytes": 614,
+      "sha256": "b0626488124d167f8bf6e4f174f1ac84500b809ebe619cf21661185ecca83956"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/RunningWhaleTail.d.ts",
+      "bytes": 304,
+      "sha256": "b9fe65a218a1f81526c0715ca38250ea767363359aab49b5fb473eedb8293d09"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/StatsPills.d.ts",
+      "bytes": 3622,
+      "sha256": "e609c59e2b57b2ec257222eeb0ff17dd0286bf15144487473ae8e0795c33cadb"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/SystemPromptRow.d.ts",
+      "bytes": 1218,
+      "sha256": "fec24fdf507b055bd4fc1f830d84feb11907a2c85e710378290f09e6e98404b3"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/TurnNavigator.d.ts",
+      "bytes": 1460,
+      "sha256": "78f2113a10ebd7050e45e54dfc15230dbcfa36c83d8c82ca49e09be40b44b0f4"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/TurnProcessNodeView.d.ts",
+      "bytes": 364,
+      "sha256": "5c24a49b10006a49872ff24fd3a8df602e406d3a41c2731af5d16bacf9daa373"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/TurnTailNodeView.d.ts",
+      "bytes": 749,
+      "sha256": "cc809fc228d313ee00600439f4b0e11df18e47cf74e11b75855bb9e5376f474b"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/TurnTriggerNodeView.d.ts",
+      "bytes": 330,
+      "sha256": "2e91d2915420d7c89f88896417e2d18d135a0e50e4d9d4427a9179eb785c567e"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/TurnUsagePanel.d.ts",
+      "bytes": 749,
+      "sha256": "a49e4e9c87ecee7f809997d4ca5ad9455824f90d831b7c5915310f1565bad7fa"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/UserContent.d.ts",
+      "bytes": 682,
+      "sha256": "0423c0abe3e9573ad48808234b6e6092a44767ff4a3b4491c55e39cb84a114ef"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/flow-motion.d.ts",
+      "bytes": 5462,
+      "sha256": "23c16b2c01bc972b7337f2d53e713c2e4989f085ba6b01b24df01bb31a178dd1"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/message-chrome.d.ts",
+      "bytes": 2528,
+      "sha256": "942ec80829dfe28331cd5fa1205b873feef08fb08831ca6147f99810a930a4e7"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/register-node-renderers.d.ts",
+      "bytes": 912,
+      "sha256": "1399c2fcaf28171ead24740604fe325ba62cf7380263b30a3d7a7286feaf12d2"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/render-entry.d.ts",
+      "bytes": 436,
+      "sha256": "3cef971003e485efe7bd43fc56737add65dd00fbb2185fba5588c5606f57bfae"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/searchable-hidden.d.ts",
+      "bytes": 953,
+      "sha256": "0594ca2bf5a4c9902902659522d16966f223be7bfaf2bf73018912c06ebd6f33"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/stat-dialog.d.ts",
+      "bytes": 832,
+      "sha256": "32c7622b8f5c02f047973f4fee742860ab1a13b9085bb5bc20d4a9fca8f8e428"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/step-process.d.ts",
+      "bytes": 599,
+      "sha256": "6ae052ad0f0d1a9aedae905802ceadd3f1af9822944538347f30ddbe68cb695e"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/token-format.d.ts",
+      "bytes": 1230,
+      "sha256": "eb2100f995e45a7ac1471313673c25979ff52e7806067f2abb42412fb0980155"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/turn-assistant.d.ts",
+      "bytes": 335,
+      "sha256": "eecb9fe95f9f83c1c31c32bf59a2a9a8df2c5c72106613063f69dc7cc69ccf1a"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/turn-rail-items.d.ts",
+      "bytes": 1803,
+      "sha256": "e45254c2ecff72e4ae6accdae506badf9718a667cfc783a9754976dba4d6e057"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/turn-trigger.d.ts",
+      "bytes": 761,
+      "sha256": "2abccfce033d58f8ce2609e9088ba9faa2d9e18b606eb9f72435bfa9f1800684"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/use-calendar-day.d.ts",
+      "bytes": 249,
+      "sha256": "8827fc890ffa5f825d2138ca2e194ee7b9c06036420b3d4b3408e6cfb85bde0d"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/use-chat-navigation.d.ts",
+      "bytes": 3169,
+      "sha256": "8b48420942eed4599d887b439d5c033e7f3c28dc7d078027c5d35b67a7832e4c"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/use-chat-reading.d.ts",
+      "bytes": 5016,
+      "sha256": "53a7b457c20a6808dada31eba15d53ed0c1ef72ec054bcde89f6a0d15559c579"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/use-chat-scroll.d.ts",
+      "bytes": 2265,
+      "sha256": "9aa37476beb24db1f1fee762e2195b9c9df220b16b21c3396c9e870fc5489170"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/use-chat-viewport.d.ts",
+      "bytes": 9619,
+      "sha256": "3cf3a6a1edc9794f72595c0a743a16dc8cf624d1bbd5ea89a6fabc5793f75fb3"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/use-disclosure.d.ts",
+      "bytes": 819,
+      "sha256": "85b0bf0e4bf22f9e33ea8bc9a0b23c1627b638bea1dd6130f9014468200c3a8c"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/use-process-scroll.d.ts",
+      "bytes": 1275,
+      "sha256": "7feaead5cb71c7307a23937492df974c478da8efaeaa8fc0a3d3db269da58109"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/use-scroll-follow.d.ts",
+      "bytes": 4801,
+      "sha256": "75a73a6cc14636a2a0143a81feab2cafb25f914f7b6c61b6a2e1b370dc5328cb"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/chat/use-turn-data.d.ts",
+      "bytes": 655,
+      "sha256": "0c825d1b8a03e1bec92d20ef94f0384609101384497f5d1d57dcb3fea1e29da9"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/contract/assistant-content.d.ts",
+      "bytes": 465,
+      "sha256": "bca733e708303c163c3204922868c558b32860653a8ed45085f0ac25c1f4c400"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/contract/chat-nodes.d.ts",
+      "bytes": 5223,
+      "sha256": "5fb93debe2cd719ef34522e55e2618875511cb231d5a92550a865c6a9f6a4e87"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/contract/chat-visibility.d.ts",
+      "bytes": 510,
+      "sha256": "7c438e784b70b3b6ec09d34b532e18a352ed54e954743d27b484270fa6c03b74"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/contract/group-tree.d.ts",
+      "bytes": 1705,
+      "sha256": "bae9b759ea9f987d9bbcf1d8ce0dcc1d19f344e327864aadb6486228f167c100"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/contract/process-groups.d.ts",
+      "bytes": 1104,
+      "sha256": "09d0ce856d15c117be1bf4aae7fe309c814c6f832ed4ba12d70f0f149b56e12e"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/contract/slots.d.ts",
+      "bytes": 20050,
+      "sha256": "32b0c2cac962567816010bbc56c39c59a3c6540e221ea067c58fd8d066275a86"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/contract/snapshot.d.ts",
+      "bytes": 6174,
+      "sha256": "9d000cd41691ce7500a42673d96597decab58c4bb1e2bdf1a17e877de6e1376b"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/contract/store.d.ts",
+      "bytes": 591,
+      "sha256": "7ff6c918d981a6a5a46881ed1fb65885a4e88008f1a690c424c9bd8cc0c30ef6"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/contract/turn-metrics.d.ts",
+      "bytes": 817,
+      "sha256": "4e07795a6742bbbdf2b9add51b1f6eaa438056c4ebd366a90a97294baab7f44d"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/contract/turn-process.d.ts",
+      "bytes": 1768,
+      "sha256": "c6667a304b3ed220e1d6653824635f00bb5f83f94356e06f64c1ffb8a33f8c9d"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/assistant.d.ts",
+      "bytes": 1536,
+      "sha256": "d7232e593dcc26f15eedb8777a99e8d7d52ecf4a6d6b5db550ff8cf8cca2ea66"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/chat-snapshot-builder.d.ts",
+      "bytes": 4971,
+      "sha256": "1219e169bb58968a75865353c9e276ca51fab219a9b8f39c3b742f5143d6efa3"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/command.d.ts",
+      "bytes": 2462,
+      "sha256": "8d4fd4a30ea5b72ded78950000fe8bff6300ae85e277bebe80bc94ec9888c131"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/common.d.ts",
+      "bytes": 2401,
+      "sha256": "5d2efe24a61f7e09b25b6065880f466f1047887b600a2c5a3c341a752b65d73b"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/compaction.d.ts",
+      "bytes": 899,
+      "sha256": "151f5a9e0649916dfab273670b148ca00b70dc248e21f6e5b3ec40065f1f496a"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/event-projection.d.ts",
+      "bytes": 2767,
+      "sha256": "fd795dc550f55052c5b4405c421950a7aeb47e996eac3d2adc76cd4fdee7668d"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/fallback.d.ts",
+      "bytes": 754,
+      "sha256": "2c4f8081333b32a0b745a8b7632d68a42b883876dc992831b1ab19e32b68fe6f"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/group-tree-segments.d.ts",
+      "bytes": 1944,
+      "sha256": "a68ec9e92b2657c6f3f17b0031521703877c0c1809c14694671d3252e76a6d69"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/inbox.d.ts",
+      "bytes": 1600,
+      "sha256": "98f7c5200dedf15453a3b5a861c5e10cf6cf22f63aec5b57d41952a10884ab67"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/message.d.ts",
+      "bytes": 2061,
+      "sha256": "0275c3767c20a5bd2e3e685ace4bd7b0dd9bea6a6c0509fee6b92e35b20c7cdc"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/process-activity.d.ts",
+      "bytes": 519,
+      "sha256": "6b3245061fe1b669249e2ebf07e6fd9a1b1740bcad96433730d375b7cde80ff2"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/process-groups.d.ts",
+      "bytes": 1273,
+      "sha256": "8380c74ffd52d291fec1cd2e1a44bebeb4d4e2dd86d7f6d089c199e2e10ff060"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/register.d.ts",
+      "bytes": 307,
+      "sha256": "b241fcf1256fc9e01e3e0639406f2cd86ea4b25321e8f08a118f812042f11b8b"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/request-prompt.d.ts",
+      "bytes": 2300,
+      "sha256": "165b3395c490c20b464ee3158d2447793e156b32c3393d4d0f842722d96a466e"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/retry.d.ts",
+      "bytes": 912,
+      "sha256": "de4b88790a392856d008532cc794682b4f1a9c87cd892559dde0f03e5b514603"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/tool.d.ts",
+      "bytes": 1009,
+      "sha256": "fdcbc296c1324bfefb8ebee708e6244441ddd48525a74658c7526ef8d99c1640"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/turn-error.d.ts",
+      "bytes": 1117,
+      "sha256": "9d2e60c4897cde29dbf210d6442c8addc7394ecb7bb98c5a12b28fedcbae31f0"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/turn-max-tokens.d.ts",
+      "bytes": 902,
+      "sha256": "36325213c9e6afc49da5045eb9f9683cc8c8194a5065fc7716d8334f7296b059"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/turn-navigation.d.ts",
+      "bytes": 1006,
+      "sha256": "8f22de61c2311c80a24d083dfb09cb3c7675a249add171655fecdf347c4dc7d4"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/turn-process-presentation.d.ts",
+      "bytes": 1432,
+      "sha256": "ee8fd8193e095bc15ebec3bbfe250b567ace7b0f8fa35a70fc98e1a524fc2e17"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/turn-process.d.ts",
+      "bytes": 1460,
+      "sha256": "ec098932c12a798a66513f0928188e0111cbc1a7a2aa0299bf46c844456da1b6"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/conversation-nodes/turn-tail.d.ts",
+      "bytes": 1160,
+      "sha256": "2a0d0a8b76cf0e32b54eb61669685e0556568b81c4d06edc968ea881c0523782"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/index.d.ts",
+      "bytes": 3888,
+      "sha256": "afc378e885962f0b6d16610f3a142ef2dc4298b12f861936fdb0e52023b5c29b"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/locale.d.ts",
+      "bytes": 15890,
+      "sha256": "9942f2b8ea5668b884e5e23f2066c60bbd39d9c905f272a0b87f3c938a55af22"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/markdown-labels.d.ts",
+      "bytes": 493,
+      "sha256": "6dde73e8b93b8d6531141a9c53408d01889ca1ad41d96cff8838e8c51a415556"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/model/conversation-context.d.ts",
+      "bytes": 1229,
+      "sha256": "9a521f6c74c3f8e3798d08637c873be801c283c8ae3ccfec96c068c7bdb7ee10"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/model/steering-history.d.ts",
+      "bytes": 1038,
+      "sha256": "06072cbbe8c8dc599529fb4f2ff90b82ce0e2a9f6d7b70740eaa601ece415b42"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/model/tool-call-tree.d.ts",
+      "bytes": 2097,
+      "sha256": "d05841b0d41a848dc49f746280eb73492166f31bfe1e4d8d3a51685e511611e9"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/performance-usage.d.ts",
+      "bytes": 951,
+      "sha256": "5eda809443d664fc9c1dfd04e93b0d5c6a5e8681de6312f46b74a3aedeadb4f1"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/presentation-policy.d.ts",
+      "bytes": 2176,
+      "sha256": "061a0027350c10b31fff7ed1527f241b98f3a2744985b8803e1b4fbfbd08b6d7"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/settings/LinkOpeningRow.d.ts",
+      "bytes": 1288,
+      "sha256": "0614c42f1f9a5687a275ca160ec64b00f8721ad8cad2b02a4b9f44272054d028"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/settings/PerformanceUsageRow.d.ts",
+      "bytes": 1069,
+      "sha256": "8ed5ace4468057eeca48484c63773663e6ab7ba1f0784f30f9eab871baa06d7f"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/settings/PreferenceRow.d.ts",
+      "bytes": 607,
+      "sha256": "1a76b0ce589db9af17dc9afd14eba5d7eefd4e5d4686fb5a2716a65493c54e7c"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/settings/TranscriptViewRow.d.ts",
+      "bytes": 1543,
+      "sha256": "8796443bc51dc027fec5c12eef6b0c126a8624afb0c64d15ee559a61b9feb742"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/stores.d.ts",
+      "bytes": 1527,
+      "sha256": "c7c75c11b1f6f65cde53f0974ef976339d72986c14b95f7d0841668c5a8033c0"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/client/transcript-view.d.ts",
+      "bytes": 1763,
+      "sha256": "d199b367a89eb55d588b96144d045a8145a94e548618dae452526c0ad9a94029"
+    },
+    {
+      "path": "dsh-client-ui-chat/lib/types/index.d.ts",
+      "bytes": 2297,
+      "sha256": "0e67e0f68a2f1d841c3a1c0905ec3aee4724c288887dcf797decdeb4e17a8159"
+    },
+    {
+      "path": "dsh-client-ui-chat/package.json",
+      "bytes": 1482,
+      "sha256": "796b4271987ca69828a8112376a5b26ec7038aeeccb09747b069d61878e6c51c"
+    },
+    {
+      "path": "dsh-client-ui-conversation/LICENSE",
+      "bytes": 1065,
+      "sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/client.js",
+      "bytes": 780026,
+      "sha256": "cdb535654af46605e5ae8a5619ec61ea6428cdceee098fda359776a458dc9e14"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/index.js",
+      "bytes": 1524,
+      "sha256": "046ea85e5fa3b6bb2950b6a0ce55cd06ae516f37e8b6a84497c2ca74a3364c31"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/apply.d.ts",
+      "bytes": 943,
+      "sha256": "bf42758f5bea94a247c07a061de5f042fa45f4d7a117a6ce9ccbc01a4287a6bd"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/context-occupancy.d.ts",
+      "bytes": 643,
+      "sha256": "ab6776563fe682c50340337f01765d5a11ab6beed948f82397d1865ca7f104fd"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/contract/composer-blocks.d.ts",
+      "bytes": 1118,
+      "sha256": "90e3954814f00bf946249db9af159dfc787d9009838a32a0d20a3b0bbfd25dbd"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/contract/composer-submission.d.ts",
+      "bytes": 1235,
+      "sha256": "40e95685406ffbe9c7015ede130e13fd3659241b5df681b1e1595c1cd41366d7"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/contract/context-producer.d.ts",
+      "bytes": 1403,
+      "sha256": "72617c58e0e75f5b4037122afef518018ab51ed60163f36703a77f9529406e10"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/contract/conversation.d.ts",
+      "bytes": 14084,
+      "sha256": "4c087fc2a8458799188e76120d83684c5858daf3a08b763b84c390dbb95643b4"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/contract/draft-editor.d.ts",
+      "bytes": 5893,
+      "sha256": "3397e3224506a8f448901c4ae3eb1932dabe3fa257b9ba9c5186efd2ad918375"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/contract/groups.d.ts",
+      "bytes": 5531,
+      "sha256": "2a6ebc27d05d474fb28e9d5ae1feb3cab75e1a5621e917d419992e97f5ed8de5"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/contract/input.d.ts",
+      "bytes": 17346,
+      "sha256": "c213d129d588f858a48828c1bcc28d64d4d1146c68cb6956f4d6b7c22ba239d5"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/contract/records.d.ts",
+      "bytes": 12320,
+      "sha256": "45c4ed6bf851c21b70faaa84b85a15b4c18e74dace52996cf659e563828f5f72"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/contract/request-inspection.d.ts",
+      "bytes": 6594,
+      "sha256": "36c9186100464f9b83be915855dee128784c1ffe39528697899e9a8c14d4ca8c"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/contract/slots.d.ts",
+      "bytes": 29484,
+      "sha256": "8102cad50bd596dc6fadd9e6a38b7aa478fe28a8f7848215cbc5db95a11382e7"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/contract/snapshot.d.ts",
+      "bytes": 1202,
+      "sha256": "ddf263b06e1708d941238a2092cc7a8e51457bfc9b0d8dea37a6c4f902860a06"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/contract/system-prompt.d.ts",
+      "bytes": 2189,
+      "sha256": "00f4b05889bc2217c4f644371734ee9d14cec268e6ceeb0fbcb1df8a40f6803e"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/contract/user-text.d.ts",
+      "bytes": 3464,
+      "sha256": "7ef5d67def3df6cef3c1127b52e12f7fec753e7c813ddc63794e50026b8ed292"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/contract/views.d.ts",
+      "bytes": 1078,
+      "sha256": "06cb00178d1313e63534acae7917c38127fe77e6b9b1a1e4528607c6db48a690"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/conversation/assembler.d.ts",
+      "bytes": 7467,
+      "sha256": "c9205971295dd5ffd0bc2ec242affdb26bd4c4b371f67b37de1c229ed2ef006b"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/conversation/assembly.d.ts",
+      "bytes": 6074,
+      "sha256": "2803b2f855791e6b37a2d9df163ad61a20e5c7332ddd0e0970ed061d4947d3a7"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/conversation/definition-registry.d.ts",
+      "bytes": 1479,
+      "sha256": "ca06f4b70b33950ff130dfedde82858a89e41fd477728120db9d633273179ffd"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/conversation/event-registry.d.ts",
+      "bytes": 1810,
+      "sha256": "5c39b92ad6dbfd8b7728e86bada0d456036dfde89a950d24e5265933d0e025b4"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/conversation/group-registry.d.ts",
+      "bytes": 1605,
+      "sha256": "0b542b477c89b0d6ca4e5dd3e9361525bca821f8b7c70562c05fdd167ccafa66"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/conversation/group-store.d.ts",
+      "bytes": 1569,
+      "sha256": "f7b765bc749fd60182877983338e1de263193a8439dca7f5dd27648bcf3a7ad9"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/conversation/historical-images.d.ts",
+      "bytes": 2243,
+      "sha256": "624d7a580e78cc4676e25decae28fdb65584b10793a062afb5c472acd8e6e994"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/conversation/location-index.d.ts",
+      "bytes": 4049,
+      "sha256": "d3e9707c0bf1121d6ee3bd81ac98818eae4a47e880bee1bc7632f36bc130ce12"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/conversation/user-text-document.d.ts",
+      "bytes": 958,
+      "sha256": "c631eccef2d9597b00bdbd26169aed8374e53703497a032ad6b9c8aaf5ff0532"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/conversation/user-text-registry.d.ts",
+      "bytes": 1375,
+      "sha256": "e119c1bb80a82f904e893eded53c22b617c8c9718507d5cf1eefabe89798ee3a"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/conversation/view-registry.d.ts",
+      "bytes": 640,
+      "sha256": "72cba14562be2d80b390e80690b10fde6c4d6b953e04aefef5336bdd9356e329"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/draft.d.ts",
+      "bytes": 1182,
+      "sha256": "d8881b3b518e738d90268c3cd16a59ea2a64b1adcbaeed69ed85ef47ca627040"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/image-labels.d.ts",
+      "bytes": 1177,
+      "sha256": "cc0e95f8d94a25ef1fd269d4a1dceb38f4e5b6af68ada31ecdfcd2a186637539"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/index.d.ts",
+      "bytes": 6721,
+      "sha256": "e6dc178cb09fff2d58d898a41cfdb25d17f784edc132355e5215aaa9855d82ff"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/blocks.d.ts",
+      "bytes": 1360,
+      "sha256": "5b7b8fe28a7f9e65fe05a368153186d815ffd6c4f0705a514fdb8b93cece10de"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/decorations.d.ts",
+      "bytes": 1577,
+      "sha256": "02eb202108b5cc3c678c3aaf3022edb8fada37f7920393da7017890d74ab410a"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/editor/CommandChip.d.ts",
+      "bytes": 449,
+      "sha256": "e93f81f8918147d92049da1caded1a365937282d4748fd09ca6da6e1bf6cac82"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/editor/ComposerContentEditable.d.ts",
+      "bytes": 842,
+      "sha256": "c58017f01c710df481fa7b24eb223195c2f6a2ea67d97cf470d91cf1565f163f"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/editor/DecoratorPortals.d.ts",
+      "bytes": 547,
+      "sha256": "9ab58b2481e3884a696e18f9cb86ad7194ee3548b87ab8064943926f21ffce30"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/editor/DraftEditor.d.ts",
+      "bytes": 1481,
+      "sha256": "38f51fad278515615088b32a9f8691d567973db8dd005b5c79624fabd1fec572"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/editor/ReferenceChip.d.ts",
+      "bytes": 789,
+      "sha256": "2c0b6364788dbd39bbd3cb7964bb580081069b5fb790602ed2beb3b908703eec"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/editor/chip-node.d.ts",
+      "bytes": 4755,
+      "sha256": "816035eaa7730ad5c57334f3a261ccf9529f1a27f72069fd012c587ab03f737f"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/editor/command-chip-node.d.ts",
+      "bytes": 3956,
+      "sha256": "bd0bb27a4781577afbe474843d9afa70eec8a8f821fda1ba01b071e0546edd2b"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/editor/command-chip-selection.d.ts",
+      "bytes": 1105,
+      "sha256": "1eec31b5eaaa249d5c03d37091c3e9f8a4fcef89104a5b050f161418a2aa5a94"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/editor/keymap.d.ts",
+      "bytes": 2559,
+      "sha256": "249896a701e147be8025eac55367569ae7df9de74d461a54c2e7aaa5303c8601"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/editor/projection.d.ts",
+      "bytes": 4697,
+      "sha256": "78c15c550b3b4469015778f562e0a4c80010aaf15c9e3594fe13a64a695798de"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/editor/reference-activation.d.ts",
+      "bytes": 590,
+      "sha256": "a10cec17fe14a9319b60f354e668ac7a6ad042a0c88dd1f1d2e42c2ddf0582e5"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/editor/runtime.d.ts",
+      "bytes": 6612,
+      "sha256": "eb56190cd8de22be323378a21809da9c00bedfe2cdf355e606b35a41bf94a6d9"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/editor/span-map.d.ts",
+      "bytes": 1687,
+      "sha256": "400ede21042712d79dc9a962242e249b5434f34917cc844c0ce580e1e30aa8df"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/editor/text-ref.d.ts",
+      "bytes": 2000,
+      "sha256": "eaef0e6dbd1af1ee9c001aded077cff86e2f34edea5e910731bdb5a542f0a6d0"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/editor/view-binding.d.ts",
+      "bytes": 2948,
+      "sha256": "2dd79324712c50fa3d9998a6c5332d25172e6d543a1929faa05831f58d31200b"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/facade.d.ts",
+      "bytes": 17696,
+      "sha256": "9c5cb507667612b58adba51ae16d63123b1c6112227c70d0920d233dc96a189d"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/hub.d.ts",
+      "bytes": 4425,
+      "sha256": "da6d0adb3edcfa7f477b19382805c7420630a8207a3d9529a617966de53d3aec"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/machine.d.ts",
+      "bytes": 2174,
+      "sha256": "5297551e75f152c5118db8772482044991e770c98797581d362adcb0add7769d"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/submission-analytics.d.ts",
+      "bytes": 531,
+      "sha256": "a9f2394623c2d49b4fc4eb2691c74a9efc890c6d302a70771c5e97406673c7cf"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/input/submission-policy.d.ts",
+      "bytes": 2675,
+      "sha256": "189595891cfff2fe552c126efe55ecf53c9f278f7ec54953d4ba1904ce4c7557"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/locales.d.ts",
+      "bytes": 26203,
+      "sha256": "937ed2c7740d5d6e1f3b09809ca806194157af70138f0e8cf34ba3f30599f759"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/queue/QueueDock.d.ts",
+      "bytes": 1670,
+      "sha256": "fc2d46019b1f231fdab450a13d054ab4fc4d7626eafd546d10383c853da5743e"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/service.d.ts",
+      "bytes": 9883,
+      "sha256": "153ffb179763a6a89973db3552cb2f17b6cde84e9aa40bcb92e65e5ab242ea6e"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/settings/EnterBehaviorRow.d.ts",
+      "bytes": 1072,
+      "sha256": "b25c14bf8b8dae51d89bbdc5e08431c92c241d125e0262ac9c11df67295c7c4a"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/skeleton/ContextMeter.d.ts",
+      "bytes": 795,
+      "sha256": "a5b7bae8cbb116601fdb88e7808a6b4f79039bf4a3b37b78e70d80daeaa2285f"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/skeleton/ConversationContent.d.ts",
+      "bytes": 476,
+      "sha256": "d0ecb5dcab9ef5d51401f48813ca9a51a10e213ea67494ad75f22c6967074bf2"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/skeleton/ConversationHeader.d.ts",
+      "bytes": 492,
+      "sha256": "1fc8c695c333e2e24d167236b2e62dd2375e0d4877abcfb4d21979cf51ba039c"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/skeleton/ConversationMainPanel.d.ts",
+      "bytes": 448,
+      "sha256": "16268be2905f7ac5cd55c5c23ec45a0aa14d149b18f1aa5114ffac09071d4adf"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/skeleton/ConversationPanel.d.ts",
+      "bytes": 555,
+      "sha256": "7002294a437df34e05b4a916d0c2376e812008a340d6c2f6737fa2cfe35be6c1"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/skeleton/ConversationRoot.d.ts",
+      "bytes": 324,
+      "sha256": "b78145baca4fa1ac0cfaa7aed7fba6e0a9b8255385d7ae0ac05c8ca7280d30e9"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/skeleton/ConversationSession.d.ts",
+      "bytes": 1428,
+      "sha256": "12b0e28bc0c065b1f114adaee35800195b135bb43d86637dcf4f888d45b713fa"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/skeleton/ConversationWidthControls.d.ts",
+      "bytes": 516,
+      "sha256": "8bd97891b50a62fec9da298ede7fe43ee827b14a9d4c6c7777051f80ac60b577"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/skeleton/DefaultConversationViews.d.ts",
+      "bytes": 701,
+      "sha256": "c6953dd7885ee2ea2517e619b5ea1792436c38c0993a5d4da6228e446514be07"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/skeleton/EmptyHero.d.ts",
+      "bytes": 2067,
+      "sha256": "153863dea3f861f101051bfc4fa603608764d6446c9b9f8040def17efa84de8b"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/skeleton/InputBar.d.ts",
+      "bytes": 1435,
+      "sha256": "cc43a643db7cb1f9f3a6c3f5e39d565f17d3e2741ea410126f35117d5cb16b56"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/skeleton/TodoPanel.d.ts",
+      "bytes": 1072,
+      "sha256": "822fc9f7bfdf3fb5b6ab8be3528c1dac0fe529372033a34bb8ff5c7bb3a01bb5"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/skeleton/control-row-layout.d.ts",
+      "bytes": 594,
+      "sha256": "a0156d3f4db5842635e554b271c072e2249837cfea90fa736ed9691fdac54944"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/skeleton/safari.d.ts",
+      "bytes": 908,
+      "sha256": "6d6c7dde559be6b6e6e470fe1b10b75001913cdf61de06f3e7cb536bbd582871"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/stop-sequence.d.ts",
+      "bytes": 1377,
+      "sha256": "199a849165511e21c92928fdfd1ce9a7a10d9da84dcf9133870dbce8873efc2a"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/stop-shortcut.d.ts",
+      "bytes": 1305,
+      "sha256": "e56c69e78af2cde29550694f3ef06140fd9808619f294e39b5609ea6a543937e"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/stores.d.ts",
+      "bytes": 1620,
+      "sha256": "a618ab64cae1a90c95eb4849d71350fc2df718e7c672582c4c056fd7d97ff604"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/user-text/UserText.d.ts",
+      "bytes": 1343,
+      "sha256": "e3080f417e93d72723bfaf650df58c73e0df169b4cfe3b3509413b945cb8e789"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/user-text/session-reference-rule.d.ts",
+      "bytes": 651,
+      "sha256": "2d56dc9e4969dfc7a145e569f6a62001a0dc0f0177d6c48534c4c3528d03e74e"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/user-text/whitespace-rules.d.ts",
+      "bytes": 542,
+      "sha256": "8ae1075672022001026b401b1a0d20d7fa2f24543d7f0928d4d3a9773d9e1143"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/client/view-selection.d.ts",
+      "bytes": 744,
+      "sha256": "14aef970a7c83fe2bf5b81a29b8d0c2198776b6ae06c8968755b8edd7373f017"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/index.d.ts",
+      "bytes": 1098,
+      "sha256": "2e11f543b202ec960fe8c4236aa8892761b88d1b2c4f9996da14a3fd143b5543"
+    },
+    {
+      "path": "dsh-client-ui-conversation/lib/types/submission-settings.d.ts",
+      "bytes": 1622,
+      "sha256": "faae336feefcc5e4c740f5eabf3c7af35226b4f8d0a8c215e782b2a237444439"
+    },
+    {
+      "path": "dsh-client-ui-conversation/package.json",
+      "bytes": 1344,
+      "sha256": "5f1892bdadcaa16afedcad12c8b44e6f68b0f2968d31b568925fe9558d0b3346"
+    },
+    {
+      "path": "dsh-client-ui-session/LICENSE",
+      "bytes": 1065,
+      "sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be"
+    },
+    {
+      "path": "dsh-client-ui-session/lib/client.js",
+      "bytes": 42517,
+      "sha256": "c9ed466e35ab4a0d86802d1eac807220efafd5be8415458e8cf18684456de6df"
+    },
+    {
+      "path": "dsh-client-ui-session/lib/index.js",
+      "bytes": 185,
+      "sha256": "86697fb35c36abc9dc10acb651e43a61106198df89ca1a0a7c4eb5026f316d4c"
+    },
+    {
+      "path": "dsh-client-ui-session/lib/types/client/index.d.ts",
+      "bytes": 10711,
+      "sha256": "da31a243e378f6cc7982fe9b03d1fcfcf460f42977a0c2d8547197f15e2f60fe"
+    },
+    {
+      "path": "dsh-client-ui-session/lib/types/client/session-provider.d.ts",
+      "bytes": 600,
+      "sha256": "b2d7348de014d12765d7f0a9a63a01e925a514a0f67ee31b4a3102ef6806e626"
+    },
+    {
+      "path": "dsh-client-ui-session/lib/types/index.d.ts",
+      "bytes": 179,
+      "sha256": "2dd3be9137c4a3d9cec92911419e9879bb81f9d765009bd37182eaef1e9133e6"
+    },
+    {
+      "path": "dsh-client-ui-session/package.json",
+      "bytes": 1058,
+      "sha256": "b79f5e5369e51ed952e5e58079213fa2e9cc517a21daf1b4817d4c0150592b0b"
+    },
+    {
+      "path": "dsh-client-ui-subagent/LICENSE",
+      "bytes": 1065,
+      "sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be"
+    },
+    {
+      "path": "dsh-client-ui-subagent/lib/client.js",
+      "bytes": 50531,
+      "sha256": "04791549afd807f8b1568bb220e6cbf1677f8b1de6e3bdcd2676df9ba9d9f755"
+    },
+    {
+      "path": "dsh-client-ui-subagent/lib/index.js",
+      "bytes": 409,
+      "sha256": "eb78389cb207434d09bb4d75d80db5c409337e32c249b6ab2dbe17e5f9c6efb9"
+    },
+    {
+      "path": "dsh-client-ui-subagent/lib/types/client/SubagentHeaderLineage.d.ts",
+      "bytes": 2117,
+      "sha256": "b7a01bb09d4df85f1c3b52bc6e96efbbca2a5de4f632e47c5894f7d0e6ccabb0"
+    },
+    {
+      "path": "dsh-client-ui-subagent/lib/types/client/SubagentReadOnlyComposer.d.ts",
+      "bytes": 939,
+      "sha256": "ddd582f6f9479069f7ca68b3db7bb5bb470f0724dcbe473e98be26667afc171a"
+    },
+    {
+      "path": "dsh-client-ui-subagent/lib/types/client/index.d.ts",
+      "bytes": 954,
+      "sha256": "e8b4254441c919c5ec8705b1d7fa5e31667169f8af9a0de30bfdc8140175458d"
+    },
+    {
+      "path": "dsh-client-ui-subagent/lib/types/client/locales.d.ts",
+      "bytes": 2982,
+      "sha256": "48391849c3f903d11da84b9b81db52448f073f25125c054bd473f597745f5ef9"
+    },
+    {
+      "path": "dsh-client-ui-subagent/lib/types/client/sidebar-chat/index.d.ts",
+      "bytes": 3502,
+      "sha256": "b827ed98378bd04d4b26a0ba6cada3738ddc357a1172fdb6efa3184dd661ed62"
+    },
+    {
+      "path": "dsh-client-ui-subagent/lib/types/index.d.ts",
+      "bytes": 408,
+      "sha256": "5e64653c8ff6c33441e55d7048b6e77608c73cab8add14baf5f7a4583b846cb3"
+    },
+    {
+      "path": "dsh-client-ui-subagent/package.json",
+      "bytes": 1328,
+      "sha256": "e782d9339ebecdb91eba80d22f09edd773101fdb15776cda518e2d55f8d25507"
+    },
+    {
+      "path": "source.patch",
+      "bytes": 190568,
+      "sha256": "1ec87419f17bc2ab05972196601329a7d8fcb00a20827114f8952cd5ba819aa1"
+    }
+  ]
+}

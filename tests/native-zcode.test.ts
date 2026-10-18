@@ -1,0 +1,351 @@
+import { afterEach, describe, expect, it } from 'vitest'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createNativeIO } from '../src/host/native-transport.mjs'
+import { runNativeZcode } from '../src/host/native-zcode.mjs'
+import { foldNativeFrames } from './fixtures/bridge-timeline.ts'
+
+const roots: string[] = []
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
+})
+const source = String.raw`
+// Simulated ZCode app-server. This fixture never invokes a model.
+import { createInterface } from 'node:readline';import { appendFileSync,readFileSync,writeFileSync } from 'node:fs';
+const out=x=>process.stdout.write(JSON.stringify(x)+'\n'), log=x=>appendFileSync(process.env.AUDIT,JSON.stringify(x.id==='headers'?{id:x.id,headersApplied:x.result?.headersApplied,headerAccepted:x.result?.requestAuth?.apiKey==='SYNTHETIC_ACCOUNT_KEY'}:x)+'\n',{mode:0o600});
+const scenario=process.env.SCENARIO, sessionId=scenario.startsWith('context-')?'sess_context-fixture':'zcode-fixture', project=process.env.PROJECT;
+const state={session:{sessionId,workspace:{workspacePath:project}},settings:{model:{current:{providerId:'chosen',modelId:'model'},available:[{ref:{providerId:'chosen',modelId:'model'},reasoning:{defaultLevel:'high',levels:[{value:'high'},{value:'low'}]}}]},mode:{current:'edit'}},runtime:{pendingRequestIds:[]},projection:{status:'idle',pendingPermissions:[],activeToolCalls:[]}};
+let inputId, awaiting, stopped=false;
+log({argv:process.argv.slice(2),leakedAccountEnvironment:!!process.env.CLIWORKER_ZCODE_NATIVE_ACCOUNT});
+if(process.argv.indexOf('app-server')>process.argv.indexOf('--disallowedTools'))process.exit(22);
+const reply=(q,result)=>out({id:q.id,result});
+const event=(type,payload,extra={})=>out({method:'session/event',params:{sessionId,turnId:'turn-fixture',type,payload,...extra}});
+const finish=()=>{event('turn.completed',{inputId,resultType:stopped?'cancelled':'success',response:scenario==='tool-boundary'||scenario==='model-usage'?'AFTER':'HELLO',usage:scenario==='model-usage'?{inputTokens:99999,outputTokens:1}:undefined});out({method:'state.updated',params:{sessionId,reason:'prompt_completed'}});};
+createInterface({input:process.stdin}).on('line',line=>{
+ const q=JSON.parse(line);log(q);
+ if(!q.method){if(q.id==='preferences'){if(q.result?.memoryEnabled!==false)process.exit(23);reply(awaiting,state);awaiting=undefined;}else if(q.id==='permission'||q.id==='headers')finish();return;}
+ if(q.jsonrpc!==undefined)process.exit(20);
+ if(q.method==='runtime/capabilities')return reply(q,{protocol:{name:'zcode',version:1}});
+ if(q.method==='provider/updateAccountConfig')return reply(q,{receivedRevision:q.params.revision,providerCount:1,status:'received'});
+ if(q.method==='session/create'||q.method==='session/resume'){
+   if(q.method==='session/create'&&q.params.model)return out({id:q.id,error:{code:-32603,message:'Simulated 0.16.9 initial model drops required reasoning options'}});
+   awaiting=q;return out({id:'preferences',method:'session/requestRuntimePreferences',params:{sessionId}});
+ }
+ if(q.method==='session/setModel'){state.settings.model.current=scenario==='wrong-model'?{providerId:'wrong',modelId:'wrong'}:q.params.model;return reply(q,state);}
+ if(q.method==='session/setMode'){state.settings.mode.current=q.params.mode;return reply(q,state);}
+ if(q.method==='session/read'){if(scenario==='active-final'&&inputId)state.runtime.activeTurnId='still-active';return reply(q,state);}
+ if(q.method==='session/subscribe')return reply(q,{sessionId,eventSeq:0,events:[]});
+ if(q.method==='session/close')return reply(q,{closed:true});
+ if(q.method==='session/send'){
+  inputId=q.params.inputId;reply(q,{accepted:true,sessionId,stateRevision:1});
+  event('turn.started',{inputId:'OLD INPUT'},{turnId:'old-turn'});
+  event('model.streaming',{kind:'text_delta',delta:'OLD',inputId:'OLD INPUT'},{turnId:'old-turn'});
+  event('turn.started',{inputId});
+  if(scenario.startsWith('context-')){
+   const base={querySource:'main_turn',sessionId,providerId:'chosen',modelId:'model',traceId:'trace-context',requestId:'request-context-1'};
+   event('session.updated',{...base,type:'model_request_started'},{traceId:'trace-context'});
+   writeFileSync(process.env.ROLLOUT_FILE,JSON.stringify({type:'model_io',sessionId,turnId:'turn-fixture',traceId:'trace-context',requestId:'request-context-1',querySource:'main_turn',model:{providerId:'chosen',modelId:'model'},request:{messagesKind:'full',messageOffset:0,messageCount:2,messages:[{role:'system',content:'SIMULATED SYSTEM NO DUPLICATION'},{role:'user',content:'SIMULATED HELLO'}],body:{model:'model',system:[{type:'text',text:'SIMULATED SYSTEM'}],tools:[{name:'simulated-read',input_schema:{type:'object'}}]}}})+'\n');
+   event('session.updated',{...base,type:'model_request_completed'},{traceId:'trace-context'});
+   if(scenario==='context-next-unknown')event('session.updated',{...base,type:'model_request_started',requestId:'request-context-2'},{traceId:'trace-context'});
+  }
+  event('model.streaming',{kind:'text_delta',delta:'FOREIGN'},{sessionId:'foreign'});
+  event('model.streaming',{kind:'text_delta',delta:'HELLO',...(scenario==='model-usage'?{assistantMessageId:'message-a'}:{})},{eventId:'delta-one'});
+  if(scenario==='thought-boundary'){
+   event('model.streaming',{kind:'reasoning_delta',delta:'Synthetic public thought'});
+   event('model.streaming',{kind:'text_delta',delta:'AFTER'});
+  }
+  if(scenario==='streamed-tool-input'){
+   event('model.streaming',{kind:'tool_call',toolCallId:'streamed-tool',assistantMessageId:'streamed-assistant',toolName:'Write',done:false,delta:'',input:{file_path:'artifact.json',content:'explicit synthetic content'}});
+   event('tool.updated',{kind:'scheduled',toolCallId:'streamed-tool',assistantMessageId:'streamed-assistant',toolName:'Write',inputOmitted:true,inputRef:'synthetic-ref',inputByteLength:123});
+   event('tool.updated',{kind:'started',toolCallId:'streamed-tool',toolName:'Write'});
+   event('tool.updated',{kind:'result',toolCallId:'streamed-tool',result:{success:true,content:'explicit synthetic result'}});
+   finish();return;
+  }
+  if(scenario==='model-usage'){
+   const usage={inputTokens:33,outputTokens:5,cacheReadTokens:10,cacheWriteTokens:3,reasoningTokens:2,totalTokens:38};
+   event('session.updated',{querySource:'main_turn',content:'HELLO',stopReason:'tool-calls',toolCallCount:1,usage});
+   event('tool.updated',{kind:'started',toolCallId:'usage-tool',toolName:'read',input:{path:'synthetic'}});
+   event('tool.updated',{kind:'result',toolCallId:'usage-tool',toolName:'read',result:{success:true,text:'safe result'}});
+   event('model.streaming',{kind:'reasoning_delta',assistantMessageId:'message-b',delta:'synthetic public thought'});
+   event('model.streaming',{kind:'text_delta',assistantMessageId:'message-b',delta:'AFTER'});
+   event('session.updated',{querySource:'main_turn',content:'AFTER',stopReason:'stop',toolCallCount:0,usage:{...usage,outputTokens:6,totalTokens:39}});
+   finish();return;
+  }
+  if(scenario==='tool-boundary'){
+   event('tool.updated',{kind:'call',toolCallId:'tool-test',toolName:'read',input:{path:'synthetic'}});
+   event('tool.updated',{kind:'result',toolCallId:'tool-test',toolName:'read',result:{success:true,text:'safe result'}});
+   event('model.streaming',{kind:'text_delta',delta:'AF'});event('model.streaming',{kind:'text_delta',delta:'TER'});
+  }
+  if(scenario.startsWith('account-')){
+   const params={requestId:'fixture-header',sessionId,turnId:'turn-fixture',workspace:{workspaceKey:project,workspacePath:project},providerId:'chosen',modelSelection:{providerId:'chosen',modelId:'model'},accountAccess:{type:'zhipu-account',accountType:'bigmodel',mode:'individual-coding-plan',entitled:true},reason:'model-request'};
+   if(scenario==='account-provider')params.providerId='foreign';
+   if(scenario==='account-model')params.modelSelection.modelId='foreign';
+   if(scenario==='account-session')params.sessionId='foreign';
+   if(scenario==='account-workspace')params.workspace.workspaceKey='foreign';
+   if(scenario==='account-access')params.accountAccess.accountType='zai';
+   if(scenario==='account-reason')params.reason='foreign';
+   if(scenario==='account-rotated'){const credentials=JSON.parse(readFileSync(process.env.CREDENTIAL_FILE,'utf8'));credentials['account-provider:chosen:identity']='DIFFERENT_IDENTITY';writeFileSync(process.env.CREDENTIAL_FILE,JSON.stringify(credentials));}
+   return out({id:'headers',method:'interaction/requestProviderRuntimeHeaders',params});
+  }
+  if(scenario==='changed-model'){event('session.updated',{providerId:'wrong',modelId:'wrong'});return;}
+  event('model.streaming',{kind:'text_delta',delta:'HELLO'},{eventId:'delta-one'});
+  if(scenario==='cancel')return;
+  if(scenario==='permission')return out({id:'permission',method:'interaction/requestPermission',params:{sessionId}});
+  if(scenario==='missing-terminal')return out({method:'state.updated',params:{sessionId,reason:'prompt_completed'}});
+  finish();return;
+ }
+ if(q.method==='session/stop'){stopped=true;reply(q,{});finish();return;}
+ out({id:q.id,error:{code:-32601,message:'Unknown fixture method'}});
+});
+`
+
+async function fixture(scenario = 'success', continuation = false) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cliworker-native-zcode-fixture-')))
+  roots.push(root)
+  const script = join(root, 'agent.mjs'),
+    audit = join(root, 'audit.ndjson')
+  await writeFile(script, source, { mode: 0o600 })
+  const credentials = {
+      'account-provider:chosen:identity': 'SYNTHETIC_IDENTITY',
+      key: 'SYNTHETIC_ACCOUNT_KEY',
+    },
+    credentialFile = join(root, '.zcode/v2/credentials.json')
+  await mkdir(join(root, '.zcode/v2'), { recursive: true, mode: 0o700 })
+  await writeFile(credentialFile, JSON.stringify(credentials), { mode: 0o600 })
+  const account = {
+    schema: 1,
+    createdAt: scenario === 'account-expired' ? Date.now() - 10000 : Date.now(),
+    selection: { providerId: 'chosen', modelId: 'model', options: { reasoningLevel: 'high' } },
+    accountAccess: {
+      type: 'zhipu-account',
+      accountType: 'bigmodel',
+      mode: 'individual-coding-plan',
+      entitled: true,
+    },
+    binding: { identity: 'SYNTHETIC_IDENTITY', key: 'SYNTHETIC_ACCOUNT_KEY' },
+    credential: {
+      authDirectory: root,
+      sha256: createHash('sha256').update(JSON.stringify(credentials)).digest('hex'),
+    },
+    snapshot: {
+      revision: 'fixture-account-v1',
+      basedOnZCodeBuiltinRevision: 'fixture-builtin-v1',
+      providers: { chosen: { access: { type: 'zhipu-account', entitled: true } } },
+      states: { chosen: { availability: 'available', entitled: true, current: true } },
+    },
+  }
+  const rollout = join(root, 'storage/cli/rollout')
+  await mkdir(rollout, { recursive: true, mode: 0o700 })
+  const config = {
+    cli: 'zcode',
+    project: root,
+    stateDirectory: root,
+    prompt: 'Simulated request',
+    mode: 'accept-edits',
+    preference: { model: 'chosen/model', effort: 'high' },
+    argv: [
+      process.execPath,
+      script,
+      '--cwd',
+      root,
+      '--mode',
+      'edit',
+      '--output-format',
+      'stream-json',
+      '--disallowedTools',
+      'Task,AskUserQuestion',
+      ...(continuation ? ['--resume', 'zcode-fixture'] : []),
+      '--prompt',
+      'Simulated request',
+    ],
+    env: {
+      SCENARIO: scenario,
+      PROJECT: root,
+      AUDIT: audit,
+      CREDENTIAL_FILE: credentialFile,
+      ZCODE_STORAGE_DIR: join(root, 'storage'),
+      ROLLOUT_FILE: join(rollout, 'model-io-sess_context-fixture.jsonl'),
+      ...(scenario === 'account-env' ? { CLIWORKER_ZCODE_NATIVE_ACCOUNT: JSON.stringify(account) } : {}),
+    },
+    ...(scenario.startsWith('account-') && scenario !== 'account-env' ? { zcodeNativeAccount: account } : {}),
+    timeoutMs: 600,
+    maxLineBytes: 1024 * 1024,
+    maxRunBytes: 8 * 1024 * 1024,
+    ...(continuation ? { conversationId: 'zcode-fixture' } : {}),
+  }
+  const controller = new AbortController(),
+    frames: any[] = []
+  const io = createNativeIO(
+    config,
+    (line: string) => {
+      const frame = JSON.parse(line)
+      frames.push(frame)
+      if (scenario === 'cancel' && frame.type === 'event' && frame.event.kind === 'assistant')
+        controller.abort(new Error('Simulated stop'))
+    },
+    controller.signal,
+  )
+  let error
+  try {
+    await runNativeZcode(config, io)
+  } catch (value) {
+    error = value
+  }
+  await io.close(error)
+  const records = (await readFile(audit, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  return { frames, records, result: frames.at(-1) }
+}
+
+describe('Native ZCode app-server (simulated native processes)', () => {
+  it.each(['context-composition', 'context-next-unknown'])('publishes exact native request estimates and newer explicit unknown (%s)', async scenario => {
+    const { frames, result } = await fixture(scenario)
+    expect(result.status).toBe('SUCCESS')
+    const observations = frames.filter(frame => frame.record?.type === 'cliworker.zcode_context_observation').map(frame => frame.record)
+    expect(observations[0]).toMatchObject({ sessionId: 'sess_context-fixture', requestId: 'request-context-1', breakdown: null })
+    expect(observations[1]).toMatchObject({ sessionId: 'sess_context-fixture', requestId: 'request-context-1',
+      model: 'chosen/model', breakdown: { systemTokens: 6, estimated: true, basis: 'zcode.estimateTokens.v1.actual-request' } })
+    expect(JSON.stringify(observations)).not.toMatch(/SIMULATED HELLO|input_schema|NO DUPLICATION/)
+    expect(observations.every(row => row.contextUsed === undefined && row.contextCapacity === undefined)).toBe(true)
+    if (scenario === 'context-next-unknown') {
+      expect(observations).toHaveLength(3)
+      expect(observations[2]).toMatchObject({ requestId: 'request-context-2', breakdown: null })
+    } else expect(observations).toHaveLength(2)
+  })
+  it('preserves a public thought between two answer spans without a tool', async () => {
+    const { frames, result } = await fixture('thought-boundary')
+    expect(result.status).toBe('SUCCESS')
+    const rows = foldNativeFrames(frames).filter((row) => ['assistant', 'reasoning'].includes(row.kind))
+    expect(rows.map((row) => [row.kind, row.kind === 'reasoning' ? row.detail : row.text])).toEqual([
+      ['assistant', 'HELLO'], ['reasoning', 'Synthetic public thought'], ['assistant', 'AFTER'],
+    ])
+  })
+  it('preserves complete model.streaming tool inputs across input-omitting updates without executing tools', async () => {
+    const { frames, records, result } = await fixture('streamed-tool-input')
+    expect(result.status).toBe('SUCCESS')
+    const tools = frames.filter((frame) => frame.event?.kind === 'tool').map((frame) => frame.event)
+    expect(tools).toHaveLength(3)
+    expect(new Set(tools.map((event) => event.step)).size).toBe(1)
+    for (const event of tools) expect(event.toolCall.input).toEqual({ file_path: 'artifact.json', content: 'explicit synthetic content' })
+    expect(tools.at(-1)).toMatchObject({ state: 'COMPLETED', toolCall: {
+      callId: 'streamed-tool', output: { success: true, content: 'explicit synthetic result' },
+    } })
+    expect(records.filter((record: any) => record.method === 'session/send')).toHaveLength(1)
+    expect(records.some((record: any) => /tool.*execute|execute.*tool/i.test(record.method ?? ''))).toBe(false)
+  })
+  it('settles each native model_complete usage once while the final result remains run scoped', async () => {
+    const { frames, result } = await fixture('model-usage')
+    expect(result).toMatchObject({ status: 'SUCCESS', response: 'AFTER', resultScope: 'run' })
+    const settled = frames.filter((frame) => frame.event?.response?.usage)
+    expect(settled.map((frame) => [frame.event.response.id, frame.event.response.usage.totalTokens])).toEqual([
+      ['zcode:message-a', 38], ['zcode:message-b', 39],
+    ])
+    expect(settled[0].event.response.usage.inputTokens).toBe(20)
+    expect(foldNativeFrames(frames).filter((row) => row.kind === 'assistant').map((row) => row.text)).toEqual(['HELLO', 'AFTER'])
+  })
+  it('preserves tool-separated text segments instead of merging them into step zero', async () => {
+    const { frames, result } = await fixture('tool-boundary')
+    expect(result.status).toBe('SUCCESS')
+    expect(foldNativeFrames(frames).filter((row) => ['assistant', 'tool'].includes(row.kind)).map((row) => [row.kind, row.text]))
+      .toEqual([['assistant', 'HELLO'], ['tool', 'read'], ['assistant', 'AFTER']])
+    expect(frames.find((row) => row.event?.kind === 'tool')?.event.toolCall).toMatchObject({ callId: 'tool-test', input: { path: 'synthetic' } })
+  })
+  it.each([false, true])(
+    'executes/restores through app-server without headless and filters old/foreign/duplicate events (%s)',
+    async (continuation) => {
+      const { frames, records, result } = await fixture('success', continuation)
+      expect(result).toMatchObject({ status: 'SUCCESS', response: 'HELLO' })
+      expect(
+        frames.filter((frame) => frame.type === 'event' && frame.event.kind === 'assistant'),
+      ).toHaveLength(1)
+      expect(records[0].argv).toContain('app-server')
+      expect(records[0].argv).not.toContain('--prompt')
+      expect(records[0].argv).toContain('--disallowedTools')
+      expect(
+        records.some((record) => record.method === (continuation ? 'session/resume' : 'session/create')),
+      ).toBe(true)
+      if (!continuation)
+        expect(records.find((record) => record.method === 'session/create').params.model).toBeUndefined()
+      expect(records.find((record) => record.method === 'session/setModel').params.model).toEqual({
+        providerId: 'chosen',
+        modelId: 'model',
+        options: { reasoningLevel: 'high' },
+      })
+      expect(records.find((record) => record.method === 'session/send').params.toolDenylist).toEqual([
+        'Task',
+        'AskUserQuestion',
+      ])
+      expect(records.find((record) => record.id === 'preferences').result.memoryEnabled).toBe(false)
+    },
+  )
+  it('rejects a selected-model mismatch before prompt', async () => {
+    const { result, records } = await fixture('wrong-model')
+    expect(result.status).toBe('ERROR')
+    expect(records.some((record) => record.method === 'session/send')).toBe(false)
+  })
+  it('denies additional permissions and retains an error despite native success', async () => {
+    const { result, records } = await fixture('permission')
+    expect(result).toMatchObject({ status: 'ERROR', response: 'HELLO' })
+    expect(records.find((record) => record.id === 'permission').result.decision).toBe('deny')
+  })
+  it('does not interpret send admission/state updates as a missing turn result', async () => {
+    const { result } = await fixture('missing-terminal')
+    expect(result).toMatchObject({ status: 'ERROR', response: 'HELLO' })
+  })
+  it('rejects a still-active final snapshot', async () => {
+    expect((await fixture('active-final')).result.status).toBe('ERROR')
+  })
+  it('sends session/stop during fixture output and waits for the terminal path', async () => {
+    const { result, records } = await fixture('cancel')
+    expect(result).toMatchObject({ status: 'ERROR', response: 'HELLO' })
+    expect(records.some((record) => record.method === 'session/stop')).toBe(true)
+  })
+  it('rejects an observed model switch and attempts native stop', async () => {
+    const { result, records } = await fixture('changed-model')
+    expect(result.status).toBe('ERROR')
+    expect(records.some((record) => record.method === 'session/stop')).toBe(true)
+  })
+  it.each(['account-success', 'account-env'])(
+    'initializes only the bound native account and replies without credential telemetry (%s)',
+    async (scenario) => {
+      const { frames, records, result } = await fixture(scenario)
+      expect(result.status).toBe('SUCCESS')
+      expect(
+        records.find((record) => record.method === 'provider/updateAccountConfig').params.providers,
+      ).toEqual({ chosen: { access: { type: 'zhipu-account', entitled: true } } })
+      expect(records.find((record) => record.id === 'headers')).toMatchObject({
+        headersApplied: true,
+        headerAccepted: true,
+      })
+      expect(records[0].leakedAccountEnvironment).toBe(false)
+      expect(JSON.stringify(frames)).not.toContain('SYNTHETIC_ACCOUNT_KEY')
+      expect(JSON.stringify(records)).not.toContain('SYNTHETIC_ACCOUNT_KEY')
+    },
+  )
+  it.each(['provider', 'model', 'session', 'workspace', 'access', 'reason'])(
+    'denies a native account header request outside the selected %s',
+    async (boundary) => {
+      const { records, result } = await fixture(`account-${boundary}`)
+      expect(result.status).toBe('ERROR')
+      expect(records.find((record) => record.id === 'headers')).toMatchObject({
+        headersApplied: false,
+        headerAccepted: false,
+      })
+    },
+  )
+  it('denies an account whose current identity changed after session setup', async () => {
+    const { records, result } = await fixture('account-rotated')
+    expect(result.status).toBe('ERROR')
+    expect(records.find((record) => record.id === 'headers')).toMatchObject({ headersApplied: false })
+  })
+  it('rejects an expired native account bundle before creating or prompting a session', async () => {
+    const { records, result } = await fixture('account-expired')
+    expect(result.status).toBe('ERROR')
+    expect(records.some((record) => record.method === 'session/create')).toBe(false)
+    expect(records.some((record) => record.method === 'session/send')).toBe(false)
+  })
+})

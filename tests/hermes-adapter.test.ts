@@ -513,12 +513,13 @@ describe('Hermes adapter (synthetic fixtures; no inference)', () => {
     }
   })
 
-  it('maps real native run counters without treating cache counters as extra usage or context', () => {
-    expect(hermesTokenUsage({ input: 10, output: 2, total: 12, cache_read: 4, cache_write: 1 })).toEqual({
-      input: 10,
+  it('normalizes native disjoint run buckets without treating totals as context', () => {
+    expect(hermesTokenUsage({ input: 10, output: 2, total: 17, cache_read: 4, cache_write: 1 })).toEqual({
+      input: 15,
       output: 2,
-      total: 12,
+      total: 17,
       cacheRead: 4,
+      cacheWrite: 1,
       scope: 'run',
     })
     expect(hermesTokenUsage({ total: 0 })).toMatchObject({ total: 0, scope: 'run' })

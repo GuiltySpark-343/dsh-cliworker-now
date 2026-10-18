@@ -10,6 +10,7 @@ import { isAbsolute, parse, resolve, sep } from 'node:path'
 import type { ModelChoice, Preference, TaskMode } from '../shared/types.ts'
 import type { CliExecutablePathStore } from './cli-executable-paths.ts'
 import { agyBackgroundEnvironment } from './agy-background-environment.ts'
+import type { NativeHarnessConnection } from './native-harness-tools.ts'
 
 export interface ProcessBackend {
   resolveExecutable(name: string): Promise<string>
@@ -24,6 +25,8 @@ export class ProcessCleanupUnconfirmedError extends Error {
   }
 }
 export interface RuntimeConfig {
+  /** Per-run Host-private tool connection; never persisted as deployment settings. */
+  harnessTools?: NativeHarnessConnection
   /** Host-private machine-local CLI path preferences, shared by all entry points. */
   cliExecutablePaths?: CliExecutablePathStore
   executable: string
@@ -38,6 +41,7 @@ export interface RuntimeConfig {
   hermesExecutable?: string
   hermesHome?: string
   opencodeExecutable?: string
+  qoderExecutable?: string
   zcodeAuthDirectory?: string
   zcodeBuiltinConfig?: string
   stateDirectory?: string
@@ -84,6 +88,7 @@ export function projectDirectory(input: string): string {
     '.dsh',
     '.hermes',
     '.zcode',
+    '.qoder',
     '.local/share/opencode',
     '.gemini',
     '.config',

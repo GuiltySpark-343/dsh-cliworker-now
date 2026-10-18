@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { PassThrough } from 'node:stream'
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
-import { WorkerRuntime } from '../src/host/runtime.ts'
+import { WorkerRuntime } from './fixtures/legacy-runtime.ts'
 import { WorkerStorage } from '../src/host/storage.ts'
 import { CliWorkerService } from '../src/host/index.ts'
 import { DEFAULT_CONFIG, ProcessCleanupUnconfirmedError, type ProcessBackend } from '../src/host/process.ts'
@@ -169,6 +169,7 @@ function fixture(
   }
   const service: any = Object.create(CliWorkerService.prototype)
   Object.assign(service, {
+    nativeRunDone: new Map(),
     runtime,
     backend,
     options: DEFAULT_CONFIG,
@@ -402,16 +403,14 @@ it('keeps the original queued item when execution-time authorization fails after
   const failedAdmission = f.runtime
     .snapshot('parent', f.worker.id)
     .timeline.filter((row) => row.kind === 'user' && row.queuedFollowupId === item.id)
-  expect(failedAdmission).toHaveLength(1)
-  expect(failedAdmission[0]?.runOutcome).toBe('failed')
+  expect(failedAdmission).toHaveLength(0)
   f.runtime.retryQueuedFollowups('parent', f.worker.id, f.worker.runId)
   const resumed = await f.ready(2)
   expect(f.items()).toEqual([])
   const attempts = f.runtime
     .snapshot('parent', f.worker.id)
     .timeline.filter((row) => row.kind === 'user' && row.queuedFollowupId === item.id)
-  expect(attempts).toHaveLength(2)
-  expect(attempts[0]?.id).not.toBe(attempts[1]?.id)
+  expect(attempts).toHaveLength(1)
   resumed.finish()
 })
 
@@ -1386,18 +1385,23 @@ it('promotes an ordinary admitted queue identity before spawn without duplicate 
   const f = fixture(),
     gate = deferred<string>(),
     client = randomUUID()
+  cleanups.push(() => gate.resolve('synthetic-account'))
   f.start()
   await f.ready(1)
   const queued = f.queue('ordinary becomes priority')
+  const previousRun = f.worker.runId
   vi.mocked(readCliAccountBinding).mockImplementationOnce(async () => gate.promise)
   f.calls[0]!.finish()
-  await vi.waitFor(() =>
-    expect(
-      f.storage
-        .history(f.worker.id)
-        .some((event) => event.kind === 'user' && event.queuedFollowupId === queued.id),
-    ).toBe(true),
-  )
+  await vi.waitFor(() => {
+    expect(f.worker.runId).not.toBe(previousRun)
+    expect(f.worker.status).toBe('running')
+  })
+  expect(f.items()).toMatchObject([{ id: queued.id, state: 'sending' }])
+  expect(
+    f.storage
+      .history(f.worker.id)
+      .some((event) => event.kind === 'user' && event.queuedFollowupId === queued.id),
+  ).toBe(false)
   f.runtime.interruptMessage('parent', f.worker.id, queued.prompt, queued.id, client, 1)
   gate.resolve('synthetic-account')
   expect((await f.ready(2)).spec.argv.at(-1)).toBe('任务：\nordinary becomes priority')
@@ -1405,4 +1409,593 @@ it('promotes an ordinary admitted queue identity before spawn without duplicate 
     f.runtime.snapshot('parent', f.worker.id).timeline.filter((row) => row.queuedFollowupId === queued.id),
   ).toMatchObject([{ kind: 'user', text: queued.prompt, deliveryState: 'running' }])
   expect(f.items()).toEqual([])
+})
+
+it('projects acceptance before preparation and stops only reservations preceding the Stop boundary', async () => {
+  const f = fixture(),
+    old = f.runtime.reserveSubmission('parent', f.worker.id, randomUUID())
+  expect(f.runtime.snapshot('parent', f.worker.id)).toMatchObject({
+    selectedBusy: true,
+    selectedBusyReason: 'accepting',
+  })
+  expect(() => f.runtime.configureWorker('parent', f.worker.id, f.worker.preference)).toThrow('结束后再修改')
+  const stopping = f.runtime.stop('parent', f.worker.id)
+  const fresh = f.runtime.reserveSubmission('parent', f.worker.id, randomUUID())
+  await stopping
+  expect(old.signal.aborted).toBe(true)
+  expect(() => old.assertCurrent()).toThrow()
+  expect(fresh.signal.aborted).toBe(false)
+  fresh.assertCurrent()
+  old.release()
+  expect(f.runtime.snapshot('parent', f.worker.id).selectedBusy).toBe(true)
+  fresh.release()
+  expect(f.runtime.snapshot('parent', f.worker.id).selectedBusy).toBe(false)
+})
+
+it('keeps a fixed queue mode Worker-bound despite changed settings and a completed observed run', async () => {
+  const f = fixture(),
+    id = randomUUID(),
+    reservation = f.runtime.reserveSubmission('parent', f.worker.id, id)
+  f.storage.setRunningMessageMode(f.worker.project, 'antigravity', 'interrupt')
+  const item = await f.runtime.sendRunningMessage(
+    'parent',
+    f.worker.id,
+    'fixed queue',
+    randomUUID(),
+    id,
+    reservation.signal,
+    'queue',
+  )
+  expect(item).toMatchObject({ id, state: 'pending' })
+  expect(f.runtime.snapshot('parent', f.worker.id)).toMatchObject({
+    selectedBusy: true,
+    selectedBusyReason: 'accepting',
+  })
+  expect(
+    f.runtime.snapshot('parent', f.worker.id).timeline.some((event) => event.queuedFollowupId === id),
+  ).toBe(false)
+  expect(f.calls).toHaveLength(0)
+  reservation.release()
+  ;(await f.ready(1)).finish()
+})
+
+it.each(['stop', 'failure'] as const)(
+  'keeps the %s-paused old queue independent of a later explicit round and new FIFO items',
+  async (prior) => {
+    const f = fixture(),
+      first = f.start()
+    await f.ready(1)
+    const older = f.queue('old paused')
+    if (prior === 'stop') await f.runtime.stop('parent', f.worker.id)
+    else f.calls[0]!.finish('ERROR')
+    await first.done
+    expect(f.items()).toMatchObject([{ id: older.id, state: 'paused' }])
+    expect(f.runtime.snapshot('parent', f.worker.id).selectedBusy).toBe(false)
+    const next = f.start()
+    const current = await f.ready(2),
+      a = f.queue('same text'),
+      b = f.queue('same text')
+    expect(a.id).not.toBe(b.id)
+    expect(f.items().map((item) => item.state)).toEqual(['paused', 'pending', 'pending'])
+    current.finish()
+    await next.done
+    ;(await f.ready(3)).finish()
+    ;(await f.ready(4)).finish()
+    await vi.waitFor(() => expect(f.worker.status).toBe('completed'))
+    expect(f.items()).toMatchObject([{ id: older.id, state: 'paused' }])
+    expect(
+      f.storage
+        .history(f.worker.id)
+        .filter((event) => event.kind === 'user' && [a.id, b.id].includes(event.queuedFollowupId ?? ''))
+        .map((event) => event.queuedFollowupId),
+    ).toEqual([a.id, b.id])
+  },
+)
+
+it('does not let late Stop cleanup pause or cancel a fresh queued message and reservation', async () => {
+  const gate = deferred(),
+    f = fixture({ cleanupGate: gate }),
+    first = f.start()
+  cleanups.push(() => gate.resolve())
+  await f.ready(1)
+  const old = f.queue('old before stop'),
+    stopping = f.runtime.stop('parent', f.worker.id)
+  const id = randomUUID(),
+    reservation = f.runtime.reserveSubmission('parent', f.worker.id, id)
+  await f.runtime.sendRunningMessage(
+    'parent',
+    f.worker.id,
+    'fresh after stop',
+    f.worker.runId,
+    id,
+    reservation.signal,
+    'queue',
+  )
+  expect(f.runtime.snapshot('parent', f.worker.id)).toMatchObject({
+    selectedBusy: true,
+    selectedBusyReason: 'stopping',
+  })
+  reservation.release()
+  expect(f.items()).toMatchObject([
+    { id: old.id, state: 'paused' },
+    { id, state: 'pending' },
+  ])
+  gate.resolve()
+  await stopping
+  await first.done
+  expect(reservation.signal.aborted).toBe(false)
+  expect((await f.ready(2)).spec.argv.at(-1)).toBe('任务：\nfresh after stop')
+  expect(f.items()).toMatchObject([{ id: old.id, state: 'paused' }])
+  f.calls[1]!.finish()
+})
+
+it('cancels an ordinary prepared task before spawn without a bubble or replay', async () => {
+  const f = fixture(),
+    gate = deferred<string>(),
+    first = f.start()
+  cleanups.push(() => gate.resolve('synthetic-account'))
+  await f.ready(1)
+  const item = f.queue('cancel before native spawn'),
+    priorRun = f.worker.runId
+  vi.mocked(readCliAccountBinding).mockImplementationOnce(async () => gate.promise)
+  f.calls[0]!.finish()
+  await first.done
+  await vi.waitFor(() => expect(f.worker.runId).not.toBe(priorRun))
+  expect(f.items()).toMatchObject([{ id: item.id, state: 'sending' }])
+  f.runtime.cancelQueuedFollowup('parent', f.worker.id, item.id)
+  gate.resolve('synthetic-account')
+  await vi.waitFor(() => expect(f.runtime.snapshot('parent', f.worker.id).selectedBusy).toBe(false))
+  expect(f.items()).toEqual([])
+  expect(f.calls).toHaveLength(1)
+  expect(
+    f.storage
+      .history(f.worker.id)
+      .filter((event) => event.kind === 'user' && event.queuedFollowupId === item.id),
+  ).toHaveLength(0)
+  expect(() => f.queue(item.prompt, item.id)).toThrow('已经处理')
+})
+
+it('requires Stop after a spawn attempt and never promotes or replays the same queue identity', async () => {
+  const gate = deferred(),
+    f = fixture({ spawnReturnGate: gate }),
+    first = f.start()
+  cleanups.push(() => gate.resolve())
+  await f.ready(1)
+  const item = f.queue('one spawn only')
+  f.calls[0]!.finish()
+  await first.done
+  await f.ready(2)
+  expect(f.items()).toMatchObject([{ id: item.id, state: 'sending' }])
+  expect(() => f.runtime.cancelQueuedFollowup('parent', f.worker.id, item.id)).toThrow('停止操作')
+  expect(() =>
+    f.runtime.interruptMessage('parent', f.worker.id, item.prompt, item.id, randomUUID(), 1),
+  ).toThrow('停止操作')
+  const stopping = f.runtime.stop('parent', f.worker.id)
+  gate.resolve()
+  await stopping
+  expect(f.calls).toHaveLength(2)
+  expect(f.items()).toEqual([])
+  expect(
+    f.storage
+      .history(f.worker.id)
+      .filter((event) => event.kind === 'user' && event.queuedFollowupId === item.id),
+  ).toHaveLength(1)
+})
+
+it('correlates direct submissions by id and preserves two separate identical-text operations', async () => {
+  const f = fixture(),
+    id = randomUUID(),
+    reservation = f.runtime.reserveSubmission('parent', f.worker.id, id)
+  const submit = (messageId: string) =>
+    f.runtime.submit(
+      'parent',
+      f.worker.project,
+      f.worker.title,
+      'identical direct',
+      f.worker.preference,
+      f.worker.mode,
+      f.worker.id,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      messageId,
+    )
+  const first = submit(id)
+  reservation.assertCurrent()
+  reservation.release()
+  await f.ready(1)
+  expect(f.runtime.directMessageReceipt('parent', f.worker.id, 'identical direct', id)).toMatchObject({
+    workerId: f.worker.id,
+    runId: first.worker.runId,
+  })
+  expect(() => submit(id)).toThrow('已经受理')
+  expect(() => f.runtime.directMessageReceipt('parent', f.worker.id, 'different', id)).toThrow('消息不同')
+  f.calls[0]!.finish()
+  await first.done
+  const secondId = randomUUID(),
+    second = submit(secondId)
+  ;(await f.ready(2)).finish()
+  await second.done
+  expect(
+    f.storage
+      .history(f.worker.id)
+      .filter((event) => event.kind === 'user')
+      .map((event) => event.queuedFollowupId),
+  ).toEqual([id, secondId])
+})
+
+it('reserves a unified Remote before parent lookup and cancels both retries when Stop wins that lookup', async () => {
+  const f = fixture(),
+    parentGate = deferred<any>(),
+    agent = await f.service.parent('parent')
+  cleanups.push(() => parentGate.resolve(agent))
+  f.service.parent.mockClear()
+  f.service.parent.mockImplementationOnce(() => parentGate.promise)
+  const request = JSON.stringify({
+    id: randomUUID(),
+    clientId: randomUUID(),
+    sequence: 1,
+    prompt: 'not after stop',
+    mode: 'queue',
+    intent: 'direct',
+    expectedRunId: f.worker.runId,
+  })
+  const first = f.service.submitMessage('parent', f.worker.id, request, new AbortController().signal)
+  const duplicate = f.service.submitMessage('parent', f.worker.id, request, new AbortController().signal)
+  const firstRejected = expect(first).rejects.toThrow(),
+    duplicateRejected = expect(duplicate).rejects.toThrow()
+  expect(f.runtime.snapshot('parent', f.worker.id)).toMatchObject({
+    selectedBusy: true,
+    selectedBusyReason: 'accepting',
+  })
+  expect(f.service.parent).toHaveBeenCalledTimes(1)
+  await f.runtime.stop('parent', f.worker.id)
+  parentGate.resolve(agent)
+  await Promise.all([firstRejected, duplicateRejected])
+  expect(f.calls).toHaveLength(0)
+  expect(f.service.querySelection).not.toHaveBeenCalled()
+  expect(f.runtime.snapshot('parent', f.worker.id).selectedBusy).toBe(false)
+})
+
+it('deduplicates unified Remote admission and a later retry with the same direct message id', async () => {
+  const gate = deferred(),
+    f = fixture({ selectionGate: gate }),
+    id = randomUUID()
+  cleanups.push(() => gate.resolve())
+  const request = JSON.stringify({
+    id,
+    clientId: randomUUID(),
+    sequence: 1,
+    prompt: 'one direct Remote',
+    mode: 'queue',
+    intent: 'direct',
+    expectedRunId: f.worker.runId,
+  })
+  const first = f.service.submitMessage('parent', f.worker.id, request, new AbortController().signal)
+  const duplicate = f.service.submitMessage('parent', f.worker.id, request, new AbortController().signal)
+  await vi.waitFor(() => expect(f.service.querySelection).toHaveBeenCalledTimes(1))
+  expect(f.runtime.snapshot('parent', f.worker.id)).toMatchObject({
+    selectedBusy: true,
+    selectedBusyReason: 'preparing',
+  })
+  gate.resolve()
+  expect(await first).toBe(await duplicate)
+  await f.ready(1)
+  const receipt = JSON.parse(
+    await f.service.submitMessage('parent', f.worker.id, request, new AbortController().signal),
+  )
+  expect(receipt).toMatchObject({ workerId: f.worker.id, runId: f.worker.runId })
+  expect(f.calls).toHaveLength(1)
+  expect(f.service.querySelection).toHaveBeenCalledTimes(1)
+  expect(
+    f.storage.history(f.worker.id).filter((event) => event.kind === 'user' && event.queuedFollowupId === id),
+  ).toHaveLength(1)
+  f.calls[0]!.finish()
+})
+
+it('uses the unified Remote click-time mode after settings change during parent lookup', async () => {
+  const f = fixture(),
+    first = f.start(),
+    parentGate = deferred<any>(),
+    agent = await f.service.parent('parent')
+  cleanups.push(() => parentGate.resolve(agent))
+  await f.ready(1)
+  f.service.parent.mockImplementationOnce(() => parentGate.promise)
+  const id = randomUUID(),
+    request = JSON.stringify({
+      id,
+      clientId: randomUUID(),
+      sequence: 1,
+      prompt: 'frozen queue Remote',
+      mode: 'queue',
+      intent: 'running',
+      expectedRunId: f.worker.runId,
+    })
+  const sending = f.service.submitMessage('parent', f.worker.id, request, new AbortController().signal)
+  f.storage.setRunningMessageMode(f.worker.project, 'antigravity', 'interrupt')
+  parentGate.resolve(agent)
+  await sending
+  expect(f.items()).toMatchObject([{ id, state: 'pending' }])
+  expect(
+    f.runtime.snapshot('parent', f.worker.id).timeline.some((event) => event.queuedFollowupId === id),
+  ).toBe(false)
+  expect(f.calls).toHaveLength(1)
+  f.calls[0]!.finish()
+  await first.done
+  ;(await f.ready(2)).finish()
+})
+
+it('requires sending or cancelling paused outbox text before changing its model and effort', async () => {
+  const f = fixture(),
+    first = f.start()
+  await f.ready(1)
+  const item = f.queue('must retain original selection')
+  await f.runtime.stop('parent', f.worker.id)
+  await first.done
+  const preference = { ...f.worker.preference, model: 'new-model' }
+  expect(() => f.runtime.configureWorker('parent', f.worker.id, preference)).toThrow('包含已暂停消息')
+  expect(f.worker.preference.model).toBe('synthetic-model')
+  expect(f.items()).toMatchObject([{ id: item.id, state: 'paused' }])
+  f.runtime.cancelQueuedFollowup('parent', f.worker.id, item.id)
+  expect(f.runtime.configureWorker('parent', f.worker.id, preference).preference.model).toBe('new-model')
+})
+
+it('keeps a same-message reservation until every upgrade lease releases, and Stop cancels all leases', async () => {
+  const f = fixture(),
+    id = randomUUID(),
+    first = f.runtime.reserveSubmission('parent', f.worker.id, id),
+    upgraded = f.runtime.reserveSubmission('parent', f.worker.id, id)
+  expect(first.signal).toBe(upgraded.signal)
+  first.release()
+  first.release()
+  expect(f.runtime.snapshot('parent', f.worker.id)).toMatchObject({
+    selectedBusy: true,
+    selectedBusyReason: 'accepting',
+  })
+  await f.runtime.stop('parent', f.worker.id)
+  expect(upgraded.signal.aborted).toBe(true)
+  upgraded.release()
+  expect(f.runtime.snapshot('parent', f.worker.id).selectedBusy).toBe(false)
+})
+
+it('upgrades a unified queue Remote before its parent lookup returns without replay or a late card', async () => {
+  const f = fixture(),
+    first = f.start(),
+    gate = deferred<any>(),
+    agent = await f.service.parent('parent')
+  cleanups.push(() => gate.resolve(agent))
+  await f.ready(1)
+  f.service.parent.mockImplementationOnce(() => gate.promise)
+  const request = {
+    id: randomUUID(),
+    clientId: randomUUID(),
+    sequence: 1,
+    prompt: 'queue upgraded while accepting',
+    mode: 'queue',
+    intent: 'running',
+    expectedRunId: f.worker.runId,
+  }
+  const queuing = f.service.submitMessage(
+    'parent',
+    f.worker.id,
+    JSON.stringify(request),
+    new AbortController().signal,
+  )
+  const upgraded = await f.service.submitMessage(
+    'parent',
+    f.worker.id,
+    JSON.stringify({ ...request, mode: 'interrupt', sequence: 2 }),
+    new AbortController().signal,
+  )
+  expect(JSON.parse(upgraded).messageId).toBe(request.id)
+  const priority = await f.ready(2)
+  await first.done
+  expect(f.items()).toEqual([])
+  gate.resolve(agent)
+  await queuing
+  expect(f.items()).toEqual([])
+  expect(f.calls).toHaveLength(2)
+  expect(
+    f.storage
+      .history(f.worker.id)
+      .filter((event) => event.kind === 'user' && event.queuedFollowupId === request.id),
+  ).toHaveLength(1)
+  expect(
+    f.runtime
+      .snapshot('parent', f.worker.id)
+      .timeline.filter((event) => event.queuedFollowupId === request.id),
+  ).toMatchObject([{ kind: 'user', text: request.prompt }])
+  priority.finish()
+})
+
+it('does not let a stale Harness job cancel callback stop a later explicit round', async () => {
+  const f = fixture(),
+    first = f.start()
+  ;(await f.ready(1)).finish()
+  await first.done
+  const second = f.start()
+  await f.ready(2)
+  first.cancel()
+  expect(f.calls[1]!.spec.signal?.aborted).toBe(false)
+  expect(f.worker.status).toBe('running')
+  f.calls[1]!.finish()
+  expect((await second.done).status).toBe('completed')
+})
+
+it('preserves unknown steering after attempted delivery and never redelivers an unacknowledged receipt', async () => {
+  const steer = vi.fn(async () => {
+      throw new Error('synthetic receipt timeout')
+    }),
+    f = fixture({ cli: 'pi', steer }),
+    first = f.start()
+  await f.ready(1)
+  const id = randomUUID(),
+    runId = f.worker.runId
+  const send = () =>
+    f.runtime.sendRunningMessage('parent', f.worker.id, 'unknown delivery', runId, id, undefined, 'steer')
+  await expect(send()).rejects.toMatchObject({ code: 'STEER_UNKNOWN' })
+  await expect(send()).rejects.toMatchObject({ code: 'STEER_UNKNOWN' })
+  f.calls[0]!.finish()
+  await first.done
+  await expect(send()).rejects.toMatchObject({ code: 'STEER_UNKNOWN' })
+  expect(steer).toHaveBeenCalledTimes(1)
+  expect(f.items()).toEqual([])
+})
+
+it('preserves attempted steering unknown delivery in the unified Remote error details', async () => {
+  const steer = vi.fn(async () => {
+      throw new Error('synthetic unknown native receipt')
+    }),
+    f = fixture({ cli: 'pi', steer })
+  f.start()
+  await f.ready(1)
+  const request = JSON.stringify({
+    id: randomUUID(),
+    clientId: randomUUID(),
+    sequence: 1,
+    prompt: 'unknown via Remote',
+    mode: 'steer',
+    intent: 'running',
+    expectedRunId: f.worker.runId,
+  })
+  await expect(
+    f.service.submitMessage('parent', f.worker.id, request, new AbortController().signal),
+  ).rejects.toMatchObject({ details: { deliveryUnknown: true } })
+  expect(steer).toHaveBeenCalledTimes(1)
+  expect(f.items()).toEqual([])
+})
+
+it('steers the current native run independently of an older paused queue', async () => {
+  const steer = vi.fn(async () => {}),
+    f = fixture({ cli: 'pi', steer }),
+    first = f.start()
+  await f.ready(1)
+  const queued = f.queue('old queue remains paused')
+  await f.runtime.stop('parent', f.worker.id)
+  await first.done
+  const next = f.start()
+  await f.ready(2)
+  const runId = f.worker.runId,
+    requestId = randomUUID()
+  await f.runtime.steerMessage('parent', f.worker.id, 'independent native direction', runId, requestId)
+  expect(steer).toHaveBeenCalledTimes(1)
+  expect(f.worker.runId).toBe(runId)
+  expect(f.items()).toMatchObject([{ id: queued.id, state: 'paused' }])
+  expect(f.calls).toHaveLength(2)
+  f.calls[1]!.finish()
+  await next.done
+  expect(f.items()).toMatchObject([{ id: queued.id, state: 'paused' }])
+})
+
+it('accepts a different native steering id without waiting for the earlier acknowledgement', async () => {
+  const ack = deferred(),
+    steer = vi
+      .fn()
+      .mockImplementationOnce(async () => ack.promise)
+      .mockResolvedValue(undefined),
+    f = fixture({ cli: 'pi', steer })
+  cleanups.push(() => ack.resolve())
+  const first = f.start()
+  await f.ready(1)
+  const runId = f.worker.runId,
+    a = randomUUID(),
+    b = randomUUID()
+  let firstAcknowledged = false
+  const firstSend = f.runtime.steerMessage('parent', f.worker.id, 'first direction', runId, a).then(() => {
+    firstAcknowledged = true
+  })
+  await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1))
+  await f.runtime.steerMessage('parent', f.worker.id, 'second direction', runId, b)
+  expect(steer).toHaveBeenCalledTimes(2)
+  expect(firstAcknowledged).toBe(false)
+  expect(f.worker.runId).toBe(runId)
+  expect(f.items()).toEqual([])
+  ack.resolve()
+  await firstSend
+  f.calls[0]!.finish()
+  await first.done
+})
+
+it('rejects independent steering when its pinned run ends during authorization without creating a queue', async () => {
+  const gate = deferred<string>(),
+    steer = vi.fn(async () => {}),
+    f = fixture({ cli: 'pi', steer }),
+    first = f.start()
+  cleanups.push(() => gate.resolve('synthetic-account'))
+  await f.ready(1)
+  let authorizationSignal: AbortSignal | undefined
+  vi.mocked(readCliAccountBinding).mockImplementationOnce(
+    async (_cli, _backend, _config, _project, signal) => {
+      authorizationSignal = signal
+      return gate.promise
+    },
+  )
+  const send = f.runtime.steerMessage(
+    'parent',
+    f.worker.id,
+    'must not reach an ended run',
+    f.worker.runId,
+    randomUUID(),
+  )
+  const rejected = expect(send).rejects.toThrow()
+  await vi.waitFor(() => expect(authorizationSignal).toBeDefined())
+  f.calls[0]!.finish()
+  await vi.waitFor(() => expect(authorizationSignal?.aborted).toBe(true))
+  gate.resolve('synthetic-account')
+  await rejected
+  await first.done
+  expect(steer).not.toHaveBeenCalled()
+  expect(f.items()).toEqual([])
+  expect(f.calls).toHaveLength(1)
+})
+
+it('preserves unknown delivery on the dedicated steering Remote without queue admission', async () => {
+  const steer = vi.fn(async () => {
+      throw new Error('synthetic missing native ACK')
+    }),
+    f = fixture({ cli: 'pi', steer })
+  f.start()
+  await f.ready(1)
+  const queueAdmission = vi.spyOn(f.runtime, 'queueFollowup')
+  await expect(
+    f.service.steerMessage(
+      'parent',
+      f.worker.id,
+      'dedicated unknown',
+      f.worker.runId,
+      randomUUID(),
+      new AbortController().signal,
+    ),
+  ).rejects.toMatchObject({ details: { deliveryUnknown: true } })
+  expect(steer).toHaveBeenCalledTimes(1)
+  expect(queueAdmission).not.toHaveBeenCalled()
+  expect(f.items()).toEqual([])
+})
+
+it('rejects a dedicated steering Remote that loses its target during parent lookup without scheduling later', async () => {
+  const steer = vi.fn(async () => {}),
+    f = fixture({ cli: 'pi', steer }),
+    first = f.start()
+  await f.ready(1)
+  const agent = await f.service.parent('parent'),
+    gate = deferred<any>()
+  cleanups.push(() => gate.resolve(agent))
+  f.service.parent.mockImplementationOnce(() => gate.promise)
+  const sending = f.service.steerMessage(
+    'parent',
+    f.worker.id,
+    'current turn only',
+    f.worker.runId,
+    randomUUID(),
+    new AbortController().signal,
+  )
+  const rejected = expect(sending).rejects.toThrow('尚未准备好或已经结束')
+  f.calls[0]!.finish()
+  await first.done
+  gate.resolve(agent)
+  await rejected
+  expect(steer).not.toHaveBeenCalled()
+  expect(f.items()).toEqual([])
+  expect(f.calls).toHaveLength(1)
 })

@@ -56,6 +56,7 @@ import { spawnAccountTerminal, WindowsAccountTerminalError } from './windows-acc
 import { WindowsCliInstallationError, WindowsCliNotFoundError } from './windows-cli-installation.ts'
 import { effectiveHermesHome } from './hermes-account-context.ts'
 import { ensureHermesNousFresh, HermesRenewalError, reserveHermesAccount } from './hermes-renewal.ts'
+import { readQoderAccount, qoderEnvironment, QODER_METADATA_ARGUMENTS } from './qoder-accounts.ts'
 
 const STATUS_TIMEOUT = 10_000
 const STARTUP_TIMEOUT = 30_000
@@ -69,6 +70,12 @@ const validateCli = (cli: CliId) => {
   if (!(CLI_IDS as readonly string[]).includes(cli)) throw new Error('不支持的 CLI')
 }
 const instructionFor = (cli: CliId, action: AccountAction): string => {
+  if (cli === 'qoder')
+    return action === 'login'
+      ? '按 Qoder 原生提示完成登录；设置 PAT 环境变量时优先使用该 PAT。'
+      : action === 'logout'
+        ? '在 Qoder 原生终端输入 /logout 并确认；PAT 环境变量须由你自行清除。'
+        : '在 Qoder 原生终端使用 /login、/logout 和 /status 管理账号。'
   if (cli === 'zcode' || cli === 'grok') return zcodeGrokInstruction(cli, action)
   if (cli === 'antigravity')
     return action === 'manage'
@@ -117,6 +124,7 @@ const actionsFor = (cli: CliId, config: RuntimeConfig): AccountStatus['actions']
 
 /** Only commands verified against the installed CLIs. Never send a prompt/slash command. */
 const argumentsFor = (cli: CliId, action: AccountAction): string[] => {
+  if (cli === 'qoder') return action === 'login' ? ['login'] : []
   if (cli === 'antigravity' || action === 'manage' || (cli === 'kimi' && action === 'logout')) return []
   if (cli === 'codex' || cli === 'kimi') return [action]
   return ['auth', action]
@@ -319,7 +327,8 @@ export class AccountManager {
         actions: [],
       }
     const timer = new AbortController()
-    const timeout = setTimeout(() => timer.abort(), STATUS_TIMEOUT)
+    // Qoder's native account budget includes its acknowledged session teardown.
+    const timeout = setTimeout(() => timer.abort(), cli === 'qoder' ? 15_000 : STATUS_TIMEOUT)
     timeout.unref?.()
     const control = AbortSignal.any([signal, this.controller.signal, timer.signal])
     let installed = false
@@ -327,6 +336,11 @@ export class AccountManager {
       const executable = await resolveCliExecutable(cli, this.backend, this.config, control)
       installed = true
       control.throwIfAborted()
+      if (cli === 'qoder')
+        return {
+          cli, installed, ...(await readQoderAccount(executable, control, { backend: this.backend, config: this.config, project: cwd })),
+          actions: this.backend.spawnTerminal ? actionsFor(cli, this.config) : [],
+        }
       if (cli === 'mimo')
         return {
           cli,
@@ -666,6 +680,9 @@ export class AccountManager {
           action === 'logout'
             ? '退出 Claude 官方账号；本地代理设置保留。'
             : '在原生终端登录 Claude 官方账号；本地代理设置保留。'
+      } else if (cli === 'qoder') {
+        launch.argv = [executable, ...QODER_METADATA_ARGUMENTS.filter((value) => value !== '--acp'), ...argumentsFor(cli, action)]
+        launch.env = qoderEnvironment()
       } else if (cli === 'kimi') {
         if (action === 'login') {
           const current = await this.readStatus(cli, cwd, startup)

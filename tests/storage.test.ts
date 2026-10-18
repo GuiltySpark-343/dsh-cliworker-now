@@ -51,6 +51,15 @@ function fixture(status: Worker['status'] = 'completed') {
 }
 
 describe('Hermes migration preserves retired Harness history', () => {
+  it('retains only safe request lifecycle fields on a cold history read', () => {
+    const f = fixture()
+    const requestState = { nativeRunId: 'native-run', sequence: 3, phase: 'failed', statusCode: 429, reason: 'upstream_rate_limit', retryCount: 0, retryable: true }
+    const row = JSON.parse(readFileSync(f.eventPath, 'utf8'))
+    writeFileSync(f.eventPath, JSON.stringify({ ...row, kind: 'status', requestState: { ...requestState, message: 'NOT_PUBLIC' } }) + '\n')
+    const store = new WorkerStorage(f.dir)
+    cleanup.push(() => store.close())
+    expect(store.history(f.worker.id)[0]?.requestState).toEqual(requestState)
+  })
   it('loads legacy settings and history unchanged while giving Hermes independent defaults', () => {
     const f = fixture()
     const original = [f.workerPath, f.eventPath, f.preferencePath].map((p) => readFileSync(p, 'utf8'))
@@ -205,4 +214,19 @@ it('persists submission states and merges native user identities regardless of a
       admittedRunId: f.worker.runId,
     },
   ])
+})
+
+it('keeps proven response identity and per-call usage when Worker events are reopened', () => {
+  const f = fixture()
+  f.worker.preference.cli = 'antigravity'
+  writeFileSync(f.workerPath, JSON.stringify(f.worker))
+  const store = new WorkerStorage(f.dir)
+  const response = { id: 'agy:24', blockId: 'text', index: 0, complete: true as const,
+    usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 300, cacheWriteTokens: 0, totalTokens: 420 } }
+  store.append(f.worker, { kind: 'assistant', text: 'Synthetic response', step: 24, response })
+  store.close()
+  const cold = new WorkerStorage(f.dir)
+  cleanup.push(() => cold.close())
+  expect(cold.history(f.worker.id).at(-1)?.response).toEqual(response)
+  expect(foldEvents(cold.history(f.worker.id)).at(-1)?.response).toEqual(response)
 })

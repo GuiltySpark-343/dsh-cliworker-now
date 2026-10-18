@@ -363,6 +363,12 @@ describe('extended worker boundaries (simulated protocol)', () => {
         )
         temporary = launch.env.TMPDIR
         expect(temporary && existsSync(temporary)).toBe(true)
+        // ZCode 0.16.9 creates this exact-length broker socket basename.
+        // macOS sockaddr_un must also fit its terminating NUL (104 bytes).
+        expect(Buffer.byteLength(join(temporary!, 'znr-00000000-0000-4000-8000-000000000000.sock'))).toBeLessThan(104)
+        expect(statSync(temporary!).mode & 0o777).toBe(0o700)
+        expect(launch.env.TMP).toBe(temporary)
+        expect(launch.env.TEMP).toBe(temporary)
         const outside = join(root, 'outside')
         writeFileSync(outside, 'external')
         chmodSync(outside, 0o644)

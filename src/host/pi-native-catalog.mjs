@@ -142,7 +142,11 @@ async function nativeCandidates(
     if (runtime.getError()) throw new Error('Invalid native Pi model config')
     return runtime.getAvailableSnapshot()
   }
-  const args = ['models', '--json', '--no-extensions', '--config', join(directory, 'config.yml')]
+  // Listing alone accepts an old authoritative cache indefinitely. Refresh via
+  // OMP's own registry so its dynamic model conversion and later RPC execution
+  // agree. The caller holds the managed-account lease; original native sources
+  // are never passed as this directory, and OAuth rotation uses the Host CAS.
+  const args = ['models', ...(options.refresh ? ['refresh'] : []), '--json', '--no-extensions', '--config', join(directory, 'config.yml')]
   const nativeArgs = nativeLaunchArgv([executable, ...args])
   const child = spawnNativeProcess(nativeArgs[0], nativeArgs.slice(1), {
     cwd: directory,
@@ -167,10 +171,16 @@ async function nativeCandidates(
     else stderr += chunk
   })
   let force
+  const terminate = () => {
+    child.kill('SIGTERM')
+    force ??= setTimeout(() => child.kill('SIGKILL'), 5000)
+  }
+  const abort = () => terminate()
+  options.signal?.addEventListener('abort', abort, { once: true })
+  if (options.signal?.aborted) abort()
   const timer = setTimeout(() => {
     timedOut = true
-    child.kill('SIGTERM')
-    force = setTimeout(() => child.kill('SIGKILL'), 5000)
+    terminate()
   }, 20000)
   const outcome = await new Promise((resolve, reject) => {
     child.once('error', () => reject(new Error('Unable to start native catalog')))
@@ -178,9 +188,10 @@ async function nativeCandidates(
   }).finally(() => {
     clearTimeout(timer)
     clearTimeout(force)
+    options.signal?.removeEventListener('abort', abort)
   })
   if (
-    timedOut ||
+    timedOut || options.signal?.aborted ||
     outcome !== 0 ||
     size > 16 * 1024 * 1024 ||
     errorSize > 2 * 1024 * 1024 ||

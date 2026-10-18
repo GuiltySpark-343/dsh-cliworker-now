@@ -25,10 +25,15 @@ import { prepareHermes, discoverHermes } from './hermes-adapter.ts'
 import { effectiveHermesHome } from './hermes-account-context.ts'
 import { prepareGrok, discoverGrok } from './grok-adapter.ts'
 import type { HermesRenewalContext } from './hermes-renewal.ts'
+import { prepareNativeWorker } from './native-worker.ts'
+import { cleanupHermesHttpHome } from './native-hermes-home.mjs'
 
 export const EXTENDED_CLIS = ['zcode', 'grok', 'omp', 'pi', 'hermes', 'opencode'] as const
 export const isExtendedCli = (cli: string): cli is (typeof EXTENDED_CLIS)[number] =>
   (EXTENDED_CLIS as readonly string[]).includes(cli)
+// ZCode app-server appends `znr-${uuid}.sock` to TMPDIR. macOS's default
+// /var/folders directory plus our private child can exceed sockaddr_un.
+const nativeTemporaryRoot = () => process.platform === 'darwin' ? '/tmp' : tmpdir()
 const privateArgv = (argv: string[]) => [
   process.execPath,
   fileURLToPath(new URL('./private-launch.mjs', import.meta.url)),
@@ -125,14 +130,24 @@ export async function extendedLaunch(
   conversationId?: string,
   metadataCapture?: PiOmpMetadataCapture,
   renewal?: HermesRenewalContext,
+  nativeTransport = false,
 ) {
   const state = privateDirectory(stateDirectory)
-  const input = { executable, project, preference, mode, prompt, conversationId, stateDirectory: state }
+  const input = {
+    executable,
+    project,
+    preference,
+    mode,
+    prompt,
+    conversationId,
+    stateDirectory: state,
+    nativeTransport,
+  }
   const metadata: PiOmpMetadataCapture | undefined =
     metadataCapture &&
     ((argv, env, phase, scope) =>
       metadataCapture(privateArgv(argv), { ...env, ELECTRON_RUN_AS_NODE: '1' }, phase, scope))
-  const launch =
+  const prepared =
     cli === 'zcode'
       ? await prepareZCode({
           ...input,
@@ -144,6 +159,7 @@ export async function extendedLaunch(
             {
               ...input,
               cli,
+              ...(config.harnessTools ? { harnessTools: config.harnessTools } : {}),
               accountRoot:
                 config.stateDirectory ??
                 join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'cliworker-now'),
@@ -160,24 +176,43 @@ export async function extendedLaunch(
             : cli === 'grok'
               ? await prepareGrok(input)
               : undefined
-  if (!launch) throw new Error('未知 CLI')
-  const temporary = cli === 'zcode' ? mkdtempSync(join(tmpdir(), 'cwn-')) : undefined
-  if (temporary) chmodSync(temporary, 0o700)
-  const env = {
-    ...launch.env,
-    ...(temporary ? { TMPDIR: temporary, TMP: temporary, TEMP: temporary } : {}),
-    ELECTRON_RUN_AS_NODE: '1',
+  if (!prepared) throw new Error('未知 CLI')
+  let launch = prepared
+  let temporary: string | undefined
+  const cleanupLaunch = async () => {
+    try {
+      if ('cleanup' in launch && launch.cleanup) await launch.cleanup()
+    } finally {
+      // The Host runs this only after its full process range has exited. The
+      // runner's finally may have been skipped by forced termination.
+      if (nativeTransport && cli === 'hermes') await cleanupHermesHttpHome(state)
+    }
   }
   try {
+    if (nativeTransport && cli !== 'pi' && cli !== 'omp')
+      launch = await prepareNativeWorker(
+        prepared,
+        { cli, project, preference, mode, prompt, conversationId, stateDirectory: state,
+          ...(config.harnessTools ? { harnessTools: config.harnessTools } : {}) },
+        config,
+      )
+    temporary = cli === 'zcode' ? mkdtempSync(join(nativeTemporaryRoot(), 'cwn-')) : undefined
+    if (temporary) chmodSync(temporary, 0o700)
+    const env = {
+      ...launch.env,
+      ...(temporary ? { TMPDIR: temporary, TMP: temporary, TEMP: temporary } : {}),
+      ELECTRON_RUN_AS_NODE: '1',
+    }
     const argv = privateArgv(launch.argv)
     return {
       argv,
       env,
       ...('activate' in launch && launch.activate ? { activate: launch.activate } : {}),
       ...('steer' in launch && launch.steer ? { steer: launch.steer } : {}),
+      ...('stop' in launch && launch.stop ? { stop: launch.stop } : {}),
       cleanup: async () => {
         try {
-          if ('cleanup' in launch && launch.cleanup) await launch.cleanup()
+          await cleanupLaunch()
           sealPrivateTree(state)
         } finally {
           if (temporary) rmSync(temporary, { recursive: true, force: true })
@@ -185,8 +220,11 @@ export async function extendedLaunch(
       },
     }
   } catch (error) {
-    if ('cleanup' in launch && launch.cleanup) await launch.cleanup()
-    if (temporary) rmSync(temporary, { recursive: true, force: true })
+    try {
+      await cleanupLaunch()
+    } finally {
+      if (temporary) rmSync(temporary, { recursive: true, force: true })
+    }
     throw error
   }
 }
@@ -203,7 +241,7 @@ export async function extendedCatalog(
   const catalogRoot = privateDirectory(join(stateDirectory, 'catalog', cli))
   const state = privateDirectory(mkdtempSync(join(catalogRoot, 'query-')))
   const run = async (argv: string[], env?: Record<string, string>) => {
-    const temporary = cli === 'zcode' ? mkdtempSync(join(tmpdir(), 'cwn-')) : undefined
+    const temporary = cli === 'zcode' ? mkdtempSync(join(nativeTemporaryRoot(), 'cwn-')) : undefined
     if (temporary) chmodSync(temporary, 0o700)
     try {
       return await capture(privateArgv(argv), {

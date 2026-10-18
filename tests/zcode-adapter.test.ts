@@ -12,6 +12,7 @@ import {
   linkSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { createHash } from 'node:crypto'
 import { join, dirname } from 'node:path'
 import {
   discoverZCode,
@@ -127,6 +128,62 @@ function fixture(maxLineBytes = 8192) {
 }
 
 describe('ZCode adapter (explicitly synthetic fixtures)', () => {
+  it('prepares an exact single-account app-server bundle only in its private child environment', async () => {
+    const f = setup(),
+      data: any = builtin(),
+      identity = 'synthetic-current-account'
+    data.revision = 7
+    data.config.providerConfigRules.providerRules[0].config.access = {
+      type: 'zhipu-account',
+      accountType: 'bigmodel',
+      mode: 'individual-coding-plan',
+      entitled: false,
+    }
+    writeFileSync(f.path, JSON.stringify(data))
+    mkdirSync(join(f.input.authDirectory, '.zcode/v2'), { recursive: true, mode: 0o700 })
+    const credentials = {
+      [`account-provider:${route}:identity`]: identity,
+      [`account-provider:coding-plan:${route}:account:${encodeURIComponent(identity)}:api-key`]:
+        'SYNTHETIC_CURRENT_KEY',
+      'zhipu:access-token': 'SYNTHETIC_OAUTH_NOT_A_WORKER_KEY',
+    }
+    writeFileSync(join(f.input.authDirectory, '.zcode/v2/credentials.json'), JSON.stringify(credentials), {
+      mode: 0o600,
+    })
+    const launch = await prepareZCode({
+      ...f.input,
+      nativeTransport: true,
+      conversationId: 'synthetic-session',
+    })
+    const bundle = JSON.parse((launch.env as any).CLIWORKER_ZCODE_NATIVE_ACCOUNT)
+    expect(bundle.selection).toEqual({
+      providerId: route,
+      modelId: 'GLM-5.3-Flash',
+      options: { reasoningLevel: 'low' },
+    })
+    expect(bundle.binding).toEqual({ identity, key: 'SYNTHETIC_CURRENT_KEY' })
+    expect(bundle.snapshot.providers).toEqual({
+      [route]: { access: { type: 'zhipu-account', entitled: true } },
+    })
+    expect(bundle.snapshot.states).toEqual({
+      [route]: { availability: 'available', entitled: true, current: true },
+    })
+    expect(bundle.snapshot.basedOnZCodeBuiltinRevision).toBe(
+      `zcode-builtin:7:${createHash('sha256').update(f.path).digest('hex')}`,
+    )
+    expect(JSON.stringify(launch.argv)).not.toContain('SYNTHETIC_CURRENT_KEY')
+    expect(readFileSync(launch.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE, 'utf8')).not.toContain(
+      'SYNTHETIC_CURRENT_KEY',
+    )
+    expect(launch.argv).not.toContain('zcode-resume.mjs')
+    delete credentials[
+      `account-provider:coding-plan:${route}:account:${encodeURIComponent(identity)}:api-key`
+    ]
+    writeFileSync(join(f.input.authDirectory, '.zcode/v2/credentials.json'), JSON.stringify(credentials), {
+      mode: 0o600,
+    })
+    await expect(prepareZCode({ ...f.input, nativeTransport: true })).rejects.toThrow('绑定缺失或已变化')
+  })
   it('keeps native identity, mode, auth location and prompt as separate arguments', async () => {
     const { input, root, state } = setup(),
       auth = join(root, 'auth')

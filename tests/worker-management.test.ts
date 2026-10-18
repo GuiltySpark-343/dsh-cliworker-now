@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { PassThrough } from 'node:stream'
 import { WorkerStorage } from '../src/host/storage.ts'
-import { WorkerRuntime } from '../src/host/runtime.ts'
+import { WorkerRuntime } from './fixtures/legacy-runtime.ts'
 import { CliWorkerService } from '../src/host/index.ts'
 import { DEFAULT_CONFIG, ProcessCleanupUnconfirmedError, type ProcessBackend } from '../src/host/process.ts'
 import { validatePreference } from '../src/host/adapters.ts'
@@ -126,6 +126,7 @@ function fixture() {
   }
   const service: any = Object.create(CliWorkerService.prototype)
   Object.assign(service, {
+    nativeRunDone: new Map(),
     runtime,
     backend,
     options: DEFAULT_CONFIG,

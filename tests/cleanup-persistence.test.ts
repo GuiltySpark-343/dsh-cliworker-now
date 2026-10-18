@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { PassThrough } from 'node:stream'
 import { WorkerStorage } from '../src/host/storage.ts'
-import { WorkerRuntime } from '../src/host/runtime.ts'
+import { WorkerRuntime } from './fixtures/legacy-runtime.ts'
 import { CliWorkerService } from '../src/host/index.ts'
 import { authorizedCatalog } from '../src/host/authorized-catalog.ts'
 import { DEFAULT_CONFIG, ProcessCleanupUnconfirmedError, type ProcessBackend } from '../src/host/process.ts'
@@ -121,6 +121,7 @@ function fixture() {
   const serviceFor = (current: WorkerRuntime) => {
     const service: any = Object.create(CliWorkerService.prototype)
     Object.assign(service, {
+      nativeRunDone: new Map(),
       runtime: current,
       backend,
       options: DEFAULT_CONFIG,
@@ -315,4 +316,104 @@ describe('durable Host cleanup quarantine', () => {
     expect(f.storage.cleanupBlockState()).toBe('none')
     expect(f.backend.spawn).not.toHaveBeenCalled()
   })
+})
+
+it.each(['stop', 'job-cancel'] as const)(
+  'cancels queued work despite repeated state writes failing through %s',
+  async (method) => {
+    const f = fixture()
+    const task = f.runtime.submit(
+      'parent',
+      f.project,
+      'Synthetic disk fault',
+      'must not spawn',
+      preference,
+      'accept-edits',
+    )
+    const save = vi.spyOn(f.storage, 'save').mockImplementation(() => {
+      throw new Error('Synthetic persistent disk failure')
+    })
+    try {
+      if (method === 'stop')
+        await expect(f.runtime.stop('parent', task.worker.id)).rejects.toThrow('停止状态持久化失败')
+      else task.cancel()
+      const result = await task.done
+      expect(result.status).toBe('failed')
+      expect(result.error).toContain('持久化失败')
+      await vi.waitFor(() => expect(f.runtime.snapshot('parent', task.worker.id).selectedBusy).toBe(false))
+      expect(f.backend.spawn).not.toHaveBeenCalled()
+      expect(() => f.runtime.assertCliEnabled('antigravity')).toThrow('持久化失败')
+    } finally {
+      save.mockRestore()
+    }
+  },
+)
+
+it('waits for the running process range to exit before reporting a stop-state write failure', async () => {
+  const f = fixture()
+  const started = Promise.withResolvers<void>(),
+    exit = Promise.withResolvers<{ exitCode: number }>(),
+    quiescent = Promise.withResolvers<void>()
+  const terminate = vi.fn(() => {})
+  vi.mocked(f.backend.spawn).mockImplementationOnce((spec) => {
+    const stdout = new PassThrough(),
+      stderr = new PassThrough()
+    const finish = () => {
+      stdout.end()
+      stderr.end()
+      exit.resolve({ exitCode: 143 })
+    }
+    terminate.mockImplementation(finish)
+    spec.signal?.addEventListener('abort', finish, { once: true })
+    started.resolve()
+    return {
+      stdout,
+      stderr,
+      done: exit.promise,
+      terminate,
+      waitForExit: async () => {
+        await quiescent.promise
+        return true
+      },
+    } as any
+  })
+  const task = f.runtime.submit(
+    'parent',
+    f.project,
+    'Synthetic active disk fault',
+    'synthetic running',
+    preference,
+    'accept-edits',
+  )
+  await started.promise
+  const save = vi.spyOn(f.storage, 'save').mockImplementation(() => {
+    throw new Error('Synthetic persistent disk failure')
+  })
+  try {
+    let settled = false
+    const stopping = f.runtime.stop('parent', task.worker.id)
+    const rejected = expect(stopping).rejects.toThrow('停止状态持久化失败')
+    void stopping.then(
+      () => {
+        settled = true
+      },
+      () => {
+        settled = true
+      },
+    )
+    await vi.waitFor(() => expect(terminate).toHaveBeenCalled())
+    expect(settled).toBe(false)
+    expect(f.runtime.snapshot('parent', task.worker.id).selectedBusy).toBe(true)
+    quiescent.resolve()
+    await rejected
+    await expect(task.done).resolves.toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('持久化失败'),
+    })
+    expect(f.runtime.snapshot('parent', task.worker.id).selectedBusy).toBe(false)
+    expect(f.backend.spawn).toHaveBeenCalledTimes(1)
+  } finally {
+    quiescent.resolve()
+    save.mockRestore()
+  }
 })

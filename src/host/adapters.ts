@@ -3,6 +3,7 @@ import { discoverClaudeNativeOAuth } from './claude-native-oauth.ts'
 import { discoverCodexModels } from './codex-models.ts'
 import { discoverAgyAccountModels } from './agy-models.ts'
 import { agyBackgroundEnvironment } from './agy-background-environment.ts'
+import { discoverQoderModels } from './qoder-accounts.ts'
 import { discoverFirstPartySources, readFirstPartyModelSources } from './first-party-models.ts'
 import { nativeAgyAccountIdentity } from './agy-windows-account.ts'
 import { extendedCatalog, isExtendedCli } from './extended-adapters.ts'
@@ -16,6 +17,7 @@ import {
   findWindowsCodexAppx,
   hasWindowsHermesInstallDirectory,
   presentWindowsCliCandidate,
+  windowsQoderCliEntry,
   WindowsCliInstallationError,
   WindowsCliNotFoundError,
 } from './windows-cli-installation.ts'
@@ -71,6 +73,12 @@ export const executableFor = (cli: CliId, config: RuntimeConfig): string => {
   // custom executable still wins, and a missing deployment keeps native lookup.
   if (cli === 'zcode' && entryPresent(managedZCodeEntry())) return managedZCodeEntry()
   if (process.platform === 'win32') {
+    // The official qoder alias may dispatch to the IDE. Its standalone CLI is
+    // qodercli; Desktop's inherited PATH can predate the native/npm install.
+    if (cli === 'qoder') {
+      const entry = presentWindowsCliCandidate(cli)
+      return entry ?? 'qodercli'
+    }
     const roots = [
       join(homedir(), '.local', 'bin'),
       join(
@@ -179,6 +187,11 @@ export async function catalogFor(
 ): Promise<Catalog> {
   const executable = await resolveCliExecutable(cli, backend, config, signal)
   signal.throwIfAborted()
+  if (cli === 'qoder') {
+    const models = await discoverQoderModels(backend, config, executable, cwd, signal)
+    if (!models.length) throw new Error('Qoder 当前账号暂无可确认模型，请登录或刷新')
+    return { cli, models, notice: 'Qoder 原生账号模型目录；调用权限以实际请求为准' }
+  }
   if (isExtendedCli(cli)) {
     const models = await extendedCatalog(
       cli,
@@ -285,11 +298,17 @@ export function workerArguments(
   prompt: string,
   timeoutMs: number,
   conversationId?: string,
+  nativeTransport = false,
 ): string[] {
   const cli = cliOf(preference)
   const task = `任务：\n${prompt}`
   if (cli === 'antigravity')
     return agyArguments(executable, project, preference, mode, prompt, timeoutMs, conversationId)
+  if (cli === 'qoder') {
+    if (!nativeTransport) throw new Error('Qoder 仅支持已确认的原生 ACP 通信，请新建任务')
+    if (mode === 'plan') throw new Error('Qoder 当前 ACP 未公开只读规划模式，无法安全执行规划任务')
+    return [executable, '--acp', '--permission-mode', 'accept_edits', '--model', preference.model]
+  }
   if (cli === 'codex')
     return [
       executable,
@@ -314,6 +333,7 @@ export function workerArguments(
       '--verbose',
       '--output-format',
       'stream-json',
+      '--include-partial-messages',
       '--model',
       preference.model,
       ...(preference.effort !== 'default' ? ['--effort', preference.effort] : []),
@@ -323,7 +343,7 @@ export function workerArguments(
       task,
     ]
   if (cli === 'kimi') {
-    if (mode === 'plan')
+    if (mode === 'plan' && !nativeTransport)
       throw new Error('Kimi 当前非交互模式不支持只读派遣，请使用其他 CLI 或明确授权写入任务')
     if (preference.effort !== 'default') throw new Error('Kimi CLI 不支持传入思考强度')
     return [
@@ -361,6 +381,7 @@ export function protocolFor(
   expectedModel?: string,
 ) {
   if (cli === 'harness') throw new Error('Harness CLI 已移除，历史记录仅供查看')
+  if (cli === 'qoder') throw new Error('Qoder 必须通过原生 ACP 桥运行')
   if (cli === 'zcode') return new ZCodeProtocol(emit, identify, maxLineBytes, expectedModel)
   if (cli === 'hermes') return new HermesProtocol(emit, identify, maxLineBytes)
   if (cli === 'grok') return new GrokProtocol(emit, identify, maxLineBytes)
@@ -414,6 +435,7 @@ export async function resolveCliExecutable(
     backend,
     selected ? configWithExecutable(cli, config, selected) : config,
     signal,
+    entry?.mode === 'auto' && !deployment,
   )
   signal.throwIfAborted()
   const current = store.read(cli)
@@ -433,6 +455,7 @@ async function resolveUncachedCliExecutable(
   backend: ProcessBackend,
   config: RuntimeConfig,
   signal: AbortSignal = AbortSignal.timeout(15000),
+  automaticSelection = false,
 ): Promise<string> {
   signal.throwIfAborted()
   const executable = executableFor(cli, config)
@@ -440,7 +463,7 @@ async function resolveUncachedCliExecutable(
   const explicit = !!configured && configured !== cli
   const desktopCli = process.platform === 'win32' && (cli === 'zcode' || cli === 'opencode')
   let resolved: string
-  if (isExtendedCli(cli) && /\.[cm]?js$/.test(executable) && existsSync(executable)) {
+  if ((isExtendedCli(cli) || cli === 'qoder') && /\.[cm]?js$/.test(executable) && existsSync(executable)) {
     // JavaScript launchers run through Node and need readability, not an executable bit.
     // A directory ending in .js is a broken configuration, not an installed CLI.
     if (!statSync(executable).isFile()) throw new Error('CLI 脚本路径不是普通文件')
@@ -492,7 +515,14 @@ async function resolveUncachedCliExecutable(
       signal.throwIfAborted()
       const absent =
         error instanceof SubprocessExecutableNotFoundError || ['ENOENT', 'ENOTDIR'].includes(error.code)
-      if (desktopCli && executable === cli && !explicit && absent) {
+      if (process.platform === 'win32' && cli === 'qoder' && executable === 'qodercli' && !explicit && absent) {
+        try { resolved = await pathLookup(() => backend.resolveExecutable('qoder')) } catch (legacy: any) {
+          signal.throwIfAborted()
+          if (legacy instanceof SubprocessExecutableNotFoundError || ['ENOENT', 'ENOTDIR'].includes(legacy.code))
+            throw new WindowsCliNotFoundError('qoder')
+          throw legacy
+        }
+      } else if (desktopCli && executable === cli && !explicit && absent) {
         const entry = await findWindowsDesktopCli(
           cli,
           (argv, cwd) =>
@@ -527,6 +557,8 @@ async function resolveUncachedCliExecutable(
     }
   }
   signal.throwIfAborted()
+  if (process.platform === 'win32' && cli === 'qoder' && (!explicit || automaticSelection))
+    resolved = windowsQoderCliEntry(resolved)
   if (process.platform === 'win32' && cli === 'opencode') {
     const bundled = windowsOpenCodeDesktopCli(resolved, explicit)
     if (bundled) resolved = bundled

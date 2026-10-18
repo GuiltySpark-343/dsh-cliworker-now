@@ -18,7 +18,10 @@ import {
 import { join } from 'node:path'
 import { randomUUID, createHash } from 'node:crypto'
 import { z } from 'zod'
+import { conversationTelemetrySchema, lastRunUsageSnapshotSchema } from './conversation-telemetry.ts'
+import { contextTelemetrySchema } from './context-telemetry.ts'
 import type { CliSettings } from '../shared/cli-settings.ts'
+import { parseNativeResponse } from './native-response.mjs'
 import {
   RUNNING_MESSAGE_MODES,
   defaultRunningMessageMode,
@@ -95,7 +98,7 @@ const cliSettingsSchema = z.object({ enabled: z.partialRecord(storedCliSchema, z
 const enabledByDefault = () => Object.fromEntries(CLI_IDS.map((cli) => [cli, true])) as CliSettings['enabled']
 const runningMessageSchema = z
   .object({
-    policy: z.literal(1),
+    policy: z.union([z.literal(1), z.literal(2)]),
     project: z.string().min(1),
     cli: z.enum(CLI_IDS),
     mode: z.enum(RUNNING_MESSAGE_MODES),
@@ -114,6 +117,23 @@ const workerSchema = z.object({
   preference: storedPreferenceSchema,
   mode: z.enum(['plan', 'accept-edits']),
   conversationId: z.string().optional(),
+  // Bad optional telemetry must not make an otherwise valid conversation unreadable.
+  conversationTelemetry: conversationTelemetrySchema.optional().catch(undefined),
+  lastRunUsageSnapshot: lastRunUsageSnapshotSchema.optional().catch(undefined),
+  contextTelemetry: contextTelemetrySchema.optional().catch(undefined),
+  contextInvalidatedRunId: z.uuid().optional().catch(undefined),
+  harnessConversation: z.object({
+    sessionId: z.string().min(1),
+    parentSessionId: z.string().min(1),
+    mode: z.literal('continuable'),
+    capabilities: z.object({
+      send: z.boolean(), queue: z.boolean(), steer: z.boolean(), stop: z.boolean(),
+      model: z.boolean(), permission: z.boolean(), plan: z.boolean(), attachments: z.boolean(),
+      fork: z.boolean(), skills: z.boolean(), tools: z.boolean(),
+    }),
+    reasons: z.record(z.string(), z.string()).optional(),
+  }).optional(),
+  transport: z.string().min(1).max(128).optional(),
   status: z.enum(['queued', 'running', 'stopping', 'completed', 'failed', 'interrupted', 'uncertain']),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -125,6 +145,15 @@ const workerSchema = z.object({
   lastResult: z.string().optional(),
 })
 const eventSchema = z.object({
+  requestState: z.object({
+    nativeRunId: z.string().regex(/^[\w-]{1,256}$/),
+    sequence: z.number().int().safe().positive(),
+    phase: z.enum(['requesting', 'failed', 'completed']),
+    statusCode: z.number().int().min(100).max(599).optional(),
+    reason: z.string().regex(/^[a-z_]{1,80}$/).optional(),
+    retryCount: z.number().int().safe().nonnegative().optional(),
+    retryable: z.boolean().optional(),
+  }).optional(),
   seq: z.number().int().positive(),
   runId: z.uuid(),
   time: z.string(),
@@ -134,6 +163,23 @@ const eventSchema = z.object({
   step: z.number().optional(),
   state: z.string().optional(),
   detail: z.string().optional(),
+  response: z.unknown().transform((value, context) => {
+    if (value === undefined) return undefined
+    try { return parseNativeResponse(value) }
+    catch { context.addIssue({ code: 'custom', message: 'Invalid native response metadata' }); return z.NEVER }
+  }).optional(),
+  toolCall: z
+    .object({
+      callId: z.string().min(1).max(1024).optional(),
+      parentCallId: z.string().min(1).max(1024).optional(),
+      name: z.string().min(1).max(1024).optional(),
+      input: z.unknown().optional(),
+      output: z.unknown().optional(),
+      command: z.string().max(32768).optional(),
+      exitCode: z.number().int().safe().optional(),
+    })
+    .optional(),
+  resultScope: z.enum(['run', 'response']).optional(),
   queuedFollowupId: z.uuid().optional(),
   deliveryState: z
     .enum(['pending', 'admitted', 'running', 'superseded', 'cancelled', 'failed', 'completed'])
@@ -298,9 +344,68 @@ export class WorkerStorage {
         }
       }
       this.migrateAutomaticNames()
+      this.migrateRunningMessageSettings()
     } catch (error) {
       this.close()
       throw error
+    }
+  }
+  /** Explicitly authorized one-time native-capability reset; later manual choices use policy 2. */
+  private migrateRunningMessageSettings(): void {
+    for (const name of readdirSync(this.directory).filter((file) => file.endsWith('.running-message.json'))) {
+      const path = join(this.directory, name)
+      let value: z.infer<typeof runningMessageSchema>
+      try {
+        value = this.readRunningMessageRecord(path)
+        if (`${this.projectKey(value.project, value.cli)}.running-message.json` !== name) continue
+      } catch {
+        // A bad file remains untouched and is reported by its normal settings read.
+        continue
+      }
+      if (value.policy === 1)
+        atomicJSON(path, { ...value, policy: 2, mode: defaultRunningMessageMode(value.cli) })
+    }
+  }
+  private readRunningMessageRecord(path: string): z.infer<typeof runningMessageSchema> {
+    const info = lstatSync(path)
+    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > 16_384)
+      throw new Error('运行中发送设置无法核验')
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+    try {
+      const opened = fstatSync(fd)
+      if (
+        !opened.isFile() ||
+        opened.ino !== info.ino ||
+        opened.dev !== info.dev ||
+        opened.nlink !== 1 ||
+        opened.size > 16_384
+      )
+        throw new Error('运行中发送设置身份已变化')
+      const bytes = Buffer.alloc(opened.size + 1)
+      let length = 0
+      while (length < bytes.length) {
+        const read = readSync(fd, bytes, length, bytes.length - length, null)
+        if (!read) break
+        length += read
+      }
+      const after = fstatSync(fd),
+        current = lstatSync(path)
+      if (
+        length !== opened.size ||
+        after.size !== opened.size ||
+        after.mtimeMs !== opened.mtimeMs ||
+        after.nlink !== 1 ||
+        current.isSymbolicLink() ||
+        current.nlink !== 1 ||
+        current.ino !== opened.ino ||
+        current.dev !== opened.dev ||
+        current.size !== after.size ||
+        current.mtimeMs !== after.mtimeMs
+      )
+        throw new Error('运行中发送设置读取期间发生变化')
+      return runningMessageSchema.parse(JSON.parse(bytes.subarray(0, length).toString('utf8')))
+    } finally {
+      closeSync(fd)
     }
   }
   /** Only the former CLI-default format and unnamed histories establish legacy automatic names. */
@@ -405,29 +510,17 @@ export class WorkerStorage {
     const path = join(this.directory, `${this.projectKey(project, cli)}.running-message.json`)
     let mode = defaultRunningMessageMode(cli)
     if (existsSync(path)) {
-      const info = lstatSync(path)
-      if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > 16_384)
-        throw new Error('运行中发送设置无法核验')
-      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-      try {
-        const opened = fstatSync(fd)
-        if (opened.ino !== info.ino || opened.dev !== info.dev || opened.nlink !== 1 || opened.size > 16_384)
-          throw new Error('运行中发送设置身份已变化')
-        const value = runningMessageSchema.parse(JSON.parse(readFileSync(fd, 'utf8')))
-        if (value.project !== project || value.cli !== cli)
-          throw new Error('运行中发送设置的项目或 CLI 不匹配')
-        if (value.mode === 'steer' && !supportsNativeSteering(cli))
-          throw new Error('此 CLI 不支持引导，请重新选择运行中发送方式')
-        mode = value.mode
-      } finally {
-        closeSync(fd)
-      }
+      const value = this.readRunningMessageRecord(path)
+      if (value.project !== project || value.cli !== cli) throw new Error('运行中发送设置的项目或 CLI 不匹配')
+      if (value.mode === 'steer' && !supportsNativeSteering(cli))
+        throw new Error('此 CLI 不支持引导，请重新选择运行中发送方式')
+      mode = value.mode
     }
     return { cli, mode, canSteer: supportsNativeSteering(cli) }
   }
   setRunningMessageMode(project: string, cli: CliId, mode: RunningMessageMode): RunningMessageSettings {
     if (isRetiredCli(cli)) throw new Error(RETIRED_HARNESS_NOTICE)
-    const value = runningMessageSchema.parse({ policy: 1, project, cli, mode })
+    const value = runningMessageSchema.parse({ policy: 2, project, cli, mode })
     if (mode === 'steer' && !supportsNativeSteering(cli))
       throw new Error('此 CLI 不支持引导，请选择插队或排队')
     atomicJSON(join(this.directory, `${this.projectKey(project, cli)}.running-message.json`), value)

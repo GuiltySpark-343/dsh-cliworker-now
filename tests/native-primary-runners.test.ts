@@ -1,0 +1,456 @@
+import { afterEach, describe, expect, it } from 'vitest'
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { createNativeIO } from '../src/host/native-transport.mjs'
+import { nativeCodexArgv, runNativeCodex } from '../src/host/native-codex.mjs'
+import { nativeClaudeArgv, runNativeClaude } from '../src/host/native-claude.mjs'
+import { nativeAgyArgv, runNativeAgy } from '../src/host/native-agy.mjs'
+import { foldNativeFrames } from './fixtures/bridge-timeline.ts'
+
+const directories: string[] = []
+afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
+
+// These executable fixtures simulate protocol transcripts. They never load a CLI account or a model.
+const fixture = `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+const cli=process.env.CWN_NATIVE_FIXTURE_CLI, scenario=process.env.CWN_NATIVE_FIXTURE_SCENARIO;
+const log=process.env.CWN_NATIVE_FIXTURE_LOG;
+const id='synthetic-session', turn='synthetic-turn';
+let waiting=false;
+const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
+const note=(method,params)=>send({method,params});
+const thread=()=>({thread:{id:scenario==='identity-mismatch'?'other-session':id},model:scenario==='model-mismatch'?'other-model':'synthetic-model',cwd:process.cwd(),approvalPolicy:'never',sandbox:{type:'workspaceWrite',networkAccess:false},reasoningEffort:'low'});
+function codexEnd(status='completed'){
+ note('turn/completed',{threadId:id,turn:{id:turn,status,items:[],error:status==='failed'?{message:'synthetic failure'}:null}});
+}
+function codexTurn(){
+ note('turn/started',{threadId:id,turn:{id:turn,status:'inProgress',items:[]}});
+ note('item/agentMessage/delta',{threadId:'other-session',turnId:turn,itemId:'other',delta:'MUST NOT APPEAR'});
+ note('item/agentMessage/delta',{threadId:id,turnId:'old-turn',itemId:'old',delta:'MUST NOT APPEAR'});
+ if(scenario==='deny'){send({id:'synthetic-approval',method:'item/commandExecution/requestApproval',params:{threadId:id,turnId:turn,itemId:'command'}});return;}
+ if(scenario==='cancel'){note('item/agentMessage/delta',{threadId:id,turnId:turn,itemId:'reply',delta:'运行中'});waiting=true;return;}
+ if(scenario.startsWith('steer-')){note('item/agentMessage/delta',{threadId:id,turnId:turn,itemId:'reply',delta:'运行中'});return;}
+ for(const delta of scenario==='fragmented'?['合','成']:['合成'])note('item/agentMessage/delta',{threadId:id,turnId:turn,itemId:'reply',delta});
+ note('item/completed',{threadId:id,turnId:turn,item:{id:'reply',type:'agentMessage',text:'合成回复'}});
+ note('item/reasoning/summaryTextDelta',{threadId:id,turnId:turn,itemId:'reason',summaryIndex:0,delta:'公开摘要'});
+ note('item/completed',{threadId:id,turnId:turn,item:{id:'reply',type:'agentMessage',text:'合成回复'}});
+ note('item/completed',{threadId:id,turnId:turn,item:{id:'reason',type:'reasoning',summary:['公开摘要'],content:['HIDDEN RAW REASONING']}});
+ note('item/started',{threadId:id,turnId:turn,item:{id:'tool',type:'commandExecution',command:'synthetic read',status:'inProgress'}});
+ if(scenario==='tool-progress'){
+  note('item/commandExecution/outputDelta',{threadId:'other-session',turnId:turn,itemId:'tool',delta:'FOREIGN TOOL OUTPUT'});
+  note('item/commandExecution/outputDelta',{threadId:id,turnId:turn,itemId:'tool',delta:'模拟'});
+  note('item/commandExecution/outputDelta',{threadId:id,turnId:turn,itemId:'tool',delta:'输出'});
+ }
+ if(scenario!=='unfinished-tool')note('item/completed',{threadId:id,turnId:turn,item:{id:'tool',type:'commandExecution',command:'synthetic read',status:scenario==='tool-failure'?'failed':'completed',exitCode:scenario==='tool-failure'?1:0}});
+ if(scenario==='tool-progress'){
+  note('item/commandExecution/outputDelta',{threadId:id,turnId:turn,itemId:'tool',delta:'LATE TOOL OUTPUT'});
+  note('item/started',{threadId:id,turnId:turn,item:{id:'mcp',type:'mcpToolCall',tool:'synthetic',status:'inProgress',arguments:{}}});
+  note('item/mcpToolCall/progress',{threadId:id,turnId:turn,itemId:'mcp',message:'模拟 MCP 进度'});
+  note('item/completed',{threadId:id,turnId:turn,item:{id:'mcp',type:'mcpToolCall',tool:'synthetic',status:'completed',result:{content:[]}}});
+  note('item/completed',{threadId:id,turnId:turn,item:{id:'dynamic',type:'dynamicToolCall',tool:'synthetic',status:'completed',success:true,contentItems:[{type:'inputText',text:'模拟动态工具结果'}]}});
+ }
+ if(scenario==='collab-interrupted')note('item/completed',{threadId:id,turnId:turn,item:{id:'collab',type:'collabAgentToolCall',tool:'wait',status:'interrupted',agentsStates:{},receiverThreadIds:[],senderThreadId:id}});
+ if(scenario.startsWith('image-')){
+  note('item/started',{threadId:id,turnId:turn,item:{id:'image',type:'imageGeneration',status:'inProgress',result:''}});
+  if(scenario!=='image-unfinished')note('item/completed',{threadId:id,turnId:turn,item:{id:'image',type:'imageGeneration',status:scenario==='image-in-progress'?'inProgress':scenario==='image-failed'?'failed':'completed',result:'',failure:scenario==='image-failure-receipt'?{type:'usageLimitExceeded',limitId:'synthetic-limit',resetsAt:null}:null}});
+ }
+ note('thread/tokenUsage/updated',{threadId:id,turnId:turn,tokenUsage:{last:{inputTokens:2,outputTokens:1,totalTokens:3,cachedInputTokens:0},total:{inputTokens:20,outputTokens:10,totalTokens:30,cachedInputTokens:4},modelContextWindow:1000}});
+ if(scenario==='no-terminal')return;
+ codexEnd(scenario==='failure'?'failed':'completed');
+ if(scenario==='duplicate-terminal')codexEnd();
+}
+function claudeEnd(error=false){send({type:'result',subtype:'success',session_id:id,is_error:error,result:error?'synthetic failure':'合成回复',permission_denials:scenario==='deny'?[{tool_name:'Bash'}]:[],usage:{input_tokens:2,output_tokens:1}});}
+function claudeTurn(){
+ const selected=process.argv[process.argv.indexOf('--model')+1];
+ const canonical=['claude-alias','claude-proxy','claude-unknown-alias'].includes(scenario)?'synthetic-resolved-model':selected;
+ send({type:'system',subtype:'init',session_id:scenario==='identity-mismatch'?'other-session':id,model:scenario==='model-mismatch'?'other-model':canonical});
+ if(scenario==='identity-mismatch')return;
+ if(scenario==='deny'){send({type:'control_request',request_id:'synthetic-permission',request:{subtype:'can_use_tool',tool_name:'Bash',input:{command:'synthetic'}}});return;}
+ if(scenario==='child-model')send({type:'assistant',session_id:id,parent_tool_use_id:'synthetic-task',message:{id:'child',model:'synthetic-child-model',content:[{type:'text',text:'子任务公开进度'}]}});
+ send({type:'stream_event',session_id:id,event:{type:'message_start',message:{id:'reply'}}});
+ if(scenario==='multiple-blocks'){
+  send({type:'stream_event',session_id:id,event:{type:'content_block_start',index:0,content_block:{type:'thinking',thinking:'',signature:'HIDDEN_SIGNATURE'}}});
+  send({type:'stream_event',session_id:id,event:{type:'content_block_delta',index:0,delta:{type:'thinking_delta',thinking:'公开思考'}}});
+  send({type:'stream_event',session_id:id,event:{type:'content_block_delta',index:0,delta:{type:'signature_delta',signature:'HIDDEN_SIGNATURE'}}});
+  send({type:'assistant',session_id:id,message:{id:'reply',content:[{type:'thinking',thinking:'公开思考',signature:'HIDDEN_SIGNATURE'}]}});
+  send({type:'stream_event',session_id:id,event:{type:'content_block_stop',index:0}});
+  send({type:'stream_event',session_id:id,event:{type:'content_block_start',index:1,content_block:{type:'text'}}});
+  send({type:'stream_event',session_id:id,event:{type:'content_block_delta',index:1,delta:{type:'text_delta',text:'合成'}}});
+  send({type:'assistant',session_id:id,message:{id:'reply',content:[{type:'text',text:'合成'}]}});
+  send({type:'stream_event',session_id:id,event:{type:'content_block_stop',index:1}});
+  send({type:'stream_event',session_id:id,event:{type:'content_block_start',index:2,content_block:{type:'text'}}});
+  send({type:'stream_event',session_id:id,event:{type:'content_block_delta',index:2,delta:{type:'text_delta',text:'回复'}}});
+  send({type:'assistant',session_id:id,message:{id:'reply',content:[{type:'text',text:'回复'}]}});
+  send({type:'stream_event',session_id:id,event:{type:'content_block_stop',index:2}});
+  claudeEnd();return;
+ }
+ send({type:'stream_event',session_id:id,event:{type:'content_block_start',index:0,content_block:{type:'text'}}});
+ for(const text of scenario==='fragmented'?['合','成']:[scenario==='cancel'?'运行中':'合成'])send({type:'stream_event',session_id:id,event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text}}});
+ if(scenario==='cancel'){waiting=true;return;}
+ send({type:'assistant',session_id:id,message:{id:'reply',model:scenario==='assistant-model-mismatch'?'other-model':canonical,content:[{type:'text',text:'合成回复'},{type:'thinking',thinking:'公开思考'}]}});
+ if(['tool-failure','unfinished-tool'].includes(scenario)){
+  send({type:'assistant',session_id:id,message:{id:'toolmsg',content:[{type:'tool_use',id:'tool',name:'Read',input:{file_path:'synthetic'}}]}});
+  if(scenario!=='unfinished-tool')send({type:'user',session_id:id,message:{content:[{type:'tool_result',tool_use_id:'tool',content:'synthetic error',is_error:true}]}});
+ }
+ if(scenario==='no-terminal')return;
+ claudeEnd(scenario==='failure');
+ if(scenario==='duplicate-terminal')claudeEnd();
+}
+function agyEnd(status='SUCCESS'){
+ send({event:'result',result:{conversation_id:id,status,response:status==='ERROR'?'历史汇总文本':'合成回复',error:status==='ERROR'?'synthetic summary failure':undefined,usage:{input_tokens:2,output_tokens:1}}});
+}
+function agyTurn(){
+ send({event:'init',conversation_id:scenario==='identity-mismatch'?'other-session':id,init:{model:scenario==='model-mismatch'?'other-model':'synthetic-model'}});
+ if(scenario==='identity-mismatch')return;
+ if(scenario==='cancel'){send({event:'step_update',step_update:{conversation_id:id,step_index:1,step_type:'agent_response',state:'RUNNING',text_delta:'运行中'}});waiting=true;return;}
+ if(scenario==='tool-failure')send({event:'step_update',step_update:{conversation_id:id,step_index:0,step_type:'tool',state:'ERROR',tool_name:'Read'}});
+ if(scenario==='unfinished-tool')send({event:'step_update',step_update:{conversation_id:id,step_index:0,step_type:'tool',state:'RUNNING',tool_name:'Read'}});
+ if(scenario==='user-input')send({event:'step_update',step_update:{conversation_id:id,step_index:0,step_type:'user_input',state:'DONE'}});
+ if(['metadata','metadata-conflict','unknown','unknown-conflict'].includes(scenario)){
+  send({event:'step_update',step_update:{conversation_id:id,step_index:0,step_type:'user_input',state:'DONE'}});
+  send({event:'step_update',step_update:{conversation_id:id,step_index:2,step_type:scenario.startsWith('unknown')?'unknown':'checkpoint',state:'DONE'}});
+ }
+ if(scenario==='tool-info-error')send({event:'step_update',step_update:{conversation_id:id,step_index:0,step_type:'tool',state:'DONE',tool_name:'Read',tool_info:{name:'Read',error:{type:'SyntheticToolError',message:'explicit synthetic failure'}}}});
+ if(scenario==='invalid-step-state')send({event:'step_update',step_update:{conversation_id:id,step_index:0,step_type:'checkpoint',state:'NOT_A_NATIVE_STATE'}});
+ const chunks=scenario==='fragmented'?['合','成','回','复']:['合成回复'];chunks.forEach((text_delta,index)=>send({event:'step_update',step_update:{conversation_id:id,step_index:1,step_type:'agent_response',state:index===chunks.length-1?'DONE':'RUNNING',text_delta,...(scenario==='response-usage'?{usage:{input_tokens:100,output_tokens:20,cache_read_tokens:300,total_tokens:120,thinking_tokens:0}}:{})}}));
+ if(scenario==='no-terminal')return;
+ agyEnd(['failure','summary-conflict','metadata-conflict','unknown-conflict'].includes(scenario)?'ERROR':'SUCCESS');
+ if(scenario==='duplicate-terminal')agyEnd();
+}
+process.on('SIGINT',()=>{if(cli==='antigravity'&&waiting){waiting=false;agyEnd('INTERRUPTED');}});
+const lines=createInterface({input:process.stdin});
+lines.on('line',line=>{
+ const value=JSON.parse(line);appendFileSync(log,line+'\\n');
+ if(cli==='codex'){
+  if(value.method==='initialize')send({id:value.id,result:{userAgent:'synthetic/0.162.1'}});
+  else if(['thread/start','thread/resume'].includes(value.method))send({id:value.id,result:thread()});
+  else if(value.method==='turn/start'){send({id:value.id,result:{turn:{id:turn,status:'inProgress',items:[]}}});codexTurn();}
+  else if(value.method==='turn/steer'){
+   if(scenario==='steer-rejected')send({id:value.id,error:{code:-32600,message:'synthetic inactive turn'}});
+   else if(scenario==='steer-unknown')send({id:value.id,error:{code:-32603,message:'synthetic uncertain failure'}});
+   else if(scenario==='steer-terminal-first'){codexEnd();setTimeout(()=>send({id:value.id,result:{turnId:turn}}),30);return;}
+   else if(scenario==='steer-coalesced'){process.stdout.write(JSON.stringify({id:value.id,result:{turnId:turn}})+'\\n'+JSON.stringify({method:'turn/completed',params:{threadId:id,turn:{id:turn,status:'completed',items:[],error:null}}})+'\\n');return;}
+   else send({id:value.id,result:{turnId:scenario==='steer-wrong-turn'?'other-turn':turn}});
+   setTimeout(()=>codexEnd(),30);
+  }
+  else if(value.id==='synthetic-approval')codexEnd();
+  else if(value.method==='turn/interrupt'){send({id:value.id,result:{}});codexEnd('interrupted');}
+ } else if(cli==='claude'){
+  if(value.request?.subtype==='initialize'){
+   const selected=process.argv[process.argv.indexOf('--model')+1];
+   const models=['claude-proxy','claude-unknown-alias'].includes(scenario)?[{value:'unrelated-alias',resolvedModel:'unrelated-model'}]:[{value:selected,resolvedModel:scenario==='claude-alias'?'synthetic-resolved-model':selected,supportsEffort:true,supportedEffortLevels:scenario==='unsupported-effort'?['high']:['low']}];
+   if(scenario==='ambiguous-alias')models.push({value:selected,resolvedModel:'other-model'});
+   send({type:'control_response',response:{subtype:scenario==='init-rejected'?'error':'success',request_id:value.request_id,response:{models}}});
+  }else if(value.request?.subtype==='get_context_usage'){
+   if(scenario==='context-timeout')return;
+   send({type:'control_response',response:{subtype:scenario==='context-unsupported'?'error':'success',request_id:value.request_id,response:{model:scenario==='context-other-model'?'wrong-model':'synthetic-model',totalTokens:17,maxTokens:128000,categories:[{name:'System prompt',tokens:7,kind:'used'},{name:'Messages',tokens:10,kind:'used'}],systemPromptSections:[{name:'PRIVATE_BODY_MUST_NOT_LEAK',text:'PRIVATE_BODY_MUST_NOT_LEAK'}]}}});
+  }else if(value.type==='user')claudeTurn();
+  else if(value.type==='control_response')claudeEnd();
+  else if(value.request?.subtype==='interrupt'){send({type:'control_response',response:{subtype:'success',request_id:value.request_id,response:{}}});claudeEnd(true);}
+ }else if(value.event==='user')agyTurn();
+});
+lines.on('close',()=>{process.exit(scenario==='nonzero-exit'?7:0);});
+`
+
+function setup(cli: 'codex' | 'claude' | 'antigravity', scenario = 'success', resume = true) {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'native-primary-synthetic-')))
+  directories.push(directory)
+  const executable = join(directory, 'synthetic-cli.mjs'), log = join(directory, 'messages.jsonl')
+  writeFileSync(executable, fixture, { mode: 0o700 })
+  const prompt = '保留字面文本 $(touch nope); `echo no`\n第二行'
+  const config: any = {
+    cli, project: directory, prompt, mode: 'accept-edits',
+    preference: { model: 'synthetic-model', effort: 'low' },
+    conversationId: resume ? 'synthetic-session' : undefined,
+    env: { CWN_NATIVE_FIXTURE_CLI: cli, CWN_NATIVE_FIXTURE_SCENARIO: scenario, CWN_NATIVE_FIXTURE_LOG: log },
+    timeoutMs: 3000, maxLineBytes: 65_536, maxRunBytes: 1_048_576, stateDirectory: directory,
+  }
+  const task = `任务：\n${prompt}`
+  if (cli === 'codex') config.argv = [executable, 'exec', ...(resume ? ['resume', config.conversationId] : []), '--json', '--skip-git-repo-check', '--model', 'synthetic-model', '-c', 'sandbox_mode="workspace-write"', '-c', 'approval_policy="never"', task]
+  else if (cli === 'claude') {
+    if (['claude-proxy', 'claude-unknown-alias'].includes(scenario)) config.preference.effort = 'default'
+    if (scenario === 'claude-proxy') config.claudeModelCandidates = [{ value: 'synthetic-model', resolvedModel: 'synthetic-resolved-model' }]
+    config.argv = [executable, '--settings', join(directory, 'private-settings.json'), '--print', '--verbose', '--output-format', 'stream-json', '--model', 'synthetic-model', ...(config.preference.effort === 'default' ? [] : ['--effort', 'low']), '--permission-mode', 'acceptEdits', ...(resume ? ['--resume', config.conversationId] : []), task]
+  }
+  else config.argv = [executable, '--add-dir', directory, '--sandbox', '--dangerously-skip-permissions', '--mode', 'accept-edits', '--model', 'synthetic-model', '--effort', 'low', '--output-format', 'stream-json', '--print-timeout', '1s', ...(resume ? ['--conversation', config.conversationId] : []), '--print', task]
+  return { config, log }
+}
+
+async function run(cli: 'codex' | 'claude' | 'antigravity', scenario = 'success', resume = true,
+  guide?: (io: any, controller: AbortController) => Promise<void>) {
+  const { config, log } = setup(cli, scenario, resume)
+  const frames: any[] = [], controller = new AbortController()
+  let guidance: Promise<void> | undefined
+  const io = createNativeIO(config, (line: string) => {
+    const frame = JSON.parse(line)
+    frames.push(frame)
+    if (scenario === 'cancel' && frame.type === 'event' && frame.event.kind === 'assistant') controller.abort(new Error('synthetic stop'))
+    if (guide && !guidance && frame.type === 'event' && frame.event.kind === 'assistant') {
+      guidance = guide(io, controller)
+      void guidance.catch(() => {})
+    }
+  }, controller.signal)
+  const runner = { codex: runNativeCodex, claude: runNativeClaude, antigravity: runNativeAgy }[cli]
+  let error
+  try { await runner(config, io) } catch (caught) { error = caught }
+  await io.close(error)
+  await guidance
+  const messages = readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+  return { config, frames, messages, result: frames.at(-1) }
+}
+
+describe('native primary runners (synthetic protocol processes, no real accounts/models)', () => {
+  it.each([false, true])('requests public Codex summaries for resume=%s without changing the selected model or effort', async resume => {
+    const { messages, frames, result } = await run('codex', 'success', resume)
+    expect(result.status).toBe('SUCCESS')
+    expect(messages.find(message => message.method === 'turn/start').params)
+      .toMatchObject({ summary: 'auto', model: 'synthetic-model', effort: 'low', approvalPolicy: 'never' })
+    expect(foldNativeFrames(frames).filter(row => row.kind === 'reasoning'))
+      .toMatchObject([{ detail: '公开摘要' }])
+    expect(JSON.stringify(frames)).not.toContain('HIDDEN RAW REASONING')
+  })
+  it.each(['codex', 'claude', 'antigravity'] as const)('%s preserves one message through tiny deltas and completion snapshots', async (cli) => {
+    const { frames, result } = await run(cli, 'fragmented')
+    expect(result.status).toBe('SUCCESS')
+    const replies = foldNativeFrames(frames).filter((row) => row.kind === 'assistant')
+    expect(replies).toHaveLength(1)
+    expect(replies[0]?.text).toBe('合成回复')
+  })
+  it('reads Claude optional native summary without requesting a full token-count API or exposing prompt bodies', async () => {
+    const { frames, messages, result } = await run('claude')
+    expect(result.status).toBe('SUCCESS')
+    expect(messages.find((value) => value.request?.subtype === 'get_context_usage')?.request).toEqual({ subtype: 'get_context_usage', detail: 'summary' })
+    expect(frames.find((frame) => frame.record?.type === 'cliworker.context_inspection')?.record)
+      .toMatchObject({ sessionId: 'synthetic-session', model: 'synthetic-model', contextUsed: 17, contextCapacity: 128000, categories: [{ name: 'System prompt', tokens: 7, kind: 'used' }, { name: 'Messages', tokens: 10, kind: 'used' }] })
+    expect(JSON.stringify(frames)).not.toContain('PRIVATE_BODY_MUST_NOT_LEAK')
+  })
+  it.each(['context-unsupported', 'context-timeout', 'context-other-model'])(
+    'does not alter Claude generation or invent context after %s', async (scenario) => {
+      const { frames, result } = await run('claude', scenario)
+      expect(result.status).toBe('SUCCESS')
+      expect(frames.some((frame) => frame.record?.type === 'cliworker.context_inspection')).toBe(false)
+    },
+  )
+  it('converts verified native argv while preserving route, permissions and exact resume', () => {
+    for (const cli of ['codex', 'claude', 'antigravity'] as const) {
+      const { config } = setup(cli)
+      const argv = { codex: nativeCodexArgv, claude: nativeClaudeArgv, antigravity: nativeAgyArgv }[cli](config)
+      expect(argv).not.toContain(`任务：\n${config.prompt}`)
+      expect(argv).not.toContain('--bare')
+      if (cli === 'codex') {
+        expect(argv.slice(1, 3)).toEqual(['app-server', '--stdio'])
+        expect(argv).toContain('approval_policy="never"')
+        expect(argv).not.toContain('--model')
+      } else {
+        expect(argv[argv.indexOf('--input-format') + 1]).toBe('stream-json')
+        expect(argv).toContain(config.conversationId)
+        expect(argv[argv.indexOf('--model') + 1]).toBe('synthetic-model')
+      }
+      if (cli === 'claude') {
+        expect(argv[argv.indexOf('--settings') + 1]).toMatch(/private-settings\.json$/)
+        expect(argv[argv.indexOf('--permission-prompts') + 1]).toBe('none')
+      }
+    }
+  })
+  it('runs Codex RPC with exact model/effort/resume, filters foreign turns and deduplicates public output', async () => {
+    const { frames, messages, result, config } = await run('codex')
+    expect(result, JSON.stringify(result)).toMatchObject({ type: 'result', status: 'SUCCESS', response: '合成回复' })
+    expect(messages.find((message) => message.method === 'thread/resume').params).toMatchObject({ threadId: 'synthetic-session', model: 'synthetic-model', approvalPolicy: 'never' })
+    expect(messages.find((message) => message.method === 'turn/start').params).toMatchObject({ effort: 'low', input: [{ type: 'text', text: `任务：\n${config.prompt}` }], sandboxPolicy: { type: 'workspaceWrite', networkAccess: false } })
+    expect(frames.filter((frame) => frame.type === 'event' && frame.event.kind === 'assistant').map((frame) => frame.event.text).join('')).toBe('合成回复')
+    expect(JSON.stringify(frames)).not.toContain('HIDDEN RAW REASONING')
+    expect(frames.find((frame) => frame.event?.kind === 'tool' && frame.event.state === 'COMPLETED')?.event.toolCall)
+      .toEqual({ callId: 'tool', name: 'commandExecution', command: 'synthetic read', exitCode: 0 })
+    expect(result.resultScope).toBe('response')
+    expect(JSON.stringify(frames)).not.toContain('MUST NOT APPEAR')
+    expect(new Set(frames.filter((frame) => frame.type === 'event' && frame.event.kind === 'reasoning').map((frame) => frame.event.step)).size).toBe(1)
+    expect(frames.find((frame) => frame.type === 'native' && frame.record.type === 'turn.completed').record.usage.total_tokens).toBe(30)
+  })
+  it('preserves current Codex command output and MCP progress while running, plus dynamic tool results', async () => {
+    const { result, frames } = await run('codex', 'tool-progress')
+    expect(result.status).toBe('SUCCESS')
+    const events = frames.filter((frame) => frame.type === 'event').map((frame) => frame.event)
+    expect(events.filter((event) => event.toolCall?.callId === 'tool' && event.state === 'RUNNING').at(-1))
+      .toMatchObject({ detail: '模拟输出', toolCall: { command: 'synthetic read', output: '模拟输出' } })
+    expect(events.find((event) => event.toolCall?.callId === 'tool' && event.state === 'COMPLETED')?.toolCall.output).toBe('模拟输出')
+    expect(events.find((event) => event.detail === '模拟 MCP 进度')).toMatchObject({ state: 'RUNNING', toolCall: { callId: 'mcp' } })
+    expect(events.find((event) => event.toolCall?.callId === 'dynamic')?.toolCall.output)
+      .toEqual([{ type: 'inputText', text: '模拟动态工具结果' }])
+    expect(JSON.stringify(frames)).not.toContain('FOREIGN TOOL OUTPUT')
+    expect(JSON.stringify(frames)).not.toContain('LATE TOOL OUTPUT')
+  })
+  it.each(['codex', 'claude', 'antigravity'] as const)('creates a new %s session from native evidence without inventing its ID', async (cli) => {
+    const { result, frames } = await run(cli, 'success', false)
+    expect(result.status).toBe('SUCCESS')
+    expect(frames.filter((frame) => frame.type === 'session')).toEqual([{ type: 'session', id: 'synthetic-session', model: 'synthetic-model' }])
+  })
+  it.each(['claude', 'antigravity'] as const)('rejects mismatched %s effort and permission before native launch', (cli) => {
+    const { config } = setup(cli)
+    const builder = cli === 'claude' ? nativeClaudeArgv : nativeAgyArgv
+    expect(() => builder({ ...config, preference: { model: 'synthetic-model', effort: 'high' } })).toThrow('思考强度')
+    expect(() => builder({ ...config, mode: 'plan' })).toThrow('权限')
+  })
+  it('keeps Claude routing and native permissions while sending literal structured user input', async () => {
+    const { result, frames, messages, config } = await run('claude')
+    expect(result).toMatchObject({ status: 'SUCCESS', response: '合成回复' })
+    expect(messages[0]).toMatchObject({ type: 'control_request', request: { subtype: 'initialize' } })
+    expect(messages.find((value) => value.type === 'user')).toMatchObject({ type: 'user', session_id: 'synthetic-session', message: { role: 'user', content: `任务：\n${config.prompt}` } })
+    expect(frames.filter((frame) => frame.type === 'event' && frame.event.kind === 'assistant').map((frame) => frame.event.text).join('')).toBe('合成回复')
+    expect(frames.some((frame) => frame.type === 'event' && frame.event.kind === 'reasoning')).toBe(true)
+  })
+  it('correlates Claude per-block assistant frames sharing one message ID to live stream indices', async () => {
+    const { result, frames } = await run('claude', 'multiple-blocks')
+    expect(result.status).toBe('SUCCESS')
+    const publicEvents = frames.filter((frame) => frame.type === 'event').map((frame) => frame.event)
+    expect(publicEvents.filter((event) => event.kind === 'assistant').map((event) => event.text).join('')).toBe('合成回复')
+    expect(new Set(publicEvents.filter((event) => event.kind === 'assistant').map((event) => event.step)).size).toBe(2)
+    expect(new Set(publicEvents.filter((event) => event.kind === 'reasoning').map((event) => event.step)).size).toBe(1)
+    expect(JSON.stringify(frames)).not.toContain('HIDDEN_SIGNATURE')
+  })
+  it('sends Antigravity native event:user and accepts harmless user_input metadata', async () => {
+    const { result, messages, config, frames } = await run('antigravity', 'user-input')
+    expect(result).toMatchObject({ status: 'SUCCESS', response: '合成回复' })
+    expect(messages).toEqual([{ event: 'user', message: { content: `任务：\n${config.prompt}` } }])
+    expect(frames.filter(frame => frame.event?.kind === 'diagnostic')).toHaveLength(0)
+  })
+  it.each(['metadata', 'unknown'])('preserves Antigravity %s without inventing failures or public thinking', async scenario => {
+    const { result, frames } = await run('antigravity', scenario)
+    expect(result).toMatchObject({ status: 'SUCCESS', response: '合成回复' })
+    expect(frames.filter(frame => frame.event?.kind === 'diagnostic' && frame.event.state === 'FAILED')).toHaveLength(0)
+    expect(frames.filter(frame => frame.event?.kind === 'reasoning')).toHaveLength(0)
+    expect(frames.filter(frame => frame.event?.kind === 'diagnostic')).toHaveLength(scenario === 'unknown' ? 1 : 0)
+    expect(frames.filter(frame => frame.type === 'native' && frame.record?.event === 'step_update')).toHaveLength(3)
+  })
+  it('never uses an unknown Antigravity step as proof of a fully completed summary conflict', async () => {
+    expect((await run('antigravity', 'metadata-conflict')).result.status).toBe('UNCERTAIN')
+    expect((await run('antigravity', 'unknown-conflict')).result.status).toBe('ERROR')
+  })
+  it.each(['tool-info-error', 'invalid-step-state'])('keeps Antigravity %s failed without poisoning later valid reply frames', async scenario => {
+    const { result, frames } = await run('antigravity', scenario)
+    expect(result.status).toBe('ERROR')
+    expect(frames.filter(frame => frame.event?.kind === 'diagnostic' && frame.event.state === 'FAILED')).toHaveLength(1)
+    expect(frames.some(frame => frame.event?.kind === 'assistant' && frame.event.text === '合成回复')).toBe(true)
+    if (scenario === 'tool-info-error') expect(frames.find(frame => frame.event?.kind === 'tool')?.event.state).toBe('FAILED')
+  })
+  it('publishes Antigravity response-scoped usage without using its aggregate result counters', async () => {
+    const { result, frames } = await run('antigravity', 'response-usage')
+    expect(result.status).toBe('SUCCESS')
+    const events = frames.filter((frame) => frame.type === 'event').map((frame) => frame.event)
+    expect(events.find((event) => event.kind === 'assistant')?.response).toEqual({
+      id: 'agy:1', blockId: 'text', index: 0, complete: true,
+      usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 300, cacheWriteTokens: 0, totalTokens: 420 },
+    })
+    expect(events.filter((event) => event.kind === 'reasoning')).toHaveLength(0)
+  })
+  it.each(['codex', 'claude'] as const)('denies %s reverse permission requests without upgrading successful native status', async (cli) => {
+    const { result, messages } = await run(cli, 'deny')
+    expect(result.status).toBe('ERROR')
+    const decision = cli === 'codex' ? messages.find((value) => value.id === 'synthetic-approval').result.decision : messages.find((value) => value.type === 'control_response').response.response.behavior
+    expect(decision).toBe(cli === 'codex' ? 'decline' : 'deny')
+  })
+  it.each(['codex', 'claude', 'antigravity'] as const)('%s never promotes native failure, failed tools, nonzero exit, missing or duplicate terminal to success', async (cli) => {
+    for (const scenario of ['failure', 'tool-failure', 'unfinished-tool', 'nonzero-exit', 'no-terminal', 'duplicate-terminal']) {
+      const { result } = await run(cli, scenario, false)
+      expect(result.status, `${cli}: ${scenario}`).toBe('ERROR')
+    }
+  }, 10_000)
+  it.each(['codex', 'claude', 'antigravity'] as const)('rejects %s resume identity changes', async (cli) => {
+    const { result, messages } = await run(cli, 'identity-mismatch')
+    expect(result.status).toBe('ERROR')
+    if (cli === 'codex') expect(messages.some((value) => value.method === 'turn/start')).toBe(false)
+  })
+  it('rejects a substituted Codex model before submitting a turn', async () => {
+    const { result, messages } = await run('codex', 'model-mismatch')
+    expect(result.status).toBe('ERROR')
+    expect(messages.some((value) => value.method === 'turn/start')).toBe(false)
+  })
+  it.each(['claude', 'antigravity'] as const)('rejects %s silent model substitution in native initialization', async (cli) => {
+    const { result } = await run(cli, 'model-mismatch')
+    expect(result.status).toBe('ERROR')
+    expect(result.error).toContain('模型与明确选型不一致')
+  })
+  it('accepts the selected Claude alias only through the same process public resolvedModel mapping', async () => {
+    const { result, frames } = await run('claude', 'claude-alias')
+    expect(result.status).toBe('SUCCESS')
+    expect(frames.find((frame) => frame.type === 'session')?.model).toBe('synthetic-resolved-model')
+  })
+  it('preserves a selected proxy model with exact identity evidence from the already prepared route', async () => {
+    const { result } = await run('claude', 'claude-proxy')
+    expect(result.status).toBe('SUCCESS')
+  })
+  it.each(['claude-unknown-alias', 'ambiguous-alias', 'unsupported-effort', 'init-rejected'])('rejects Claude %s before submitting user input', async (scenario) => {
+    const { result, messages } = await run('claude', scenario)
+    expect(result.status).toBe('ERROR')
+    expect(messages.some((value) => value.type === 'user')).toBe(false)
+  })
+  it('rejects Claude model substitution after a correctly selected initialization', async () => {
+    const { result } = await run('claude', 'assistant-model-mismatch')
+    expect(result.status).toBe('ERROR')
+    expect(result.error).toContain('原生回复模型与明确选型不一致')
+  })
+  it('keeps Claude native Task subagent model metadata distinct from the selected main loop', async () => {
+    const { result } = await run('claude', 'child-model')
+    expect(result).toMatchObject({ status: 'SUCCESS', response: '合成回复' })
+  })
+  it.each(['collab-interrupted', 'image-failed', 'image-in-progress', 'image-failure-receipt', 'image-unfinished'])('keeps a completed Codex turn with %s from reporting success', async (scenario) => {
+    const { result, frames } = await run('codex', scenario)
+    expect(result.status).toBe('ERROR')
+    const tools = frames.filter((frame) => frame.type === 'event' && frame.event.kind === 'tool')
+    if (scenario === 'image-unfinished') expect(result.error).toContain('未完成工具')
+    else expect(tools.some((frame) => frame.event.state === 'FAILED')).toBe(true)
+  })
+  it('projects successful Codex image generation as a completed native tool', async () => {
+    const { result, frames } = await run('codex', 'image-success')
+    expect(result.status).toBe('SUCCESS')
+    expect(frames.some((frame) => frame.type === 'event' && frame.event.kind === 'tool' && frame.event.text === 'imageGeneration' && frame.event.state === 'COMPLETED')).toBe(true)
+  })
+  it('steers only the active Codex turn, confirms its receipt, and deduplicates repeated submissions', async () => {
+    const { result, messages, frames } = await run('codex', 'steer-success', true, async (io) => {
+      const first = io.steer('literal guidance $(no shell)', 'guidance-one', 'attempt-one')
+      expect(io.steer('literal guidance $(no shell)', 'guidance-one', 'attempt-two')).toBe(first)
+      await expect(io.steer('different guidance', 'guidance-one', 'attempt-three')).rejects.toThrow('其他消息')
+      await first
+    })
+    expect(result.status).toBe('SUCCESS')
+    expect(messages.filter((message) => message.method === 'turn/start')).toHaveLength(1)
+    const steering = messages.filter((message) => message.method === 'turn/steer')
+    expect(steering).toHaveLength(1)
+    expect(steering[0].params).toEqual({ threadId: 'synthetic-session', expectedTurnId: 'synthetic-turn', clientUserMessageId: 'guidance-one', input: [{ type: 'text', text: 'literal guidance $(no shell)' }] })
+    expect(frames.some((frame) => frame.type === 'native' && frame.record.method === 'turn/steer')).toBe(true)
+  })
+  it('preserves Codex receipt-before-terminal ordering when both frames share one stdout chunk', async () => {
+    const { result, messages } = await run('codex', 'steer-coalesced', true,
+      async (io) => { await io.steer('synthetic guidance', 'one', 'attempt-one') })
+    expect(result.status).toBe('SUCCESS')
+    expect(messages.filter((message) => message.method === 'turn/steer')).toHaveLength(1)
+  })
+  it.each(['steer-rejected', 'steer-unknown', 'steer-wrong-turn', 'steer-terminal-first'])('never confirms Codex %s or automatically resubmits an unknown receipt', async (scenario) => {
+    const { messages } = await run('codex', scenario, true, async (io) => {
+      const submission = io.steer('synthetic guidance', 'guidance-one', 'attempt-one')
+      if (scenario === 'steer-rejected') await expect(submission).rejects.toMatchObject({ code: 'STEER_REJECTED' })
+      else {
+        await expect(submission).rejects.toThrow(/未确认|未知/)
+        await expect(io.steer('synthetic guidance', 'guidance-one', 'attempt-two')).rejects.toThrow()
+      }
+    })
+    expect(messages.filter((message) => message.method === 'turn/steer')).toHaveLength(1)
+    expect(messages.filter((message) => message.method === 'turn/start')).toHaveLength(1)
+  })
+  it('preserves AGY resumed summary conflict as uncertain and uses only current-turn observed text', async () => {
+    const resumed = await run('antigravity', 'summary-conflict')
+    expect(resumed.result, JSON.stringify(resumed.result)).toMatchObject({ status: 'UNCERTAIN', response: '合成回复' })
+    expect(resumed.result.error).toContain('汇总状态冲突')
+    expect(resumed.result.response).not.toContain('历史汇总文本')
+    const fresh = await run('antigravity', 'summary-conflict', false)
+    expect(fresh.result.status).toBe('ERROR')
+  })
+  it.each(['codex', 'claude', 'antigravity'] as const)('attempts native %s cancellation and closes its owned process', async (cli) => {
+    const { result, messages } = await run(cli, 'cancel')
+    expect(result.status).toBe('ERROR')
+    if (cli === 'codex') expect(messages.some((value) => value.method === 'turn/interrupt')).toBe(true)
+    if (cli === 'claude') expect(messages.some((value) => value.request?.subtype === 'interrupt')).toBe(true)
+    expect(result.response).toContain('运行中')
+  })
+})

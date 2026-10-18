@@ -202,6 +202,7 @@ async function fixture() {
   const followup = vi.fn(async () => 'synthetic-followup-receipt')
   const resolveWorker = vi.fn(() => ({ id: 'synthetic-worker' }))
   const service = Object.assign(Object.create(CliWorkerService.prototype), {
+    nativeRunDone: new Map(),
     ctx,
     chooseDispatch,
     launch,

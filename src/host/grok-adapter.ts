@@ -8,6 +8,7 @@ import { StringDecoder } from 'node:string_decoder'
 import { EFFORTS, type Effort, type ModelChoice, type TaskMode } from '../shared/types.ts'
 import type { EventInput, ProtocolResult } from './protocol.ts'
 import { assertGrokNativeEnvironment, discoverGrokAccountModels } from './grok-models.ts'
+import { GrokResponseTracker, grokResponseUsage } from './grok-response.mjs'
 
 export interface GrokInput {
   executable: string
@@ -166,6 +167,7 @@ export async function discoverGrok(
 }
 /** Native streaming-json parser from installed 1.0.0 docs; no fabricated execution evidence. */
 export class GrokProtocol {
+  private responses = new GrokResponseTracker((event) => this.emit(event))
   private decoder = new StringDecoder('utf8')
   private pending = ''
   private response = ''
@@ -202,7 +204,8 @@ export class GrokProtocol {
     this.ended = true
     if (!this.conversationId) return
     if (this.thought && !this.terminal)
-      this.emit({ kind: 'reasoning', step: this.thoughtStep, text: 'Grok 公开思考', detail: this.thought, state: 'RUNNING' })
+      this.responses.emit({ kind: 'reasoning', step: this.thoughtStep, text: 'Grok 公开思考', detail: this.thought, state: 'RUNNING' }, 'reasoning')
+    this.responses.finish()
     const error =
       this.failure ??
       (!this.terminal
@@ -242,19 +245,19 @@ export class GrokProtocol {
       const now = Date.now()
       if (now - this.thoughtEmittedAt < 200) return
       this.thoughtEmittedAt = now
-      this.emit({
+      this.responses.emit({
         kind: 'reasoning',
         step: this.thoughtStep,
         text: 'Grok 公开思考',
         detail: this.thought,
         state: 'RUNNING',
-      })
+      }, 'reasoning')
       return
     }
     if (e.type === 'text') {
       if (typeof e.data !== 'string') throw new Error('Invalid Grok text')
       this.response += e.data
-      this.emit({ kind: 'assistant', text: e.data })
+      this.responses.emit({ kind: 'assistant', step: this.thoughtStep, text: e.data }, 'text')
       return
     }
     if (e.type === 'tool_call' || e.type === 'tool_call_update') {
@@ -272,25 +275,30 @@ export class GrokProtocol {
       } else if (e.status === 'completed') tool.done = true
       else if (e.status !== undefined && !['pending', 'in_progress'].includes(String(e.status)))
         this.failure = `Grok 未识别的工具状态：${String(e.status)}`
-      this.emit({
+      this.responses.emit({
         kind: 'tool',
         text: tool.name,
         step: tool.step,
         state: String(e.status ?? 'running'),
         detail: JSON.stringify(e.type === 'tool_call' ? e.rawInput : (e.rawOutput ?? e.content)),
-      })
+        toolCall: { callId: e.toolCallId, name: tool.name,
+          ...(Object.hasOwn(e, 'rawInput') ? { input: e.rawInput } : {}),
+          ...(Object.hasOwn(e, 'rawOutput') ? { output: e.rawOutput } :
+            Object.hasOwn(e, 'content') && tool.done ? { output: e.content } : {}) },
+      }, `tool:${e.toolCallId}`)
       return
     }
     if (e.type === 'end') {
       if (!this.conversationId) throw new Error('Missing Grok end session identity')
       if (this.thought)
-        this.emit({
+        this.responses.emit({
           kind: 'reasoning',
           step: this.thoughtStep,
           text: 'Grok 公开思考',
           detail: this.thought,
           state: 'COMPLETED',
-        })
+        }, 'reasoning')
+      this.responses.finish()
       this.terminal = true
       if (e.stopReason !== 'end_turn') this.failure ??= `Grok 未正常完成：${String(e.stopReason)}`
       return
@@ -302,13 +310,17 @@ export class GrokProtocol {
     }
     if (e.type === 'usage') {
       if (this.thought)
-        this.emit({
+        this.responses.emit({
           kind: 'reasoning',
           step: this.thoughtStep,
           text: 'Grok 公开思考',
           detail: this.thought,
           state: 'COMPLETED',
-        })
+        }, 'reasoning')
+      // TurnUsage also projects a usage line on older backends, without the
+      // response identity/reason. It cannot settle a per-response bill.
+      this.responses.finish(typeof e.messageId === 'string' || typeof e.stopReason === 'string'
+        ? grokResponseUsage(e.usage) : undefined)
       this.thought = ''
       this.thoughtStep++
       this.thoughtEmittedAt = 0

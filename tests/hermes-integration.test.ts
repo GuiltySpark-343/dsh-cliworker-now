@@ -147,7 +147,7 @@ describe('Hermes dispatch and telemetry integration (synthetic fixtures)', () =>
     }
   })
 
-  it('reads real-format final tokens from a torn log and attaches them only to the correct reply/run', () => {
+  it('reads exact run totals from a torn log without attributing the aggregate to a single reply', () => {
     const root = directory(),
       raw = join(root, 'fixture.raw.jsonl'),
       events: WorkerEvent[] = []
@@ -165,7 +165,7 @@ describe('Hermes dispatch and telemetry integration (synthetic fixtures)', () =>
       session_id: 'synthetic-session',
       exit_code: 0,
       text: response.text,
-      tokens: { input: 100, output: 3, total: 103, cache_read: 80, cache_write: 10 },
+      tokens: { input: 100, output: 3, total: 193, cache_read: 80, cache_write: 10 },
       duration_ms: 100,
     }
     const serialized = JSON.stringify(result)
@@ -177,8 +177,8 @@ describe('Hermes dispatch and telemetry integration (synthetic fixtures)', () =>
     expect(reader.read(raw, 'hermes').usage).toBeUndefined()
     appendFileSync(raw, serialized.slice(12) + '\n')
     const telemetry = reader.read(raw, 'hermes')
-    expect(telemetry.usage).toEqual({ total: 103, input: 100, output: 3, cacheRead: 80, scope: 'run' })
-    expect(reader.read(raw, 'hermes').usage?.total).toBe(103)
+    expect(telemetry.usage).toEqual({ total: 193, input: 190, output: 3, cacheRead: 80, cacheWrite: 10, scope: 'run' })
+    expect(reader.read(raw, 'hermes').usage?.total).toBe(193)
     expect(telemetry.contextUsed).toBeUndefined()
     expect(telemetry.contextCapacity).toBeUndefined()
     parser.feed([start, response, result].map((event) => JSON.stringify(event)).join('\n') + '\n')
@@ -192,7 +192,8 @@ describe('Hermes dispatch and telemetry integration (synthetic fixtures)', () =>
     })
     const rows = foldEvents(events)
     attachTelemetry(rows, 'run-a', telemetry)
-    expect(rows.find((row) => row.text === 'synthetic reply')?.usage?.total).toBe(103)
+    expect(telemetry.runUsage?.total).toBe(193)
+    expect(rows.find((row) => row.text === 'synthetic reply')?.usage).toBeUndefined()
     expect(rows.find((row) => row.text === 'another run')?.usage).toBeUndefined()
     expect(parser.result?.status).toBe('SUCCESS')
   })

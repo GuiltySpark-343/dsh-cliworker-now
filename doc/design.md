@@ -186,6 +186,7 @@ v0.3.0 采用用户确认的 B 桌面侧栏方案：父级为按 CLI 分组的�
 
 用户已选定第二张收窄版 Logo（v10）。以此结合 B 方案制作[整体效果图](assets/overall-preview/logo-v10/overview.png)，展示父级总览／子级对话和亮暗主题。图中内容为设计示例，尚不代表已安装界面的变更。
 
+
 ## v0.4.0 原生设置弹窗与账号终端
 
 - 入口使用 header.utilities 的 order=-20（原生 Finder=-10），24px 按钮、16px Logo；取消侧栏标题分隔线。Modal、Button、StateDot、主题 token 来自 Harness 0.2.0-rc.2；亮色灰按钮继续使用可见的 180ms 过渡。
@@ -195,6 +196,10 @@ v0.3.0 采用用户确认的 B 桌面侧栏方案：父级为按 CLI 分组的�
 - 已核验启动参数：Codex login/logout；Claude auth login/logout；Kimi login；MiMo auth login/logout。Antigravity 和 Kimi 退出采用空 argv 启动 TUI，由用户手动输入 /login 或 /logout。manage 打开原生 TUI，插件不自动输入指令。
 - 账号终端通过 subprocess.spawnTerminal 参数数组管理；xterm 6.0.0 / fit 0.11.0 渲染 ANSI，禁用自动链接导航，不加载剪贴板写入附加组件。不持久化账号终端输入或输出，CLI 自身按其原生流程保管凭据。
 - 状态查询 10 秒/64KiB 上限，终端内存 256KiB/512帧、输入单包16KiB、最多30分钟，30秒未订阅自动清理；关闭/断流/卸载清理，确认进程组退出才释放 CLI 锁。清理失败保留锁并可重试，不报告成功。
+
+用户提供新的手绘构形后，v11 按草图采用短上沿、左竖线与 li 下方长底边组成的开放对话框，保留尾部和自然笔画，使用蓝色及透明背景。见 [草图整理版](assets/project-icon/v11/README.md)，为新的设计方向，未覆盖此前版本或接入插件。
+
+用户澄清草图仅用于示范结构，明确不要笔绘风。v12 采用平滑几何扁平样式，保留短上沿和 li 下长底边，收紧内部间距；见 [紧凑扁平版](assets/project-icon/v12/README.md)。
 
 
 ## v0.4.1 CLI 开关与设置布局
@@ -249,6 +254,7 @@ macOS外层沙箱限制项目/运行状态写入；Harness例外使用自身工�
 
 ZCode 使用原生精确工具名 denylist 禁止子代理、Skill、工作流及跨会话调度和 node_repl，不硬编码个人 MCP 名单。该版本 CLI 没有独立 runtime 配置入口，仍会加载全局插件/MCP；原生允许的 MCP 可以执行（plan 甚至可能直接允许未标注破坏性的工具），无头 broker 仅拒绝 ask 分支。不能把外层文件沙箱描述为网络/MCP隔离，亦不修改用户配置来伪造隔离。
 
+
 ## v0.5.1 六个扩展 CLI 的账号来源与原生设置
 
 账号管理按已安装 CLI 的真实能力分流。ZCode、Grok、OMP、Pi、OpenCode 可打开用户操作的原生终端；Harness 0.2.0-rc.2 未提供原生 TUI，空参数不是账号终端，因此不伪造该入口。Host 返回的账号动作可带 `target: models`；Client 对此关闭插件设置弹窗，再经适配 Harness 0.2.0-rc.2 的共享 Store 桥打开原生“模型”页，不调用 `accountStart`。桥组件通过框架在根作用域复用原生设置的同一 Store handle，由框架绑定 actions 和管理生命周期；不自行创建 Store 实例，不使用 DOM 点击或不可用的 shortcuts.invoke。此桥依赖该版本的 openSection 能力，能力不匹配时明确提示，不伪装为通用公开导航 API。`settings.section` 的唯一所有者是宿主原生设置组件，插件不能重新声明或跨所有者渲染该插槽；两种加载顺序都必须保持原生设置与插件入口正常。
@@ -263,6 +269,7 @@ ZCode 未显式配置 executable 时，优先采用已安装的完整入口 `~/.
 
 六个 CLI 的状态查询只投影允许展示的摘要；本地文件存在、引用可解析或 `configured` / `verification=local` 不等于远程登录、订阅权益或额度有效。该说明通过状态来源提示呈现，不返回凭据内容、API key 前缀或原始异常。账号任务仍遵循 CLI 启用状态、宿主执行权限、取消、同 CLI worker/账号互斥和进程范围清理；本小节描述实现契约，实际验收记录单独写入 `doc/tasks.md`。
 
+
 ## v0.5.2 原生终端登录与账号身份
 
 - OMP、Pi、OpenCode 的登录按钮统一为「登录设置」，直接打开 AccountTerminal，不依赖 Host API 凭据解析，也不导航到宿主模型设置。OMP 使用实际安装版本支持的 `setup`；Pi 固定 1.0.2，通过其导出的 runtime/InteractiveMode 打开原生认证菜单，无提示词或按键注入；OpenCode 使用 `auth login`。Pi UI 接口不匹配时明确失败，不退回模型任务。
@@ -273,6 +280,16 @@ ZCode 未显式配置 executable 时，优先采用已安装的完整入口 `~/.
 
 OMP 原生登录向导的顶部标志与说明占用较多终端行；账号弹窗为其保留520px终端高度，小窗口通过弹窗正文滚动，避免CLI按行数裁切提供商列表。其他CLI保持原生紧凑弹窗。
 
+
+## v0.6.0 Hermes Agent 与旧 Harness CLI 退役
+
+活跃 CLI ID 用 `hermes` 代替外部 `harness`，接受自然语言 harmes 别名。宿主 DeepSeek Harness 的 SDK、原生主题、Gateway 和权限机制保持原状。用户 `doc/assets/cli-icons/v3-hermes/hermes.png` 原图进入运行时，按 manifest 缩放与光学居中，暗色反相。
+
+共享协议将活跃 ID 与历史 ID 分离；Storage 兼容旧 Harness 开关、偏好和 worker 文件，但不向设置页暴露旧开关，不迁移到 Hermes。历史行标注已移除，仅支持查看；Host 在新建、续聊、改模型及开启操作前拒绝旧 ID。Hermes 首次独立选型。
+
+Hermes 账号与模型使用原生 home，不注入共享智谱引用。账号终端分别打开 model/auth 原生菜单，状态仅返回安全本地摘要。目录只读取原生明确选择的 provider/model；能力缓存不明确则只提供 default。任务通过原生 stream-json，session_id 独立校验，最终结果结合退出码；工具错误可被后续成功恢复，真实 tokens 进入回复和底栏，不伪造 context。所有进程复用宿主管理与清理机制、macOS 外层写入沙箱。原生 launcher 需要安装锁与运行租约；任务和目录读取仅对白名单日志、会话、数据库、锁与租约授予写入，账号/config/.env/源码保持只读；首次初始化或凭据刷新需通过原生账号终端。详细协议与真实/模拟证据区分见 `doc/hermes-probe.md`。
+
+
 ## 智能体角色预设与稳定名称（2026-10-06）
 
 - 角色库由 Host 存在当前 profile 的私有 `role-presets.json`（0600），供所有 CLI 共用。首次初始化从用户提供的七份小说技能装配；之后编辑与删除持久化，不在重启时重新覆盖。每项包含稳定 id、名称、概述和提示词，名称去重，提示词最多 30000 字符。来源调整见 `doc/role-presets.md`。
@@ -282,15 +299,6 @@ OMP 原生登录向导的顶部标志与说明占用较多终端行；账号弹�
 - 新增 Gateway RPC：`rolePresets`、`saveRolePreset`、`deleteRolePreset`、`renameWorker`。调用先验证父会话；修改取消后不写入，写盘成功后才发布新状态。预设库 CRUD 与角色选择不启动 CLI 或查询模型。
 - 设置导航增加“智能体预设”：两列名称＋概述卡片，窄屏单列；搜索、新增、编辑、确认删除使用宿主 Input/Button、主题色、圆角与悬停参数，角色正文以纯文本编辑。对话菜单可重命名。总览显示“名称｜模型 · 强度”，详情标题显示“名称｜主题”；标题改为 Cli Worker，NOW 居中并缩小标题区留白。
 - 七份默认角色仅装配可复用提示词；未复制来源技能的工具、共享规范或原小说正文。依赖缺失时提示词要求说明缺口，不声称已完成不存在的脚本或独立审查。
-
-
-## v0.6.0 Hermes Agent 与旧 Harness CLI 退役
-
-活跃 CLI ID 用 `hermes` 代替外部 `harness`，接受自然语言 harmes 别名。宿主 DeepSeek Harness 的 SDK、原生主题、Gateway 和权限机制保持原状。用户 `doc/assets/cli-icons/v3-hermes/hermes.png` 原图进入运行时，按 manifest 缩放与光学居中，暗色反相。
-
-共享协议将活跃 ID 与历史 ID 分离；Storage 兼容旧 Harness 开关、偏好和 worker 文件，但不向设置页暴露旧开关，不迁移到 Hermes。历史行标注已移除，仅支持查看；Host 在新建、续聊、改模型及开启操作前拒绝旧 ID。Hermes 首次独立选型。
-
-Hermes 账号与模型使用原生 home，不注入共享智谱引用。账号终端分别打开 model/auth 原生菜单，状态仅返回安全本地摘要。目录只读取原生明确选择的 provider/model；能力缓存不明确则只提供 default。任务通过原生 stream-json，session_id 独立校验，最终结果结合退出码；工具错误可被后续成功恢复，真实 tokens 进入回复和底栏，不伪造 context。所有进程复用宿主管理与清理机制、macOS 外层写入沙箱。原生 launcher 需要安装锁与运行租约；任务和目录读取仅对白名单日志、会话、数据库、锁与租约授予写入，账号/config/.env/源码保持只读；首次初始化或凭据刷新需通过原生账号终端。详细协议与真实/模拟证据区分见 `doc/hermes-probe.md`。
 
 Hermes 与角色功能共享同一 WorkerRuntime；名称、角色快照与原生 CLI 会话分别持久化，退役 Harness 的保护条件先于执行派遣，不影响现有角色编辑及名称查找。
 
@@ -346,6 +354,7 @@ Hermes 与角色功能共享同一 WorkerRuntime；名称、角色快照与原�
 - 首次仅建立 development-workflow 规格，业务能力域在实际变更触及时逐步补充。命名角色及预设已实现，Grok/Hermes/Kimi 的真实验收边界继续以现有证据为准。
 - 本次不改 Host/Client/共享协议，不更新 Desktop 或真实运行 CLI。使用方法、候选能力域与升级方式见 [OpenSpec 开发指南](openspec.md)。
 
+
 ## 2026-10-07：v0.6.7 明确调用、原生目录与状态证据
 
 - 名称表统一驱动 Host 派遣工具和中文调用提示。规范 ID 与常用别名可直接解析，agy 对应 antigravity，glm／zhipu／智谱对应 zcode，harmes 对应 hermes。较长名称只接受唯一轻微拼写误差，短名称、歧义与 retired harness 不作模糊替换；省略 cli 的旧 Antigravity 工具调用保持兼容。
@@ -354,6 +363,7 @@ Hermes 与角色功能共享同一 WorkerRuntime；名称、角色快照与原�
 - Pi／OMP 从全局原生配置和插件持久账号目录安全读取允许的认证／模型输入；同 provider 的有效插件账号优先，空插件配置不遮蔽全局账号。worker 的会话与运行状态继续隔离，原生全局配置保持只读；仅复制所需账号和模型数据，不复制历史会话。Host 智谱引用仅作为显式兼容来源。
 - AccountState 增加 unconfigured 以区分未配置与已知失效。默认缺安装、无账号、空配置灰色；unauthenticated 表示明确失效，unavailable 表示读取／配置错误，二者红色。显式坏 executable 配置红色。未知信息保持灰色并说明原因；Client 导航与账号摘要共用投影，未配置优先于空目录失败。
 - 原生目录和本地账号记录仅证明相应本地事实，不证明远端模型或订阅可用。此次变更通过 OpenSpec 的 worker-dispatch、cli-model-discovery 和 cli-connection-health 管理；自动回归、非模型本机查询、实际界面和未做真实任务的边界见 doc/tasks.md。
+
 
 ## 2026-10-07：v0.6.8 账号可用模型与精简名称（重开）
 
@@ -585,6 +595,7 @@ Windows 官方源码安装的 distlib 入口在隔离 `HERMES_HOME` 下无法定
 - 开发清单保持 `private: true`；已验收构建通过发布暂存脚本生成公共清单，npm/GitHub 共用同一预构建 tgz，文件白名单为运行库、插件 patch、README 与许可证，不向安装者交付开发脚本或个人配置。
 - 新版 Windows 的 ConPTY 消息窗口可归属于 bootstrap，不能直接把窗口归属 PID 当作 conhost。仅在该精确情形动态解析真正的窗口所属进程；非公开接口缺失或返回异常时拒绝启动。保留 Host 父 PID、创建时间、系统 conhost 路径和 Job 完整退出校验，详见活动 OpenSpec 的窗口归属设计与上游出处。
 
+
 ## 2026-10-12：v0.7.8 开发调整，Claude 与 CC Switch
 
 - 官方登录/退出与路由准备分开：直接使用当前原生账号目录、官方端点及 `auth login --claudeai`。自身路由字段或长期桌面进程继承的旧变量不阻塞官方操作；managed 强制来源和账号目录重定向继续拒绝。CC Switch、账号及历史文件不被插件改写。
@@ -625,6 +636,7 @@ Windows 官方源码安装的 distlib 入口在隔离 `HERMES_HOME` 下无法定
 - v0.7.7（`021441b`）正常 PATH/npm 解析不检查桌面归档；v0.7.8 的 `1b12366` 新增桌面身份检查后，Electron 对不存在的 `resources/app.asar` 抛无 code 的 `Invalid package`，导致正确 npm CLI 被误报不可用。真实 Host 已捕获此异常，不能归因于用户安装或账号。
 - Windows 安装 helper 局部懒加载 Electron 内置 `original-fs`，普通 Node 沿用 `node:fs`；普通文件、权限、真实路径和 PE 检查使用相同物理 FS。不存在的可选归档正常视作不存在，真实归档按磁盘文件处理。保留显式 GUI 拒绝、损坏/权限失败、同安装独立 CLI 核验与路径优先级。
 - 不改变全局 `process.noAsar`，不吞异常字符串、不回退另一 CLI，不新增依赖或存储迁移。最小专项及 Windows Desktop 自动路径验收见 `doc/tasks.md`；版本保持 v0.7.8。
+
 
 ## 2026-10-13：v0.7.8 Windows 设置后台终端弹窗修复
 
@@ -708,3 +720,246 @@ Cordis patch id `cliworker-now`、Gateway `cliworker`、工具 `cliworker_*`、�
 - Host 持久保存提交状态，再在后台串行停止、核验、准备及执行。同一 Worker 连续插队时，尚未发起原生进程的旧请求标记为已被后续插队取消；已经发起原生进程的旧请求正常停止，待进程范围清理确认后执行最新请求。同一侧栏按点击序号防止乱序请求覆盖新请求，不拼接已取消文本，其他普通排队消息保留相对顺序。
 - 提交事件与原生用户事件通过精确消息 ID 合并；持久气泡展示取消或失败状态。受理不等于原生运行，任务准入与实际启动分别记录。取消、停止、准备失败及结果待核实均保留消息在对话中，本节取代此前对应消息恢复到待发送卡片的规则。
 - 重开侧栏可读取持久提交状态；Host 重启保留历史且不自动重放未完成插队。关侧栏不撤销已受理消息；显式停止只取消该次停止之前已接收的请求；同一侧栏后点消息先展示，RPC 等该次停止回执后发出，晚到回执不能撤销后一次点击。权限、账号、模型和进程清理检查继续生效，未确认清理时不放行下一条。
+
+
+### v0.7.10：全部 CLI 原生通信协议（2026-10-16）
+
+- 新 Worker 持久保存明确 transport：Codex app-server、Claude/AGY 双向 stream-json、Kimi/Grok ACP、ZCode app-server、MiMo/OpenCode HTTP+SSE、Hermes Runs API；Pi/OMP 沿用原生 RPC。缺少 transport 的历史 Worker 保留旧执行器恢复；未知标记拒绝启动。Hermes API 不接管已有 CLI 会话。
+- 原有账号准备、模型/强度、项目写锁及会话互斥继续由 Host 执行。native bridge 在 private launcher/宿主受管范围内分派独立 runner，Client 仍仅经 Harness Gateway。各协议独立处理公开事件、反向请求、选型回读与终态，额外权限无人处理时明确拒绝。
+- 每轮独占原生进程或认证回环服务，私有描述文件 0600/目录 0700。session/event/native/result 帧按行与累计输入/输出限额校验，原生指标不直接当会话正文；本轮终态、工具状态与退出分别核实，保留部分回复及 AGY 汇总冲突的 uncertain 语义。
+- Host 停止先通过本轮私有停止邮箱尝试原生 interrupt/cancel/abort/stop，再终止并确认整个执行范围，回执不能替代进程退出。Pi/OMP 的引导与停止命名空间隔离；新协议不因原生支持就自动开放尚未实现的引导或审批界面。
+- Hermes 使用独立 API-only gateway home 保留自身 API session 数据，每轮认证材料和其他平台配置隔离，不导入用户定时任务和其他消息平台，不改原账号来源；原生空定时线程随 gateway 退出。MiMo 0.1.15 的 /doc 漏列子路由按实际安装版证据限定兼容，不套用 SDK/main 的假设。
+- 新 Kimi ACP 可在实际模式目录包含 plan 且设置回执通过时执行只读任务；历史 Kimi 执行通路和 Hermes 继续拒绝只读派遣。
+- 详见 doc/native-protocols.md；OpenSpec 为 migrate-native-cli-protocols。真实模型、两平台及 Desktop 证据分别记录，未验收不归档隐藏。
+
+
+## 2026-10-16：v0.7.10 提交占用、队列代际与原生引导
+
+- Client 点击时同步分配消息 ID 和序号、固定 direct/running 归属、发送方式与 bubble/queue 展示，并登记会话占用；Host 的 `submitMessage` 在查询父会话或准备模型前登记 reservation。`selectedBusy` 覆盖受理、准备、队首启动、运行、插队与清理，旧状态无法把第二条消息误分类为空闲续聊。
+- 所有消息只按稳定 ID 对账，相同正文的两次点击保持两条。直发与队列启动写入对应用户事件标识；普通排队准备期间仍是卡片，只有原生进程开始启动才转换成用户消息。重连不盲目重发，RPC 重复调用查询同一回执，设置变化不改已提交模式。
+- 存在待发送卡片（包括 paused）时禁止修改该 Worker 模型与强度，明确要求先发送或取消；不以重写 Worker.preference 改变已经排好的内容。发送方式仍可修改并只影响后续提交。
+- 队列使用私有 generation 隔离停止边界。停止同步撤销此前未执行受理并暂停旧队列，清理确认后明确提交的新一轮和新增 pending 正常运行，旧 paused 条目保持暂停；迟到旧轮终态不能暂停新代际。连续插队用实例和序号选定最新未启动请求，已经尝试 spawn 的必须先确认进程范围退出。
+- 引导按 CLI 与 Worker transport 双重核对。Codex `turn/steer`、Hermes Runs steer 与原 Pi/OMP RPC 接通当前运行；其他 CLI 的独立轮次/队列输入不包装为引导。私有控制请求绑定 run、单条 ID 和正文，明确接收、拒绝与未知分开，未知不自动重投或改为排队，停止控制与引导控制分开。详见 `running-message-protocol.md` 的官方依据矩阵。
+- 经用户明确选择，旧项目 policy 1 发送偏好在启动时一次性按能力设为默认值；policy 2 的后续手动选项继续保存。只迁移经过路径/文件身份校验的对应设置，不更改模型、强度、账号、历史或 Worker transport。旧 Worker 未接通引导时明确投影为排队并给原因。
+- 用户正文气泡独立 fit-content/max-width，时间、复制及实际失败恢复独立成行；取消、被取代和待发常规提示及其占位全部移除。一个输入动作按钮：有正文发送，无正文且可停止时停止，正在清理不重复停止；保留正文空格和换行、卡片退出与补位及 reduced-motion。
+
+- 用户进一步明确引导与排队分开：新增独立 `steerMessage` Gateway / Client / Host 方法，直接面向 expectedRunId，不经过普通提交链、队首、paused/generation 或清理后自动续发。普通排队规则只适用于排队；未就绪/已结束的引导保留输入，已投递未知的引导核对原接收状态，不改成下一轮。
+
+## 2026-10-16：开发版本归属调整
+
+- 用户明确将上述原生协议迁移、排队与独立引导修改归入 v0.7.10；下一次正式提交前的修复和调整继续属于 v0.7.10，不自动增加版本号。
+- 包清单、原生握手标识、README 和开发流程约束同步；已发布 v0.7.9 的链接与历史实际构建/验收证据保留。GitHub 提交、推送及发布继续需要用户明确授权。
+
+## 2026-10-16：v0.7.10 原生消息归并、过程与上下文
+
+- HTTP/SSE 以原生 messageID/partID 归并增量并核对快照，Hermes/ACP/ZCode 在明确的工具边界分段；结果帧标记 run/response 范围，防止最后一条回复误删重复前缀或原始空白。旧 HTTP 历史只在一个原生消息/文本 part 的完整证据下只读恢复，记录不改写。
+- 原生工具身份、输入、输出、命令和明确父调用经 Host 白名单保存为 PublicToolCall，历史兼容同样限于已核验结构。没有原生调用 ID 不用步骤编号代替，没有父调用字段不从调度依赖推断树。Client 只通过 Gateway 收到该投影，公开工具文本按惰性 Markdown/JSON/终端结果展示。
+- 过程薄适配复用 Harness 公开 primitives 和只读 ui-chat 工作详情配置，按真实事件顺序在思考、工具、正文之间切分；完整内部聊天组件不公开导出，不伪造 session 或借用父对话数据。ContextMeter 同样按原生布局和交互适配，未知分类保留未知。
+- TelemetryReader 独立当前窗口、累计用量和绑定模型容量，安全透传来源、估算与分类。AGY 解码原生三类估算；Codex 用 last.totalTokens；HTTP 用最新 input+cache；ACP、ZCode 和 Pi/OMP 接原生窗口字段。Hermes 当前 Runs API 未提供窗口与分类；Claude 只接受原生可选 summary，不增加 full 计数或生成请求。逐 CLI 证据与边界见 native-inspection.md，实施和验收对应 OpenSpec fix-native-message-streaming-and-inspection。
+
+## 2026-10-16：v0.8.1 原生子会话及受控工具桥
+
+本节及其“完整原生输入修正”记录此前局部接入阶段；其中 content 嵌入、旧输入兼容和内部组件适配已由下方“接手纠偏”替代，不能作为当前完整侧栏界面交付依据。
+
+- 用户明确迁移到 v0.8.1，迁移前 v0.7.10 的真实工作树与 lib 已独立备份，逐项校验与恢复说明见 `tasks.md`；不覆盖用户运行目录。旧协议、CLI conversation ID、账号与模型选型保持独立，不因 Harness 会话绑定而更换。
+- 每个 Worker 对应真实的直接子 Agent：`origin: subagent`、明确 parentSessionId，使用官方 continuable Activation/Session 生命周期。普通会话列表沿用宿主排除子 Agent 的规则，CLI Worker 统一管理打开；后台保留父子目录关系，以便恢复与定位。
+- Host 用虚拟 provider 与 `llm/stream` 接管该内部子会话，实际生成只走原有 Worker 准入和 CLI runner。创建和重开只投影既有运行；官方 RPC identity 与 Worker receipt 去重。公开工具声明和结果使用原生持久化事件，但不把 tool-call yield 给 DSH AgentLoop，避免显示时再执行工具。JSONL 冷恢复须通过真实宿主测试。
+- Client 使用 SessionReference、SessionProvider 与 `conversation.content` factory；这是原生对话组件，不复制 Codingns4DSH 的页面。缺少公开细粒度接点时使用仅在插件容器内、限定 rc.2 的 DOM 能力 guard 和原生 Tooltip；不修改 Harness 核心或全局 CSS。
+- 既有 queue、独立 steer 与等待清理的 Stop 保留原执行链。当前原生调度没有完全相同的暂停代际和回执契约，因此相应入口明确禁用，旧控制保留；未知能力不能因 UI 看起来可点击就放行。原生 ContextMeter 尚未映射 CLI 实测统计时显示未知并禁用，其余真实统计在 Worker 详情查看。
+- run 级回环工具桥只向选定 CLI 子进程注入临时连接，令牌不进 argv、公开 DTO 或用户账号配置。工具 schema 与执行均来自真实子 Agent 的公开 tools 运行时，权限、规划与用户审批链继续有效。显式禁止桥内再次派遣 Worker 或 Agent；技能按需读取并限制资源目录。
+- 主生成、恢复与被桥接工具的额外模型请求均受路由守卫；未适配的辅助生成明确拒绝，不调用 DSH 模型 API。该约束只用于 CLI Worker 子会话，不更改普通主对话的配置。CLI 的实际工具准入、订阅及平台证据逐项记录，详见 `native-conversation-ui.md` 与 `native-harness-tools.md`。
+- 历史记录不批量改写：首次挂接投影当前运行，之后新轮连续进入原生对话。此前更早记录保留原 WorkerStorage 和独立只读入口；不为了补齐旧工具生命周期而伪造原生调用。
+- 完整宿主核验确认 rc.2 原生子会话输入没有公开的发送前准入接点，detached 连发可在 Host 后置拒绝后丢稿，因此本次关闭普通原生发送。公开 `conversation.composer` chain 显示原因并保留原生待审批/提问；Worker 输入框作为唯一发送入口，继续原子预占、排队与独立引导规则，不猴补宿主提交方法。
+
+
+### v0.8.1 完整原生输入修正
+
+用户在正式 Desktop 指出仅替换消息区、保留旧 Worker form/queue 未达到完整嵌入要求。此前该局部预览不再作为完整界面交付；版本继续为 v0.8.1。当前通过公开 StoredEntry 复用实际 InputBar、QueueDock，并对内部 keyboard 合同做固定 rc.2 运行检查；递归 alias 保留 renderer 的子槽位授权及原有组件、CSS、store、locale、select，不修改全局提交服务或宿主源码。原生组件动作直接接既有 Worker 同步准入与清理屏障，原生 Session.prompt 旁路继续拒绝。原生模式移除旧 form、旧队列和例行说明。
+
+原生 continuable 子 Agent 自带独立 Stop/Send，保留官方行为；不为沿用旧单按钮要求伪造根会话。旧暂停队列有明确恢复操作；队列编辑缺少接口时禁用说明，插队箭头准确说明停止旧轮。真实 CLI contextPressure/contextBreakdown 分项完整才映射原生菜单。普通 DSH 会话透传原组件；从其他 DSH 子 Agent 导航打开 CLI 子会话时输入只读，继续从 CLI Worker 管理。
+
+正式验收还发现空结算 turn、主动停止被投影为失败以及未结束工具导致 V4 冷恢复失败。分别使用公开 runMaintenance 防空唤醒、清理完成后的 user cancel、ToolCallRecovery 未知结果结算修复。旧无效投影仅在下一次明确新发且无活动 Agent、明确 not-resumable 时 CAS 轮换内部显示绑定，留存退役引用；Worker/CLI 会话与日志不改写。验证与失败报告见 doc/tasks.md。
+
+
+### v0.8.1 接手纠偏：右侧栏完整原生会话（2026-10-16）
+
+本节是当前架构约定，替代此前局部 content、内部 keyboard/Inbox 代理和只读模型按钮方案。中途曾改用 `uiWorkspace.openSession` 打开完整主页面；该方案虽然复用了主 frame，但不符合用户要求的右侧 CLI Worker 栏位置，已撤回。相关历史过程与证据保留在实施记录，不能用于证明当前侧栏已验收。
+
+点击 Worker 后，Client 先通过 Gateway 刷新 Host 绑定，再用真实 `SessionReference` 核对直接子会话身份与读取状态，在侧栏自己的 `SessionProvider` 下渲染。原生 `conversation.content` 使用公开 Factory 的 embedded 布局；消息、过程、工具详情、InputBar、QueueDock、菜单、统计及弹层继续使用原组件。映射保留原 store/inject/locale/select 和 renderer 所有权，不复制内部组件，不借其他注册项的 renderSlot 闭包，不代理 keyboard，也不创建假的 useSession/Inbox。公开数据合同只适配 CLI 设置与统计，其他原生投影原样传递。
+
+按最新截图要求，顶部恢复原 CLI Worker 的返回、Worker 名称/标题与任务操作；删除先前添加的原生父面包屑、对话/轨迹页签、标准模式与页头按钮。原生正文使用独立公开视图 seat 固定为聊天，避免继承主页面轨迹选择；窗口和全局侧栏控制仍由外层宿主管理。打开子会话不切换主页面。切换 Worker、关闭栏或插件卸载释放读取引用，不停止已运行任务。子 Agent 始终绑定所属主对话并排除在普通会话列表外；旧历史和旧队列保留只读管理入口，不自动迁入新 Inbox 或执行。
+
+模型/强度复用实际原生 ModelSelect，目录及选择回调接真实 CLI 选型；权限/规划复用 PermissionSelect、PlanChip，以当前 CLI 支持范围和 Host 保存结果为准。运行、准入、停止清理、任何原生 next-turn/next-step 待发消息及兼容队列（含 paused）均锁定模型与权限设置；不因切换 UI 绕过 Host 原有互斥、账号和能力检查。精确 parent/child/Worker 身份不匹配或数据未就绪时禁用，普通主对话保持原生控件及原数据。
+
+ContextMeter 和 StatsPills 使用真实原生组件与菜单。InputBar 的公开注册结构仍保留实际 keyboard、注入和子槽，仅将 tokenUsage/contextPressure/contextBreakdown 映射为匹配 Worker 的可核查遥测；不拿显示投影估算冒充 CLI 上下文，不累加重复快照，不以累计用量代替窗口占用，缺失分类不补零。数据不足时遵循原生组件的隐藏规则，不另画统计区。附件/分支尚未接通时原位说明；附件限制不禁用仍可用的原生指令菜单。
+
+Host 在原生 Inbox 领取消息后使用现有 launch、CLI Agent/模型与 runner；原生提交身份贯穿 Runtime 准备，防止该 run 被再次注入投影。每条请求的 RPC 身份、正文摘要、批次身份和接收状态持久保存在 nativeInputs；合批后单条重试在冷恢复后仍去重，重复项不阻断后续不同输入。状态不明时禁止自动重发，已领取消息按原 ID 放回真实队列供编辑或移除。停止等待工具和进程清理。
+
+native next-step 按 CLI transport 的实际能力处理。当前运行原生 steer 已接通且就绪时面向同一 run 发送，以原生接收回执为准；接收不等于模型执行，拒绝或结果未知不自动降级为新一轮。未接通该通路时，当前完整 CLI run 视为执行步，消息在其结束和清理后沿同 CLI 会话接续，不停止重启，也不把显示行分段冒充实时注入。当前接通 Codex app-server、Hermes HTTP、Pi RPC 和 OMP RPC 的原生引导；已通过模拟协议与真实 DSH Inbox 回归，未将其视作所有 CLI 的真实账号或模型验收。
+
+工具目录动态继承真实 child 作用域已配置的 MCP 与普通工具，新列表按当前目录生成，调用及旧回执重放重新核验；执行进入 tools.execute 原生权限与审批链。技能正文、资源及依赖撤销同样阻止缓存回执。递归派遣和未接通 DSH 模型辅助继续拒绝，公开文本顺序和错误标记保留；图像附件等没有忠实转换时明确 unsupported。原生 registry/MCP 模拟回归与真实 CLI 验收分别记录，旧协议和账号证据不替代本轮交互验收。
+
+侧栏观察 ready 及后续 openState/openError，读取失败保留真实错误和显式“修复显示会话”入口，点击后才进行既有精确身份修复。错误或迟到回执不使父会话替代子会话，也不触发主页面导航或重跑任务。实际关联测试、preview、浏览器、Desktop、平台及真实模型边界见 doc/tasks.md 和活动 OpenSpec；最终侧栏和 steer 尚待的验收必须继续保留。
+
+### v0.8.1 真实 AGY 统计与权限控件纠偏
+
+PermissionSelect 的图标与窄栏布局由原生 preset 决定；CLI `plan/accept-edits` 仅在公开控件数据中映射为 `read-only/workspace-write`，保存时转回 CLI 模式。直接传 CLI 值会使原生组件按自定义 preset 处理，遗漏原生图标；修复不添加按钮、图标或全权限选项。
+
+AGY 原生用量中的 input 是未缓存输入，reported total 为 input + output，不含 cacheRead。StatsPills 按互不重叠的输入、输出、缓存读取、缓存写入汇总，因此原生显示总量与 CLI reported total 可以不同；AGY 协议没有缓存写入类别，适配为协议确定的零，其余未知值不能补零。窗口占用仍来自该 CLI 会话最近请求的本地上下文估算及原生容量，不使用累计用量或父会话数据。
+
+不同 JavaScript realm 的字节数组构造器可能不同，`instanceof Uint8Array` 会拒绝有效数据；读取使用 Node 公共 `util.types.isUint8Array` 并保留真实 SQLite 跨 realm 回归。实际 Desktop 诊断显示其当前字节数组判断成功，29704/256000 及分类已完整解码，随后读取前后文件戳变化导致结果被丢弃；这与跨 realm 健壮性缺陷分别记录。根因是只读 SQLite 连接更新 SHM 读锁时间戳。最终仅从 SHM 的一致性戳中排除 mtime，保留其身份/大小校验与 main/WAL 完整戳比较；真正的数据库或 WAL 变动仍拒绝。只读、精确会话归属、路径/链接、文件大小与数值校验保留，最终 Desktop 三项统计及详情已按实施记录核对。
+
+
+### v0.8.1 用户确认：保留管理页，完整原生子对话及有限宿主扩展
+
+当前实现直接注册官方 `sidebar.chat.conversation` 的同一完整组件，使用真实 SessionReference/SessionProvider；原 CLI Worker 管理页和顶栏继续保留。官方视图自身管理 phase、hero、聊天与 composer。此节取代上文局部 content 和逐组件遥测包装，以及默认子 Agent 独立 Stop/Send 的呈现约定。
+
+用户于 2026-10-16 授权有限宿主扩展、安装前验收。官方 rc.2 隔离源码新增可选 `composerPresentation: main` 和 `commandSource` owner 参数，以及 `uiSession.provideProjections(reference, sources)` 会话来源接口；不修改真实子 Agent 身份、权限、Inbox、默认主会话行为。统计桥是无 React 的 Gateway 订阅与数值转换，绑定精确代际并清理；原生组件自己消费数据，不再逐组件包装。
+
+Host 持久保存同一 CLI 会话已确认的累计快照，新 run 尚无数据时继续使用，换会话即失效；响应 usage 与累计分开。AGY 的真实响应边界、公开过程及单次 usage 经实际 AgentLoop 结算；工具回执只读投影，不重执行。缺少公开思考、精确响应边界或单次 usage 时保持未知，不补造。具体支持边界和验收见 native-conversation-ui.md、native-conversation-host-extension.md 与 tasks.md。
+
+
+### v0.8.1 十一 CLI 数据范围与原生每轮用量补充
+
+2026-10-17 按新建 Worker 保存的 transport 分派；旧 Worker 缺省/legacy 保留原协议，未知值拒绝，不隐式迁移会话。全 CLI 的每响应、整 run、持久会话累计和上下文分别归类；缓存与 reasoning 按各自协议归一化，缺数值或总数矛盾保留未知。只有精确身份且完整的整轮回执才能绑定原生 turn，普通响应账单与整 run 合计二选一，避免重复计费。
+
+完整原生视图继续使用官方 sidebar.chat.conversation。用户已授权宿主扩展，本轮在隔离 ui-chat 增加可选 externalTurnUsage 来源及 StatsPills 的范围说明，由原生 TurnTailNodeView/TurnUsagePanel 和详情消费数据；不新增自绘用量/过程控件。每轮绑定持久保存；旧历史只按 accepted nativeInputs、批次/run 和原生 user.source.rpcId 的唯一闭合事件恢复内存映射，不重写 Session、不按文本或时间猜对应。
+
+底部优先使用已确认的同会话累计。只有完整 run 账单时，下一轮期间保留最近已确认回执，并在原生详情说明范围；不将其提升为会话累计。Hermes 本地 canonical input 与 HTTP inclusive input 分别处理；历史会话累计按精确 CLI home/session/cwd 读取。存在 WAL 时仅查询私有 DB/WAL 快照并销毁，避免只读 SQLite 连接仍更新用户 SHM；无 WAL 使用 immutable 只读 URI。无公开过程/容量仍按原生未知行为处理。当前四包扩展仅隔离验收，正式 Desktop 未安装；逐 CLI 证据和边界见 cli-native-data-audit.md。
+
+### v0.8.1 当前 CLI 补充数据接口与完整性（2026-10-17）
+
+用户追加授权参考 codex-host、Codingns4DSH 及相关官方项目补齐数据接口。先按安装版证明来源，再接观察或只读查询，保持原 CLI Agent、transport、保存选型及权限。外部参考代码不执行；缺计数补零、累计差 clamp、空白 reasoning 占位及 DOM 统计补丁不采用。全十一 CLI 的具体版本、来源、作用与限制统一见 `cli-native-data-audit.md`；第 10 节旧报告保留历史证据，新入口按第 11 节核验。
+
+Kimi 2.1.1 保持 ACP。发送前保存精确 session/main wire cursor，只读官方 durable usage.record、llm.request、step.end 与 turn.ended，核 session、项目、agent、模型、prompt/turn/step 身份及前缀连续性，不枚举其他用户会话。只有请求覆盖完整、终态成功且无辅助／重试／子 agent 缺口时发布 run 账单，其余仅 reported；CLI emptyUsage 四零不能证明 provider 已给完整零账单。独立响应回执不强绑到已丢失响应身份的 ACP 正文，当前上下文仍使用 ACP used/size。不得切换旧 Python Wire 或为统计启动 Web 服务。
+
+Hermes 在同一受管 HTTP Python 进程经官方 PluginContext 注册 pre/post/error/session-end 观察，安全模式和插件发现隔离保持。观察仅向本轮私有通道写白名单身份／计数，nonce、连续序号和 session/native run/turn/request 配对后消费，结束清理。CLI canonical normalized 默认零不当成 provider 明确报告的缓存零，覆盖完整与分桶完整独立判定；不能以收齐请求数量自动证明 raw 账单完整。只有符合条件的请求 prompt 与 context_length 才补总占用／容量，MoA 等缺口不造分类。该观察不会为旧 stream-json 历史补造过程或每响应数据；旧精确 DB/WAL 会话累计仍单独读取。
+
+OMP 16.4.4 保留 no-extensions/no-skills。原进程声明唯一 native builtin /context 后，生成结束串行执行有界元查询，仅在 agentInvoked:false 精确回执后使用原生五类估算与 buffer/free；不将命令输出写入对话，不由分类和或百分比反推 used，不采用 null→0 fallback。/usage 可能查账号，/stats 会启动 dashboard，不自动调用。get_session_stats 实际只遍历当前 state.messages，因此改标 native-active-context／reported，不持久成完整 session。message_end.usage.orchestration 的明确 input/output/cacheRead 保持独立，provider total 不等普通四桶时不按差额造桶、不删除差异、不冒充完整四桶 response。
+
+Pi 1.0.4 的 get_session_stats 已遍历全部 entries，包含压缩、分支摘要、独立 usage 与 toolResult 计费；继续复用该原生全历史快照。ExtensionContext 只提供总上下文与只读 entries，没有分类 Token 方法；不为分类自行分词。OpenCode 1.19.0 增加同 ID／项目的 GET session.tokens 原生 counter 快照：step-finish 修改先减旧再加新、删除会下降，故覆盖替换而非累加／取最大值。其 output 不含 reasoning，由统一口径层加一次；不将此 session snapshot 当 run 或最后响应。MiMo 0.1.15 的 Session 没有相同 counter，plugin trajectory／assembled prompt／部分 metrics 不足证明完整辅助账单或原生分类，不套用 OpenCode 字段。
+
+可选会话投影保留原生 partial categories、精确名称、来源、估算标签和 OMP extra/reporting 范围，不补零迎合三桶结构，不重新组合对话 UI。ContextMeter 弹层统一只展示占比、进度条及系统提示词／工具定义／对话消息三行；来源和额外分类仅在底层留存用于校验，不增加显示行，未知状态同样如此。估算、缺值说明和统计范围继续保留。普通会话未提供外部来源时沿原投影。当前这些新接口已在源码与离线夹具接通；整包原生视图复验、Desktop 备份安装与冷启动状态以本轮 `tasks.md` 后续记录为准，本节不预记安装通过。真实账号／模型、全部 CLI 工具链和 Windows 缺口继续单独保留。
+
+### v0.8.1 首轮无响应与运行过程（2026-10-17）
+
+截图的首轮尚无响应时，官方组件原有的“无数据则隐藏”分支会隐藏底部统计；此前完成态验收不覆盖这个状态。本节替代上文 CLI 子会话缺值直接隐藏的约定。插件仍把官方 `sidebar.chat.conversation` 的同一 component、inject、store、locale 和公开 options 交给真实子会话 Renderer，未组装 StatsPills、ContextMeter 或 ChatView。已授权宿主扩展增加会话来源 `telemetryAvailability`，由官方 StatsPills/ContextMeter 自己保留三个模块，未知值显示“—”并在原生详情说明等待数据、未报告或连接断开。已确认数值（包括真实零）优先；未提供该可选来源的普通 DSH 会话保持默认行为。
+
+Hermes 官方 pre/post/error 观察沿同一 HTTP 子进程，通过 nonce、session/native run、turn/request 和连续 sequence 核对后发布请求状态。独立、有界、串行轮询不依赖 SSE 先返回内容；本地 Worker 的 runId 与 Hermes accepted run_id 分开绑定。`externalRequestState` 仅保留白名单 phase、HTTP 状态及错误类别，不泄露原请求或错误正文，不从 retry_count 猜测退避延迟或重试计划；下一次真实请求替换失败提示，终态或换 run 清除。状态进入原生 ChatView/RunningStatus，不能用空推理、假工具或虚构 step 补画过程。
+
+Hermes HTTP 的公开 append-only reasoning 和已确认响应身份的 tool-start 按实际到达时间进入原生流；工具名称/身份可先显示 preparing，参数、回执和账单仍等待真实边界。其他可能撤回的快照保留结束边界保护。无公开思考/工具时没有可展开过程，这是上游数据边界；有公开过程则由原生过程组显示、折叠和展开。请求状态、过程及 Token 用量是独立来源，不以显示一项推定另一项完整。
+
+Hermes HTTP 受管服务结束时使用官方计划停止 SIGINT，避免官方把未标记 SIGTERM 当作异常停止而 exit1，覆盖已返回的成功结果；自然崩溃、非零退出和无法确认退出仍是失败，其他 CLI 停止方式不变。Hermes 的 HTTP/legacy/observer/DB canonical 计数缺少原始缓存字段存在证据，零值不能证明提供方明确报告零；仅在读取副本中降为未知，保留总量及已知正数，并使用原生部分用量详情。旧持久快照同样冷读消歧，不改历史日志或失败结果。
+
+本节候选已在隔离首轮场景和真实 Desktop 历史会话完成验收并安装；模拟输入、历史只读及真实模型验证严格分开。具体包hash、测试、备份、用户文件保留和未验证边界以 tasks.md 的第12节记录为准。
+
+### v0.8.1 完成答案与原生过程顺序（2026-10-17）
+
+同一未提供独立响应身份的 CLI 叙述段中，正文和晚到公开推理在同一原生请求保留独立 block；等待进程清理不创建空成功末 step。已形成的旧多 step 记录通过精确 Worker、父子会话、成功 run 和闭合 turn 证明既存答案位置，Host 只提供 seq/step/messageId/endSeq，原生 ChatView 再核对并恢复其显示。旧事件不改写、CLI 不重跑。
+
+只恢复答案可见不足以通过原生交互验收。对通过验证的旧 turn，原生有效条目顺序将对应公开过程放在正文上方，沿用既存节点、分组和展开 store，不重新拼组件、不用 CSS 颠倒位置；同 step 晚到推理同样以真实 DOM 顺序验证。普通 DSH 无此来源时保持默认行为。
+
+上下文核查必须追到同一请求的 used/limit。截图对应 Hermes 实测为 4046/1048576，原生整数百分比为 0%，详情保留真实数值。这与缺失上下文、累计账单和缓存字段是否已提供分别判断，不把未知缓存补成零、不把显示不足 1% 误判为没有接线。
+
+
+## v0.8.1 上下文精度与原生分类完整性（2026-10-17）
+
+用户后续 Hermes-2 截图对应请求为 4091/1048576，约 0.390148%。此前只验证真实分子、分母已接通，遗漏了共享原生组件将百分比取整为零后也绘制空图形的问题，以及外部来源挤掉原生分类行的问题。此节替代上文“不足 1% 显示 0%”的验收结论。
+
+修复位于官方共享 ContextMeter/contextOccupancy。底部、详情标题与无障碍标签使用同一格式：真实零为 0%，0—1% 的正值最多两位小数，低于 0.01% 为 <0.01%；图形使用未取整比例。1% 及以上保留整数展示，超窗口的图形封顶但实际分子不改。非法值保持未知，普通 DSH 与外部 CLI 共用这项精度修复。
+
+外部 CLI 在同一原生详情保留系统提示词、工具定义、对话消息三行，支持完整、部分与全未知；缺失为 — 并说明原因，完整分类仍用原生颜色分段。弹层不展示“分类来源／数据来源”或 CLI 额外分类行；来源及 OMP 的额外分类仅在底层保留用于校验，free/buffer 不作占用分类。精确总量与分类估算分别标记。现有三分类标准投影仍要求完整，部分数据由可选 externalContext.breakdown 传入同一个组件。
+
+Hermes 通过原进程官方 pre_api_request hook 的实际 request_messages 与完整 tools，调用其原生估算原语采集数值分类，仅支持已核对的 chat_completions；同一 request/turn/session/model 成功响应后发布。系统提示不重复计算；未知、截断或脱敏的工具定义不计作零。原始提示和工具定义不写入观察文件，也不重新请求模型。已结束旧记录没有保存分类快照的无法精确补回，显示未知；分类估算不反向覆盖供应商 input 统计。
+
+## v0.8.1 其余十 CLI 原生侧栏对齐（2026-10-17）
+
+十 CLI 继续由同一个官方完整视图承载，协议修复位于各自适配及安全遥测层，不新增对话组件；最终新增 `context-clean` 四包宿主扩展候选，统一去掉上下文弹层的来源说明及额外分类行。Codex 保留实时 commandExecution 输出、MCP 进度和动态工具结果，缺省完成输出不擦掉已收到内容；Claude 按 parent_tool_use_id 隔离流，主响应结束前暂存子流公开事件，避免打断原生桥，异常时确认 peer 关闭后保留已公开内容，不制造成功或账单。
+
+ACP/ZCode 的正文→公开思考→正文按真实边界分段；没有公开思考不构造替代。Pi/OMP 在确认模型后传递原生容量，并在 prompt 前及 response 间发起独立 ID、单个在途、750ms 超时的只读统计查询；终态迟到回执忽略，查询失败不重发用户任务。OpenCode/MiMo 的初始全零 assistant 为占位，不能清空已知上下文；明确完成的真零保留，完成回执缺少完整输入则清旧占用、保留已证实同模型容量。
+
+逐响应 usage、run 合计、session 累计、最近请求上下文分别投影。缺少对应响应身份时不把总账挂到消息，缺分类不猜三桶；不同 CLI 的输入/缓存口径继续独立。完整逐项来源和限制见 `doc/ten-cli-native-parity.md`，实际离线、浏览器与 Desktop 范围见 `doc/tasks.md` 第15节。
+
+## v0.8.1 七张真实截图回归（2026-10-17，第16阶段）
+
+Pi 的请求组成观察必须与当前可执行文件所在的官方安装匹配。已核对版本通过 `context_with_system`、`getCurrentSystemMessage` 和 `estimateTokens` 统计真实 provider-facing 请求，仅以专用 fd3 输出 nonce 和数值；RPC stdout 不承载观察数据。仍禁止用户扩展自动加载，只显式加载本插件观察器。Host 验证 session/provider/model/连续序号和活动请求，限制帧与缓冲大小，终态迟到帧丢弃；同身份新请求无法分类时发送 unknown 并清旧分类，独立的已知上下文总量不被覆盖。
+
+MiMo/OpenCode 先从自身原生 server 读取实际 provider SDK、模型和端点，再在 prompt 之前串行关闭元数据 server，以本轮随机 nonce 的 loopback relay 作为原生 provider baseURL 重启。只支持已核对的原生 SDK 请求；继承原 HOME、PURE、cwd、权限和数据目录，验证实际生效路由后才提交一次任务，准备失败回退原配置。relay 将请求和响应原字节透传到已核实的固定上游，不落盘请求、工具定义或凭据；仅对同 session header、精确当前用户内容、模型及主请求合同匹配的数据计算三类数值，使用对应 CLI 原生 chars/4 估算算法。标题/摘要请求不混入主请求；同请求超限、畸形或缺字段会清除旧分类。结束及取消关闭 server、relay、上游请求、socket 和 agent，不留下监听器。
+
+这两条通路仅补充分类估算，不能按估算总和改写账单、真实 input 或上下文压力。共享遥测只接收白名单数值与请求身份，晚到 usage 不擦掉当前有效分类，旧历史无采集数据不追算。视图继续使用整个原生会话及已有共享宿主扩展，不新增统计或过程组件。
+
+macOS ZCode 临时运行根使用短路径，避免官方 UUID Unix socket 超过长度限制；Grok 按已安装 ACP 版本发送标量配置值并核对实际模型/强度。只有协议终态有效且实际成功发出本插件收尾信号，才容许对应清理退出码；自然非零退出、错误、未确认退出或无终态仍失败。Antigravity 的 `user_input`/`checkpoint` 为元数据，未知中性事件记覆盖诊断，不制造 FAILED；非法结构和真实工具错误仍失败。公开过程缺失保持原生无展开行为，不从最终正文补造思考。
+
+## v0.8.1 五图续聊与新版宿主兼容（2026-10-17，第17阶段）
+
+同一 CLI/session 的上下文独立保存最近有效检查点，尚无新采样时保留；显式 unknown 清除，真实零正常生效。ZCode 启动的 `turnCount=0`、无 currentTurnId、全零 projection 是初始化占位，不能清空旧统计；其进程 projection 总量按本轮解释，不再冒充 session 累计。选择新模型会持久化旧 run 的上下文失效标记，清 observedModel 和上下文检查点；新 run 不继承旧模型窗口，历史账单保持本来口径。
+
+Grok 通过官方 `_meta["x.ai/statusLine"]` 能力订阅、模型目录更新和同 session 状态读取原生上下文估算。旧记录只接受精确 session/model/prompt 的安全只读 durable 回执，不能从账单推算 context。ZCode 从本 Worker 的精确 main_turn model-io 完整请求读取 system/tools/messages，按已安装官方 `ceil((CJK*2+other)/3)` 原语估算各类；分类与压力、账单独立，不强制闭合。两者只向共享视图发布白名单数值与身份；新请求明确未知清旧分类，文件不完整或身份冲突拒绝读取，历史不改写。
+
+当前 Desktop 为 0.2.1-rc.1。已授权四包扩展移植到该版本官方原生视图，保留新版 flow、统计和交互结构；原生注册依然可选，普通会话不受影响。插件用新 SDK 的 caller activation / drainChildren，旧版保留 continuable API，均保持父目录归属、真实 child 工具策略和精确清理。构建使用固定 rc.1 完整独立依赖，不覆盖本机 rc.2 链接或共享 store；当前宿主匹配的候选通过隔离验收后再安装。
+
+## v0.8.1 当前 Desktop 的能力检测与可复现候选（2026-10-17，第18阶段）
+
+用户手动更新应用后，先核实际安装包与官方release源码，再在独立目录重建已授权四包；不依据版本号猜测接口变化。本次应用构建标记 `332895e0f7c9d4dbfb29729f5eb367fa263ff986` 与官方源码tag提交 `687f282e8625c6b8d11ff58211a90524be2e4317` 分别保留。四个UI包的官方rc.1到rc.2仅package版本变化，已授权生产扩展与原生 `conversation.chat.flow` 保持；旧候选和历史证据不覆盖。
+
+开发依赖为固定的40项SDK输入，安装于独立cache/store，根既有node_modules与共享store不改。发布插件的DSH peer使用 `*`，不把开发输入固定版本变成宿主加载白名单。真正的安全边界仍是运行时能力检测：子Agent生命周期方法、精确父子会话与绑定代际、原生Slot所有权、可选投影接口及清理合同缺一不可。缺能力明确拒绝，不伪造兼容。版本支持说明仅在Release中依据实际验收记录，放宽peer本身不是验收证据。
+
+Client生成的Typert纯helper从选定SDK解析并按官方inline-safe规则内联；Host继续保留宿主SDK external，避免复制Remote类破坏共享身份。源码、构建器、依赖锁、应用、preview与四包manifest均参与最终候选核验。正式构建之前须验收隔离preview并备份原lib/profile，随后核对全部运行产物；本次第一次比较因81个源码路径注释差异中止并回滚，profile未改。仅经审明的构建根路径注释可进入窄规范化白名单，其他代码、声明、脚本、资源和文件集合仍严格比较。比较或构建失败不得应用profile。
+
+本次类型检查、四包268项与构建11项定向回归以及10项完整原生侧栏隔离浏览器检查已完成；浏览器模型调用和真实CLI进程均为0，协议回放与模拟zero/unknown分开记录。它们不证明新的RuntimeTask、真实工具执行或AGY原生DB上下文。写入时正式安装重试正在执行，Desktop冷启动及旧历史只读验收仍待根任务完成；本节不将其记为成功。实际结果和未完成边界继续写入 `doc/tasks.md`，版本保持0.8.1。
+
+## v0.8.1 Qoder CLI 原生 ACP 接入（2026-10-17）
+
+Qoder 作为独立 CLI 进入已有选择、项目偏好、原生子会话及两层任务树，外部分发与已安装界面名称均沿用现有约定。依据官方 npm CLI 1.1.73 的实际包、帮助和 ACP 初始化，使用 `qoder --acp` / JSON-RPC 2.0 NDJSON，保存 `qoder-acp-v1`；不把 Claude 相似消息当兼容证据，也不引入 SDK 1.0.53 默认 worker transport 所指的另一版 CLI 1.1.71。包哈希、官方来源和逐项证据见 `qoder-protocol.md`。
+
+模型目录由同一已安装 CLI 的 SDK stream-json initialize 返回完整 ID、启用状态与动态强度，等待 catalog-ready 后仅返回启用模型，不从 `--list-models` 表格推断。实际任务仍通过 ACP 设置当前模型、`reasoning_effort` 及 `mode` 并核对回执；失配、未宣告能力和账号变化在 prompt 前失败。账号只能取自 Qoder 自身登录或 PAT，经对应来源核验后绑定，不导入其他 CLI 或宿主凭据，不把认证密文刷新误认为稳定账号身份。单独账号查询通过 initialize → account_info 取得主键；授权目录使用同次 catalog-ready initialize 的账号投影。不另装 SDK 运行时，不由插件解密登录文件。认证读取、动态目录与实际任务是独立证据。
+
+Desktop 复验发现原 ACP 临时会话 close→delete 失败，且原生目录初始化会刷新共享默认缓存，因此账号和目录元数据统一使用私有配置目录及官方 SDK 认证策略。浏览器登录保留原只读认证根且要求已有机器标识；PAT 使用私有认证根，按需复制已有机器标识。必要用户配置和 customs 安全复制，项目设置语义保留；会迁移写回的旧项目配置及尚未绑定的 `.env` 控制声明提前拒绝。end_session 回执、正常终止归属、完整流结算与进程范围退出全部确认后才返回目录并删除临时根。详细边界与实际验收见 `qoder-protocol.md` 第 9 节。
+
+设置加载沿用其他 CLI 的操作内快照和目录缓存模式：Qoder 在同一次 catalog-ready 初始化中取得账号与完整模型，操作前后独立校验认证、配置、环境、自定义模型和可执行入口来源。冷目录和显式刷新省去重复账号进程；热目录仍重新核对账号绑定，真实任务仍独立进行运行前校验。快照只在本次操作内有效，不对登录身份增加 TTL。来源指纹表示本地来源一致，不冒充初始化后的再次远端认证；实际耗时与进程数以 `tasks.md` 实测为准。
+
+本版 ACP 实际模式为 default/acceptEdits/auto/dontAsk/yolo，插件只开放现有“允许编辑”映射到 acceptEdits；额外审批拒绝，不使用绕过权限。没有宣告 plan，宿主或子任务要求规划时提前拒绝，不能以默认模式或提示词替代原生只读保护。运行期间配置变化继续核对，恢复必须沿用已确认的原生 sessionId，历史重放不进入本轮正文。停止先发 session/cancel，再由已有进程管理确认整个范围退出；协议回执不单独代表停止成功。
+
+正文、公开思考及工具事件复用现有原生桥，工具名保留 `_meta.qoder.toolName`，参数和结果只取实际公开字段。prompt 返回的 input/output/total 是整轮查询账单，只投影为 run，不冒充每响应或当前上下文；缓存、分类、窗口和 Credits 缺失时保持未知。官方品牌图标作为本地资产随插件打包，沿用其他 CLI 的大小、主题与设置布局，来源另外记录。
+
+本次先完成官方包检查、非模拟初始化及明确标注模拟的空会话配置；这些检查没有发送模型任务。真实账号模型、工具产物、同会话恢复、运行中取消和 Windows 的验证缺口单独保留。继续执行相关回归、类型检查与隔离 preview 验收，Desktop 安装及其实际结果仅按 `tasks.md` 记录；不在设计决定中提前宣布安装或真实执行成功。此次变更保持 v0.8.1，不自动全局安装 Qoder、不推送或发布。
+
+## v0.8.1 三图原生会话回归（2026-10-17）
+
+Worker 内部 `cliworker-native` 模型仅用于精确解析，不再公布到全局 `listModels`。宿主允许解析未广告的精确模型，因此父会话菜单不再出现 Worker 实例和重复 CLI 模型；侧栏仍使用当前 CLI 的独立目录，不修改父会话选型。
+
+Qoder 1.1.73 官方路由可隐藏 token 计数并返回全零，这种回执不能证明真实零账单。用量、旧轮次和消息脚注均保留未知；非零输入仅标记为“CLI 报告输入”，不推断是否含缓存。原生 JSONL 若有 `context_usage_ratio`，Host 按精确项目、会话、模型和 ACP `userMessageId` 对应的 user UUID／parentUuid 链做有界只读核验。该比例作为独立元数据进入既有原生 ContextMeter，token 数、容量和分类保持未知，不以虚构分子分母制造百分比。旧记录不改写，重复读取不累加。ActivityPill 说明轮／步及耗时属于 Harness 调用 CLI 的记录，首 token 时间包含启动和准备，不冒充 CLI 内部请求指标。
+
+Grok 截图轮次有思考 token 计数但未公开思考文本。官方 `conversation.chat.turnTail` 扩展点在精确 Host-issued Grok 子会话的已完成成功轮次增加“Grok 本轮未提供公开思考内容”。该判断读取真实原生 assistant blocks，已有公开 reasoning 时不显示说明；工具仍按原生过程展开。运行、加载、失败、身份不匹配或主会话不提前说明，不制造 reasoning 事件、不解读 signature。
+
+比例和中性输入口径只扩展现有可复现的 0.2.1-rc.2 四包数据接口，不修改应用核心或共享配置。先完成隔离构建与完整原生视图验收，再在空闲退出后备份并更新 Desktop 所链接的构建及四包产物。实际证据、回滚和未执行的新模型／平台验证见 `tasks.md`。
+
+
+## 2026-10-18：v0.8.1 用量缺失状态与公开过程纠偏
+
+按四张 Desktop 截图核验原生来源。Qoder 1.1.73 的该轮全零账单与 transcript 计数是隐藏/不明确计数，只有精确会话上下文比例；Hermes 该轮公开 hook/HTTP/DB 只保留规范化统计，无法证明默认缓存零是明确未命中。保留真实数值与未知边界：外部轮次明确 null 时通过原生消息用量控件展示未知详情，缓存缺失显示“缓存命中 —”，不使用父会话、包装调用量、credits 或上下文比例推算账单。普通原生会话保持既有行为。 统计断连或无效回执清除数值，但仅为最近一次已接受快照中的精确轮次保留 null 未知标记，防止回退到 Harness 包装调用量；owner/generation 变化及释放清空旧绑定，错误帧不能引入新轮次。
+
+用户要求移除 Grok 额外缺失说明，本节替代此前 turnTail 可见说明的设计。Grok 与 OMP 实际公开的思考/工具仍进入原生过程；没有可读内容时不增加正文说明或伪造展开内容。OMP 原生摘要已开启，只有 reasoning token 数、空片段或 opaque signature 不提供可读内容。原生过程、账单和上下文独立判断。
+
+OMP 在已有受租约保护的插件账号运行目录执行官方 models refresh，然后按当前账号池、额度与原生能力筛选。任务沿同一 registry 解析精确模型，用户原始 models.db/models.yml 保持；正常 OAuth 轮换沿既有 CAS。当前本机 16.4.4 的自身账号回执为 free，可选为 GPT-5.6-Luna 与 GPT-5.6-Terra，未以其他 CLI 的登录或模型目录扩大范围。Desktop 更新与真实验收状态见 doc/tasks.md，目录可见不等于生成已验收。
+
+
+## 2026-10-18：原生过程内的 CLI 思考记录（v0.8.1）
+
+全部 12 种 CLI 沿现有 Host 公开 reasoning 白名单与原生 assistant-step 持久化路径显示思考记录。Client 委托原生节点渲染器，仅调整思考标题和展开正文的滚动区域；记录位于“已完成，用时…”的原生过程内，保留步骤分组、工具交错顺序和原生折叠状态。没有 turnTail 面板、伪工具或第二份文本存储。授权绑定同时校验 Worker、CLI、child/parent session；主会话不改标题。注册卸载保留原生子 slot 所有权。
+
+Codex 新建与恢复后续轮次通过原生 `turn/start` 请求 `summary: auto`；只采集实际公开摘要，保留原选模型、强度与权限。旧历史无摘要、未知用量和上下文分类不补造。Host 的流式公开边界仍由各协议保证：可撤回快照在公开完成边界后展示，不能把暂存或私密字段视为可读思考。
+
+2026-10-18 Codex 定向修复：实际安装版0.162.1与本机模拟服务已验证 `summary:auto` 到达 HTTP 请求；rollout 的 `turn_context.summary` 为兼容序列化字段，不能作为摘要是否启用的依据。`HarnessConversationStream` 仅对当前 run 的 Codex `codex-app-v1` 和既有 Hermes `hermes-http-v1` 开放公开增量实时投影，其他快照保持完成门槛。Codex 的摘要接收、最终去重、原生位置与停止后的持久化继续复用现有路径，不增加客户端组件或第二份历史。
+
+隔离 rc.2 Harness 原生 UI 已验证 12 CLI 的原生过程归属、展开/收起、Codex 两段思考与工具交错、刷新重开、无公开内容、键盘和 980px 窗口窄栏；安全 Markdown 和 400px 内滚动通过。输入全部明确标注模拟，真实 CLI／模型及 Windows/Linux 未执行。本地 Desktop 更新与数据保留记录见 tasks.md。
+
+## 2026-10-18：Windows Qoder 独立 CLI 自动发现（v0.8.1）
+
+Windows 按已核验的官方原生位置 `~/.qoder/bin/qodercli/qodercli.exe` 和当前用户 npm 前缀发现 Qoder，原生入口校验 PE，npm 入口绑定 `@qoder-ai/qodercli` 及其实际声明的 `qodercli`/`qoder` bin 并静态解析 shim。无固定安装时 PATH 优先查询独立 `qodercli`，仅命令缺失时兼容旧 `qoder`；每个自动来源（含缓存）重新校验独立 PE 或官方 package bin，npm dispatcher 归一到实际 qodercli bin，IDE/未知入口拒绝，不扫描任意目录。手动路径与显式部署配置保持优先，存在但损坏、权限不足和无法确认的入口不静默切换。账号、模型、ACP 参数及历史存储协议不变；路径发现与登录/模型访问分别核验。
+
+## 2026-10-18：Windows Qoder 账号收尾与 Desktop 终端来源（v0.8.1）
+
+Qoder 元数据查询必须先取得原生成功回执并确认 `end_session`。官方 Windows SDK 使用 `TerminateJobObject(1)` 收尾，因此仅在该请求由插件正常主动终止、没有取消或协议错误、进程范围已确认退出时接纳对应的 `1/null` 退出；自然非零、提前退出和未确认清理仍拒绝。该分类不执行登录、续期或模型请求，不改变账号文件与派遣前授权核验。
+
+正式 Desktop 的 ConPTY 二进制与清单可能分别在 `app.asar.unpacked` 和 `app.asar`。新增受当前 Host 安装位置、随机 nonce、归档只读锁与固定版本约束的清单证明；Electron 的逻辑读取和 `original-fs` 的物理无链接检查分离。继续按同一实际 helper 校验固定 exe/DLL 摘要、对应源码副本、父 PID、创建时间和控制台身份，并以 Job 范围为空及终端释放作为停止成功条件。普通 npm 物理清单路径保持。来源及完整边界见 `windows-conpty-source.md`；真实账号、模拟终端和实际 UI 的验收证据分别记入 `tasks.md`。

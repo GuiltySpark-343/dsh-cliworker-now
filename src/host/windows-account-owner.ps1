@@ -50,7 +50,39 @@ public sealed class CwnAccountJob : IDisposable {
  public string ConsoleIdentityReason { get; private set; }
  public string ConsoleImageKind { get; private set; }
  public bool ConsoleImageDevicePrefix { get; private set; }
- public void AttachConsoleHost(int pid, DateTime latest, DateTime earliest) {
+ public static bool NoLinks(string path) {
+  for(var current=System.IO.Path.GetFullPath(path);!String.IsNullOrEmpty(current);current=System.IO.Path.GetDirectoryName(current)) {
+   if((System.IO.File.GetAttributes(current)&System.IO.FileAttributes.ReparsePoint)!=0) return false;
+  }
+  return true;
+ }
+ static string Hash(string path) {
+  using(var stream=new System.IO.FileStream(path,System.IO.FileMode.Open,System.IO.FileAccess.Read,System.IO.FileShare.Read))
+  using(var sha=System.Security.Cryptography.SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-","").ToLowerInvariant();
+ }
+ // These are the two Microsoft ConPTY payloads shipped by the lockfile's
+ // official node-pty@1.2.0-beta.15 npm archive, not a process-name allowlist.
+ public static bool TrustedNodePtyImage(string image,string packageRoot) {
+  try {
+   if(String.IsNullOrEmpty(packageRoot) || !String.Equals(System.IO.Path.GetFullPath(image),image,StringComparison.OrdinalIgnoreCase)) return false;
+   var expected=System.IO.Path.Combine(packageRoot,"build","Release","conpty","OpenConsole.exe");
+   var prebuiltX64=System.IO.Path.Combine(packageRoot,"prebuilds","win32-x64","conpty","OpenConsole.exe");
+   var prebuiltArm64=System.IO.Path.Combine(packageRoot,"prebuilds","win32-arm64","conpty","OpenConsole.exe");
+   var release=String.Equals(image,expected,StringComparison.OrdinalIgnoreCase);
+   if((!release && !String.Equals(image,prebuiltX64,StringComparison.OrdinalIgnoreCase) && !String.Equals(image,prebuiltArm64,StringComparison.OrdinalIgnoreCase)) || !NoLinks(image)) return false;
+   var dll=System.IO.Path.Combine(System.IO.Path.GetDirectoryName(image),"conpty.dll");
+   if(!NoLinks(dll)) return false;
+   var exeHash=Hash(image); var dllHash=Hash(dll); string architecture;
+   if(exeHash=="7f68c840226505004215c0b82d4e502c24b5bc3f4b93c4baaaa19bd679c0def8" && dllHash=="3319b484b80bb53d1f4d0a9eb0ea60fd0f61da69db7280ca43b84215f19245ff") architecture="win10-x64";
+   else if(exeHash=="7fa560be0c9b6c81db5d1b855a4a6e0f3ee5a2ea75d36eebb3ae44443b8d4866" && dllHash=="b3a9f975c51d5b9b96d290bf784e990e3f85203b063c21614457353f566266ff") architecture="win10-arm64";
+   else return false;
+   if(!release && !String.Equals(image,architecture=="win10-x64"?prebuiltX64:prebuiltArm64,StringComparison.OrdinalIgnoreCase)) return false;
+   var source=System.IO.Path.Combine(packageRoot,"third_party","conpty","1.25.260303002",architecture);
+   var sourceExe=System.IO.Path.Combine(source,"OpenConsole.exe"); var sourceDll=System.IO.Path.Combine(source,"conpty.dll");
+   return NoLinks(sourceExe) && NoLinks(sourceDll) && Hash(sourceExe)==exeHash && Hash(sourceDll)==dllHash;
+  } catch { return false; }
+ }
+ public void AttachConsoleHost(int pid, DateTime latest, DateTime earliest,string packageRoot) {
   using(var p=Process.GetProcessById(pid)) {
    var handle=p.Handle; var started=p.StartTime.ToUniversalTime();
    var expected=System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"conhost.exe");
@@ -59,7 +91,7 @@ public sealed class CwnAccountJob : IDisposable {
    var image=p.MainModule.FileName; var leaf=System.IO.Path.GetFileName(image);
    ConsoleImageKind=String.Equals(leaf,"conhost.exe",StringComparison.OrdinalIgnoreCase)?"conhost.exe":String.Equals(leaf,"openconsole.exe",StringComparison.OrdinalIgnoreCase)?"openconsole.exe":"other";
    ConsoleImageDevicePrefix=image!=null && (image.StartsWith(@"\\?\") || image.StartsWith(@"\??\"));
-   if(!String.Equals(image,expected,StringComparison.OrdinalIgnoreCase)) { ConsoleIdentityReason="wrong-image"; throw new Exception("console identity changed"); }
+   if(!String.Equals(image,expected,StringComparison.OrdinalIgnoreCase) && !TrustedNodePtyImage(image,packageRoot)) { ConsoleIdentityReason="wrong-image"; throw new Exception("console identity changed"); }
    if(!AssignProcessToJobObject(job,handle)) throw new Win32Exception(Marshal.GetLastWin32Error());
   }
  }
@@ -69,6 +101,55 @@ public sealed class CwnAccountJob : IDisposable {
  public void Dispose() { if(job!=IntPtr.Zero) { CloseHandle(job); job=IntPtr.Zero; } if(root!=null) root.Dispose(); }
 }
 '@
+function Test-CwnManifestProof($Proof,$Request) {
+  return $null -ne $Proof -and $Proof.nonce -ceq $Request.nonce -and $Proof.packageRoot -eq $Request.packageRoot -and $Proof.archivePath -eq $Request.archivePath -and $Proof.name -ceq 'node-pty' -and $Proof.version -ceq '1.2.0-beta.15'
+}
+function Get-CwnElectronManifest([string]$Root) {
+  # The root is derived from the actual console image, never a provider lookup.
+  $hostImage=(Get-Process -Id $HostProcessId -ErrorAction Stop).MainModule.FileName
+  $resources=Join-Path (Split-Path $hostImage -Parent) 'resources'
+  $expected=Join-Path $resources 'app.asar.unpacked/dsh/node_modules/node-pty'
+  $archive=Join-Path $resources 'app.asar'
+  if($Root -ne $expected -or ![CwnAccountJob]::NoLinks($hostImage) -or ![CwnAccountJob]::NoLinks($archive) -or ![CwnAccountJob]::NoLinks($Root)) { return $false }
+  $script:CwnArchiveLock=New-Object System.IO.FileStream($archive,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+  $request=@{nonce=[guid]::NewGuid().ToString('D');packageRoot=$Root;archivePath=$archive}
+  $requestPath=Join-Path $Directory 'manifest-request'
+  [IO.File]::WriteAllText(($requestPath+'.tmp'),($request|ConvertTo-Json -Compress))
+  [IO.File]::Move(($requestPath+'.tmp'),$requestPath)
+  $deadline=[DateTime]::UtcNow.AddSeconds(10)
+  while([DateTime]::UtcNow -lt $deadline) {
+    $proofPath=Join-Path $Directory 'manifest-proof'
+    if(Test-Path -LiteralPath $proofPath) {
+      $info=Get-Item -LiteralPath $proofPath -Force
+      if($info.PSIsContainer -or $info.Length -gt 4096 -or ($info.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+      try { $proof=Get-Content -LiteralPath $proofPath -Raw -Encoding UTF8|ConvertFrom-Json } catch { Start-Sleep -Milliseconds 10; continue }
+      return (Test-CwnManifestProof $proof $request)
+    }
+    Start-Sleep -Milliseconds 15
+  }
+  return $false
+}
+function Get-TrustedNodePtyRoot([string]$Image) {
+  try {
+    $conpty=Split-Path -Path $Image -Parent
+    $release=Split-Path -Path $conpty -Parent
+    $build=Split-Path -Path $release -Parent
+    $root=Split-Path -Path $build -Parent
+    $stage=Split-Path -Path $build -Leaf
+    $variant=Split-Path -Path $release -Leaf
+    $layout=($stage -eq 'build' -and $variant -eq 'Release') -or ($stage -eq 'prebuilds' -and $variant -in @('win32-x64','win32-arm64'))
+    if((Split-Path -Path $conpty -Leaf) -ne 'conpty' -or !$layout -or (Split-Path -Path $root -Leaf) -ne 'node-pty') { return $null }
+    $manifest=Join-Path $root 'package.json'
+    if(Test-Path -LiteralPath $manifest) {
+      $info=Get-Item -LiteralPath $manifest -Force
+      if($info.PSIsContainer -or $info.Length -gt 65536 -or ($info.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $null }
+      $package=Get-Content -LiteralPath $manifest -Raw -Encoding UTF8 | ConvertFrom-Json
+      if($package.name -ne 'node-pty' -or $package.version -ne '1.2.0-beta.15') { return $null }
+    } elseif(!(Get-CwnElectronManifest $root)) { return $null }
+    if(![CwnAccountJob]::TrustedNodePtyImage($Image,$root)) { return $null }
+    return $root
+  } catch { return $null }
+}
 $job=$null
 $stage='await-bootstrap'
 $consolePid=$null
@@ -99,7 +180,10 @@ try {
   if ($null -ne $console) { $consoleParentPid=$console.ParentProcessId }
   if ($null -eq $console -or $console.ParentProcessId -ne $HostProcessId) { throw 'console owner mismatch' }
   $stage='attach-console'
-  $job.AttachConsoleHost($consolePid,[System.IO.File]::GetLastWriteTimeUtc($pidFile),$earliest)
+  $consoleImage=(Get-Process -Id $consolePid).MainModule.FileName
+  $packageRoot=Get-TrustedNodePtyRoot $consoleImage
+  $job.AttachConsoleHost($consolePid,[System.IO.File]::GetLastWriteTimeUtc($pidFile),$earliest,$packageRoot)
+  if($script:CwnArchiveLock) { $script:CwnArchiveLock.Dispose(); $script:CwnArchiveLock=$null }
   $stage='await-stop'
   [System.IO.File]::WriteAllText((Join-Path $Directory 'ready'),'ready')
   while (!$job.RootExited -and !(Test-Path -LiteralPath $stopFile)) { Start-Sleep -Milliseconds 50 }
@@ -134,4 +218,7 @@ try {
   # Fixed classification only: never emit native exception/context/environment.
   [Console]::Error.WriteLine('Windows account process ownership failed')
   exit 2
-} finally { if ($null -ne $job) { $job.Dispose() } }
+} finally {
+  if ($null -ne $job) { $job.Dispose() }
+  if($script:CwnArchiveLock) { $script:CwnArchiveLock.Dispose(); $script:CwnArchiveLock=$null }
+}

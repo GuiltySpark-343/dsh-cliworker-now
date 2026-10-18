@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -8,7 +8,9 @@ import {
   hasWindowsHermesInstallDirectory,
   presentWindowsCliCandidate,
   validateWindowsCodexNpmEntry,
+  validateWindowsQoderNpmEntry,
   windowsCliCandidates,
+  windowsQoderCliEntry,
 } from '../src/host/windows-cli-installation.ts'
 
 // Explicit synthetic installer/package fixtures. No account, network or installed CLI is used.
@@ -38,6 +40,17 @@ function npm(f = fixture()) {
   writeFileSync(shim, '@echo off\r\nnode "%~dp0node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n')
   return { f, shim, root }
 }
+function qoderNpm(f = fixture()) {
+  const entries = windowsCliCandidates('qoder', f), root = join(f.env.APPDATA, 'npm/node_modules/@qoder-ai/qodercli')
+  const bin = { qodercli: 'bundle/qodercli.js', qoder: 'bundle/qoder-npm-dispatcher.cjs' }
+  mkdirSync(join(root, 'bundle'), { recursive: true })
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@qoder-ai/qodercli', version: '1.1.73', bin }))
+  for (const [command, script] of Object.entries(bin)) {
+    writeFileSync(join(root, script), '#!/usr/bin/env node\n// Synthetic Qoder bin; never executed.\n')
+    writeFileSync(join(f.env.APPDATA, 'npm', command + '.cmd'), `@echo off\r\nnode "%~dp0node_modules\\@qoder-ai\\qodercli\\${script.replaceAll('/', '\\')}" %*\r\n`)
+  }
+  return { f, entries, root }
+}
 const packageRecord = {
   name: 'OpenAI.Codex',
   family: 'OpenAI.Codex_2p2nqsd0c76g0',
@@ -52,6 +65,49 @@ afterEach(() => {
 })
 
 describe('known Windows CLI installation discovery', () => {
+  it('finds Qoder native CLI despite a stale Desktop PATH, independently of its IDE dispatcher', () => {
+    const { f, entries, root } = qoderNpm()
+    pe(entries[0]!)
+    expect(presentWindowsCliCandidate('qoder', { ...f, env: { ...f.env, PATH: 'C:\\stale' } })).toBe(entries[0])
+    rmSync(entries[0]!)
+    expect(presentWindowsCliCandidate('qoder', f)).toBe(realpathSync(join(root, 'bundle/qodercli.js')))
+    rmSync(entries[1]!)
+    expect(presentWindowsCliCandidate('qoder', f)).toBe(realpathSync(join(root, 'bundle/qodercli.js')))
+  })
+  it('normalizes a proven official npm dispatcher to its standalone CLI bin and rejects an unowned script', () => {
+    const { root, f } = qoderNpm()
+    const cli = realpathSync(join(root, 'bundle/qodercli.js'))
+    expect(windowsQoderCliEntry(join(root, 'bundle/qoder-npm-dispatcher.cjs'))).toBe(cli)
+    const unknown = join(f.home, 'qoder.js'); writeFileSync(unknown, '#!/usr/bin/env node\n')
+    expect(() => windowsQoderCliEntry(unknown)).toThrow('Qoder Windows 安装入口无法确认')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@qoder-ai/qodercli', bin: { qoder: 'bundle/qoder-npm-dispatcher.cjs' } }))
+    expect(() => windowsQoderCliEntry(join(root, 'bundle/qoder-npm-dispatcher.cjs'))).toThrow('Qoder Windows 安装入口无法确认')
+  })
+  it('accepts the observed canonical versioned Qoder native target while rejecting the IDE PE', () => {
+    const f = fixture(), cli = join(f.home, 'qodercli-1.1.73.exe'), gui = join(f.home, 'Qoder.exe')
+    pe(cli); pe(gui)
+    expect(windowsQoderCliEntry(cli)).toBe(realpathSync(cli))
+    expect(() => windowsQoderCliEntry(gui)).toThrow('Qoder Windows 安装入口无法确认')
+  })
+  it('does not hide a broken Qoder native install behind its npm compatibility entry', () => {
+    const { f, entries } = qoderNpm()
+    mkdirSync(join(entries[0]!, '..'), { recursive: true }); writeFileSync(entries[0]!, 'not a native PE')
+    expect(() => presentWindowsCliCandidate('qoder', f)).toThrow('Qoder Windows 安装入口无法确认')
+  })
+  it('rejects a foreign npm package and a modified Qoder shim without executing either', () => {
+    const { f, entries, root } = qoderNpm()
+    writeFileSync(entries[1]!, '@echo off\r\nnode "%~dp0node_modules\\@qoder-ai\\qodercli\\bundle\\qodercli.js" %* & whoami\r\n')
+    expect(() => presentWindowsCliCandidate('qoder', f)).toThrow('Qoder npm 安装入口无法确认')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@foreign/qodercli', bin: { qodercli: 'bundle/qodercli.js' } }))
+    expect(() => validateWindowsQoderNpmEntry(entries[1]!)).toThrow('Qoder npm 安装入口无法确认')
+  })
+  it.each(['../outside.js', 'C:\\outside.js', '/outside.js'])(
+    'rejects a Qoder npm bin outside the declared package: %s', bin => {
+      const { entries, root } = qoderNpm()
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@qoder-ai/qodercli', bin: { qodercli: bin } }))
+      expect(() => validateWindowsQoderNpmEntry(entries[1]!)).toThrow('Qoder npm 安装入口无法确认')
+    },
+  )
   it('recognizes Codex npm despite an unrelated or stale PATH and checks package identity', () => {
     const { f, shim, root } = npm()
     expect(presentWindowsCliCandidate('codex', { ...f, env: { ...f.env, PATH: '/synthetic/stale' } })).toBe(

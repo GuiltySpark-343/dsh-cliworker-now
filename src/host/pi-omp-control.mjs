@@ -1,4 +1,4 @@
-// A run-private mailbox. Only steer is accepted; it never exposes terminal input.
+// Run-private, separately scoped steer/stop mailboxes; never exposes terminal input.
 import { constants } from 'node:fs'
 import { mkdir, lstat, realpath, open, writeFile, rename, readdir, rm } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
@@ -83,7 +83,7 @@ async function writePrivate(directory, filename, value, check) {
 }
 
 /** The returned closure is scoped to one prepared launch, never another run. */
-export async function createPiOmpControl(directory, options = {}) {
+async function createControl(directory, options = {}, commandType = 'steer') {
   await mkdir(directory, { mode: 0o700 })
   const check = await pinDirectory(directory),
     nonce = randomUUID()
@@ -94,12 +94,13 @@ export async function createPiOmpControl(directory, options = {}) {
     if (!valid(requestId, message)) return Promise.reject(new Error('Invalid native guidance request'))
     const digest = hash(message),
       previous = submissions.get(requestId)
-    if (previous && previous.digest !== digest)
-      return Promise.reject(new Error('引导请求标识已用于其他消息'))
+    if (previous && previous.digest !== digest) return Promise.reject(new Error('引导请求标识已用于其他消息'))
     if (previous && !previous.retryable) return previous.promise
     if (controller.signal.aborted) return Promise.reject(unavailable())
-    if (!previous && submissions.size >= MAX_REQUESTS) return Promise.reject(new Error('本轮引导消息已达上限'))
-    if (previous?.attempts >= MAX_ATTEMPTS) return Promise.reject(new Error('本条引导重试次数已达上限，请检查 CLI 状态'))
+    if (!previous && submissions.size >= MAX_REQUESTS)
+      return Promise.reject(new Error('本轮引导消息已达上限'))
+    if (previous?.attempts >= MAX_ATTEMPTS)
+      return Promise.reject(new Error('本条引导重试次数已达上限，请检查 CLI 状态'))
     const submission = previous ?? { digest, attempts: 0 }
     submission.attempts++
     submission.retryable = false
@@ -108,11 +109,12 @@ export async function createPiOmpControl(directory, options = {}) {
       const signalForRun = AbortSignal.any([controller.signal, ...(signal ? [signal] : [])])
       if (signalForRun.aborted) throw aborted()
       await check()
-      const attempt = randomUUID(), filename = hash(`${requestId}:${attempt}`)
+      const attempt = randomUUID(),
+        filename = hash(`${requestId}:${attempt}`)
       await writePrivate(
         directory,
         `${filename}.request.json`,
-        { nonce, id: requestId, attempt, type: 'steer', message },
+        { nonce, id: requestId, attempt, type: commandType, message },
         check,
       )
       const deadline = Date.now() + timeoutMs
@@ -130,7 +132,11 @@ export async function createPiOmpControl(directory, options = {}) {
             throw new Error('Invalid native guidance receipt')
           if (!receipt.success) {
             if (receipt.error === 'closed' || receipt.error === 'rejected')
-              throw rejected(receipt.error === 'closed' ? unavailable().message : 'CLI 未接受这条引导消息，请保留消息后重试')
+              throw rejected(
+                receipt.error === 'closed'
+                  ? unavailable().message
+                  : 'CLI 未接受这条引导消息，请保留消息后重试',
+              )
             throw new Error('引导消息接收结果未确认，请核查当前对话后再重试')
           }
           return
@@ -162,7 +168,7 @@ export async function createPiOmpControl(directory, options = {}) {
 }
 
 /** Bridge-side receiver; handle resolves only after the matching native receipt. */
-export async function receivePiOmpControl(directory, nonce, handle) {
+async function receiveControl(directory, nonce, handle, commandType = 'steer') {
   if (typeof nonce !== 'string' || !/^[a-f0-9-]{36}$/.test(nonce))
     throw new Error('Invalid native control identity')
   const check = await pinDirectory(directory),
@@ -184,9 +190,10 @@ export async function receivePiOmpControl(directory, nonce, handle) {
           if (
             !command ||
             command.nonce !== nonce ||
-            command.type !== 'steer' ||
+            command.type !== commandType ||
             !valid(command.id, command.message) ||
-            typeof command.attempt !== 'string' || !/^[a-f0-9-]{36}$/.test(command.attempt) ||
+            typeof command.attempt !== 'string' ||
+            !/^[a-f0-9-]{36}$/.test(command.attempt) ||
             `${hash(`${command.id}:${command.attempt}`)}.request.json` !== filename
           )
             return
@@ -197,9 +204,12 @@ export async function receivePiOmpControl(directory, nonce, handle) {
             await handle(command.message, command.id, command.attempt)
             success = true
           } catch (reason) {
-            error = reason?.code === 'STEER_REJECTED'
-              ? reason.message === unavailable().message ? 'closed' : 'rejected'
-              : 'uncertain'
+            error =
+              reason?.code === 'STEER_REJECTED'
+                ? reason.message === unavailable().message
+                  ? 'closed'
+                  : 'rejected'
+                : 'uncertain'
           }
           await writePrivate(
             directory,
@@ -234,3 +244,16 @@ export async function receivePiOmpControl(directory, nonce, handle) {
     },
   }
 }
+
+export const createPiOmpControl = (directory, options = {}) => createControl(directory, options, 'steer')
+export const receivePiOmpControl = (directory, nonce, handle) =>
+  receiveControl(directory, nonce, handle, 'steer')
+export const createNativeGuidanceControl = (directory, options = {}) => createControl(directory, options, 'steer')
+export const receiveNativeGuidanceControl = (directory, nonce, handle) =>
+  receiveControl(directory, nonce, handle, 'steer')
+export async function createNativeStopControl(directory, options = {}) {
+  const control = await createControl(directory, { timeoutMs: 750, ...options }, 'stop')
+  return { nonce: control.nonce, stop: () => control.steer('stop', 'stop'), close: control.close }
+}
+export const receiveNativeStopControl = (directory, nonce, handle) =>
+  receiveControl(directory, nonce, handle, 'stop')

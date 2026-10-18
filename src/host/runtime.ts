@@ -35,6 +35,9 @@ import {
 } from './roles.ts'
 import { protocolFor, resolveCliExecutable, workerArguments, captureCatalogMetadata } from './adapters.ts'
 import { spawnManagedAgent } from './managed-agent.ts'
+import { prepareNativeWorker, transportFor, usesNativeBridge } from './native-worker.ts'
+import { BridgeProtocol } from './bridge-protocol.ts'
+import { mkdirSync } from 'node:fs'
 import {
   projectDirectory,
   ProcessCleanupUnconfirmedError,
@@ -44,17 +47,29 @@ import {
 import { join } from 'node:path'
 import { AgyContextReader } from './agy-context.ts'
 import { attachTelemetry, TelemetryReader } from './telemetry.ts'
+import { captureConversationTelemetry, captureLastRunUsageSnapshot, withConversationTelemetry } from './conversation-telemetry.ts'
+import { captureContextTelemetry, withContextTelemetry, withoutContextTelemetry } from './context-telemetry.ts'
+import { NativeSupplementalContextReader } from './native-supplemental-context.ts'
+import { HermesSessionTelemetryReader } from './hermes-session-telemetry.ts'
+import { effectiveHermesHome } from './hermes-account-context.ts'
+import { NativeTimelineReprojector } from './native-timeline-reprojection.ts'
+import { projectPublicToolCall } from './public-tool-projection.ts'
 import { WorkerStorage } from './storage.ts'
 import { authorizeSelection, ACCOUNT_CHANGED } from './authorized-catalog.ts'
 import { readCliAccountBinding } from './cli-account-binding.ts'
 import { assertFirstPartyConfiguration, firstPartyEnvironment } from './first-party-models.ts'
 import { agyBackgroundEnvironment } from './agy-background-environment.ts'
+import { qoderEnvironment } from './qoder-accounts.ts'
 import { AgyProtocol } from './protocol.ts'
 import { FollowupQueue } from './followup-queue.ts'
+import { supportsWorkerNativeSteering, type RunningMessageMode } from '../shared/running-message.ts'
+import type { NativeHarnessConnection } from './native-harness-tools.ts'
+import { workerPermissionOptions } from '../shared/worker-permissions.ts'
 
 interface Task {
   worker: Worker
   prompt: string
+  userPrompt: string
   controller: AbortController
   done: Promise<Worker>
   settle: (worker: Worker) => void
@@ -62,7 +77,13 @@ interface Task {
   admissionFailure?: { error: unknown }
   queuedFollowupId?: string
   priority?: boolean
+  generation: number
+  submissionId?: string
+  spawnAttempted?: boolean
+  preserveFollowups?: boolean
   steer?: (message: string, requestId: string, signal?: AbortSignal) => Promise<void>
+  nativeStop?: () => Promise<void>
+  nativeStopRequested?: boolean
   steering: Map<string, { prompt: string; done: Promise<void> }>
   steeringController: AbortController
 }
@@ -92,14 +113,29 @@ interface PriorityMessage {
   error?: string
   runId?: string
   spawnAttempted?: boolean
+  generation: number
   controller: AbortController
 }
 const deliveryTerminal = (state: DeliveryState) =>
   ['superseded', 'cancelled', 'failed', 'completed'].includes(state)
 
 export class WorkerRuntime {
+  private harnessPreparation?: (
+    worker: Worker,
+    signal: AbortSignal,
+    input: { submissionId?: string },
+  ) => Promise<{ connection?: NativeHarnessConnection; close(): Promise<void> } | undefined>
+  setHarnessPreparation(prepare: NonNullable<WorkerRuntime['harnessPreparation']>): () => void {
+    this.harnessPreparation = prepare
+    return () => {
+      if (this.harnessPreparation === prepare) this.harnessPreparation = undefined
+    }
+  }
   private agyContextReader = new AgyContextReader()
+  private hermesSessionReader = new HermesSessionTelemetryReader()
   private telemetryReader = new TelemetryReader()
+  private supplementalContextReader = new NativeSupplementalContextReader(() => { if (!this.disposed) this.changed() })
+  private nativeTimelineReprojector = new NativeTimelineReprojector()
   private tasks = new Map<string, Task>()
   private queue: Task[] = []
   private running = new Set<Task>()
@@ -109,7 +145,14 @@ export class WorkerRuntime {
   private followups: FollowupQueue
   private followupDispatches = new Map<
     string,
-    { id: string; expectedRunId: string; controller: AbortController; done?: Promise<void> }
+    {
+      id: string
+      expectedRunId: string
+      generation: number
+      controller: AbortController
+      done?: Promise<void>
+      preserveOnAbort?: boolean
+    }
   >()
   private followupRuns = new Set<Promise<void>>()
   private followupLauncher?: (
@@ -123,7 +166,11 @@ export class WorkerRuntime {
   private priorityHistory = new Map<string, Map<string, PriorityMessage>>()
   private latestPriority = new Map<string, PriorityMessage>()
   private priorityRunners = new Map<string, Promise<void>>()
-  private priorityQueueStates = new Map<string, Map<string, QueuedFollowup>>()
+  private reservations = new Map<
+    string,
+    Map<string, { generation: number; controller: AbortController; leases: number }>
+  >()
+  private stopOperations = new Map<string, Set<symbol>>()
   revision = 0
   constructor(
     readonly storage: WorkerStorage,
@@ -158,6 +205,7 @@ export class WorkerRuntime {
           state: event.deliveryState,
           error: event.deliveryError,
           runId: event.admittedRunId,
+          generation: this.followups.generation(worker.id),
           controller: new AbortController(),
         })
       }
@@ -175,11 +223,79 @@ export class WorkerRuntime {
           ? '进程清理隔离记录无法核验，已暂停任务和账号操作'
           : '无法确认 CLI 进程已清理，已暂停后续派遣，请先核查进程退出状态'
   }
+  /** Explicit construction policy is overridable by legacy protocol regression fixtures. */
+  protected initialTransport(cli: CliId): string | undefined {
+    return transportFor(cli)
+  }
   setFollowupLauncher(launch: NonNullable<WorkerRuntime['followupLauncher']>): void {
     this.followupLauncher = launch
   }
   setQueuedExecutionGuard(guard: (worker: Worker) => void): void {
     this.queuedExecutionGuard = guard
+  }
+  /** Reserve before the Gateway's first await. This never grants execution authority. */
+  reserveSubmission(parent: string, id: string, requestId: string) {
+    const worker = this.get(parent, id)
+    this.assertCliEnabled(cliOf(worker.preference))
+    z.uuid().parse(requestId)
+    const entries = this.reservations.get(id) ?? new Map()
+    const entry = entries.get(requestId) ?? {
+      generation: this.followups.generation(id),
+      controller: new AbortController(),
+      leases: 0,
+    }
+    entry.leases++
+    entries.set(requestId, entry)
+    this.reservations.set(id, entries)
+    this.changed()
+    let released = false
+    return {
+      signal: entry.controller.signal,
+      assertCurrent: () => {
+        entry.controller.signal.throwIfAborted()
+        if (this.disposed || entry.generation !== this.followups.generation(id)) throw new UserStoppedError()
+      },
+      release: () => {
+        if (released || entries.get(requestId) !== entry) return
+        released = true
+        if (--entry.leases) return
+        entries.delete(requestId)
+        if (!entries.size && this.reservations.get(id) === entries) this.reservations.delete(id)
+        this.changed()
+        const current = this.storage.workers.get(id)
+        if (current && !current.archivedAt) this.dispatchFollowup(current)
+      },
+    }
+  }
+  directMessageReceipt(parent: string, id: string, prompt: string, requestId: string) {
+    const worker = this.get(parent, id)
+    z.uuid().parse(requestId)
+    const event = this.storage
+      .history(id)
+      .find((entry) => entry.kind === 'user' && entry.queuedFollowupId === requestId)
+    if (!event) return undefined
+    if (event.text !== prompt) throw new Error('重复提交标识对应的消息不同')
+    return {
+      workerId: id,
+      runId: event.runId,
+      ...(event.runId === worker.runId && worker.jobId ? { jobId: worker.jobId } : {}),
+    }
+  }
+  private accepting(id: string): boolean {
+    return [...(this.reservations.get(id)?.values() ?? [])].some((entry) => !entry.controller.signal.aborted)
+  }
+  private busyReason(worker: Worker, preparationId?: string): WorkerSnapshot['selectedBusyReason'] {
+    if (this.stopOperations.get(worker.id)?.size || worker.status === 'stopping') return 'stopping'
+    if (this.latestPriority.has(worker.id) || this.priorityRunners.has(worker.id)) return 'priority'
+    if (
+      (this.preparations.has(worker.id) && this.preparations.get(worker.id)!.id !== preparationId) ||
+      this.followupDispatches.has(worker.id)
+    ) return 'preparing'
+    if (this.tasks.has(worker.id) || active(worker.status))
+      return worker.status === 'queued' ? 'queued' : 'running'
+    if (this.accepting(worker.id)) return 'accepting'
+    if (this.followups.list(worker.id).some((item) => item.state !== 'paused')) return 'queued'
+    return undefined
   }
   /** RPC cancellation can settle at the client before native metadata exits. Stop owns this wait. */
   async prepareFollowup<T>(
@@ -202,6 +318,7 @@ export class WorkerRuntime {
       }),
     }
     this.preparations.set(id, entry)
+    this.changed()
     try {
       return await prepare(AbortSignal.any([signal, entry.controller.signal]), entry.id)
     } catch (error) {
@@ -213,6 +330,7 @@ export class WorkerRuntime {
     } finally {
       if (this.preparations.get(id) === entry) this.preparations.delete(id)
       settle()
+      this.changed()
     }
   }
   async sendRunningMessage(
@@ -222,19 +340,29 @@ export class WorkerRuntime {
     expectedRunId: string,
     requestId: string,
     signal?: AbortSignal,
+    requestedMode?: RunningMessageMode,
   ): Promise<QueuedFollowup | undefined> {
     const worker = this.get(parent, id)
     this.assertCliEnabled(cliOf(worker.preference))
-    const mode = this.storage.runningMessageSettings(worker.project, cliOf(worker.preference)).mode
+    const mode =
+      requestedMode ?? this.storage.runningMessageSettings(worker.project, cliOf(worker.preference)).mode
     if (
       mode === 'interrupt' &&
       (this.priorityHistory.get(id)?.has(requestId) || !this.followups.receipt(id, prompt, requestId))
     ) {
       this.interruptMessage(parent, id, prompt, requestId, requestId, 1, signal)
-      return { id: requestId, prompt, createdAt: new Date().toISOString(), state: 'sending' }
+      return {
+        id: requestId,
+        prompt,
+        createdAt: new Date().toISOString(),
+        state: 'sending',
+      }
     }
-    if (worker.runId !== expectedRunId) throw new Error('本轮状态已变化，请刷新后重新发送')
+    if (worker.runId !== expectedRunId && (!requestedMode || mode === 'steer'))
+      throw new Error('本轮状态已变化，请刷新后重新发送')
     signal?.throwIfAborted()
+    if (mode === 'queue' && this.priorityHistory.get(id)?.has(requestId))
+      return this.queueFollowup(parent, id, prompt, expectedRunId, requestId, !!requestedMode)
     const priorSteer = this.tasks.get(id)?.steering.get(requestId)
     if (priorSteer) {
       if (priorSteer.prompt !== prompt) throw new Error('重复提交标识对应的消息不同')
@@ -243,14 +371,50 @@ export class WorkerRuntime {
     }
     const receipt = this.followups.receipt(id, prompt, requestId)
     if (receipt) {
+      if (requestedMode === 'steer' && receipt.delivery !== 'steer')
+        throw new Error('这条消息已经以其他方式提交，请刷新会话')
       if (receipt.delivery === 'steer') {
         if (receipt.acknowledged) return
-        throw new Error('该引导请求已提交，接收状态尚未确认，请核查本轮记录')
+        throw Object.assign(new Error('该引导请求已提交，接收状态尚未确认，请核查本轮记录'), {
+          code: 'STEER_UNKNOWN',
+        })
       }
       if (!receipt.item) throw new Error('这条消息已经处理，请刷新会话')
       return receipt.item
     }
-    if (mode === 'queue') return this.queueFollowup(parent, id, prompt, expectedRunId, requestId)
+    if (mode === 'queue')
+      return this.queueFollowup(parent, id, prompt, expectedRunId, requestId, !!requestedMode)
+    await this.steerMessage(parent, id, prompt, expectedRunId, requestId, signal)
+  }
+  /** Current-run native input only. Queue state and queue generations never admit or order steering. */
+  async steerMessage(
+    parent: string,
+    id: string,
+    prompt: string,
+    expectedRunId: string,
+    requestId: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const worker = this.get(parent, id)
+    this.assertCliEnabled(cliOf(worker.preference))
+    z.uuid().parse(requestId)
+    if (!prompt.trim() || prompt.length > 100_000) throw new Error('消息须包含 1–100000 个字符')
+    if (worker.runId !== expectedRunId) throw new Error('本轮状态已变化，请刷新后重新发送')
+    signal?.throwIfAborted()
+    const prior = this.tasks.get(id)?.steering.get(requestId)
+    if (prior) {
+      if (prior.prompt !== prompt) throw new Error('重复提交标识对应的消息不同')
+      await prior.done
+      return
+    }
+    const receipt = this.followups.receipt(id, prompt, requestId)
+    if (receipt) {
+      if (receipt.delivery !== 'steer') throw new Error('这条消息已经以其他方式提交，请刷新会话')
+      if (receipt.acknowledged) return
+      throw Object.assign(new Error('该引导请求已提交，接收状态尚未确认，请核查本轮记录'), {
+        code: 'STEER_UNKNOWN',
+      })
+    }
     await this.steerRunningMessage(worker, prompt, requestId, signal)
   }
   private async steerRunningMessage(
@@ -302,7 +466,12 @@ export class WorkerRuntime {
       submitted = true
       await task.steer!(prompt, requestId, control)
       // A matching native receipt acknowledges delivery even if the run ends immediately afterwards.
-      this.storage.append(snapshot, { kind: 'user', text: prompt })
+      this.storage.append(snapshot, {
+        kind: 'user',
+        text: prompt,
+        queuedFollowupId: requestId,
+        admittedRunId: snapshot.runId,
+      })
       this.followups.recordSteering(worker.id, prompt, requestId, true)
       this.changed()
     })().catch((error) => {
@@ -315,6 +484,13 @@ export class WorkerRuntime {
         task.controller.abort(error)
         this.drain()
       }
+      if (submitted && !rejected)
+        throw Object.assign(
+          new Error(error instanceof Error ? error.message : String(error), {
+            cause: error,
+          }),
+          { code: 'STEER_UNKNOWN' },
+        )
       throw error
     })
     task.steering.set(requestId, { prompt, done })
@@ -341,7 +517,11 @@ export class WorkerRuntime {
     const duplicate = messages.get(requestId)
     if (duplicate) {
       if (duplicate.prompt !== prompt) throw new Error('重复提交标识对应的消息不同')
-      return { messageId: requestId, revision: this.revision, state: duplicate.state }
+      return {
+        messageId: requestId,
+        revision: this.revision,
+        state: duplicate.state,
+      }
     }
     if (
       !this.tasks.has(id) &&
@@ -353,6 +533,8 @@ export class WorkerRuntime {
     const receipt = this.followups.receipt(id, prompt, requestId)
     if (receipt?.delivery === 'steer' || (receipt && !receipt.item))
       throw new Error('这条消息已经处理，请刷新会话')
+    if (this.tasks.get(id)?.queuedFollowupId === requestId && this.tasks.get(id)?.spawnAttempted)
+      throw new Error('消息已进入执行队列，请使用停止操作')
     const lastSequence = Math.max(
       -1,
       ...[...messages.values()].filter((item) => item.clientId === clientId).map((item) => item.sequence),
@@ -363,6 +545,7 @@ export class WorkerRuntime {
       clientId,
       sequence,
       createdAt: new Date().toISOString(),
+      generation: this.followups.generation(id),
       state: sequence <= lastSequence ? 'superseded' : 'pending',
       controller: new AbortController(),
     }
@@ -382,10 +565,6 @@ export class WorkerRuntime {
       throw error
     }
     if (message.state === 'pending') {
-      const queueStates = this.priorityQueueStates.get(id) ?? new Map<string, QueuedFollowup>()
-      for (const item of this.followups.list(id))
-        if (!queueStates.has(item.id)) queueStates.set(item.id, item)
-      this.priorityQueueStates.set(id, queueStates)
       const previous = this.latestPriority.get(id)
       if (previous && !deliveryTerminal(previous.state)) {
         if (!previous.spawnAttempted) this.updatePriority(worker, previous, 'superseded', '已被后续插队取消')
@@ -394,11 +573,15 @@ export class WorkerRuntime {
       this.latestPriority.set(id, message)
       if (this.priorityRunners.has(id)) {
         // Stop owns the process/preparation cleanup; newer callers never await an older RPC.
-        void this.stopCurrent(parent, id).catch(() => undefined)
+        void this.stopCurrent(parent, id, true).catch(() => undefined)
       } else this.startPriorityRunner(worker)
     }
     this.changed()
-    return { messageId: requestId, revision: this.revision, state: message.state }
+    return {
+      messageId: requestId,
+      revision: this.revision,
+      state: message.state,
+    }
   }
   private updatePriority(
     worker: Worker,
@@ -425,7 +608,7 @@ export class WorkerRuntime {
       while (this.latestPriority.has(worker.id)) {
         let message = this.latestPriority.get(worker.id)!
         try {
-          await this.stopCurrent(worker.parentSessionId, worker.id)
+          await this.stopCurrent(worker.parentSessionId, worker.id, true)
           const latest = this.latestPriority.get(worker.id)
           if (!latest) break
           message = latest
@@ -433,9 +616,6 @@ export class WorkerRuntime {
           this.assertCliEnabled(cliOf(worker.preference))
           this.queuedExecutionGuard?.(worker)
           if (!this.followupLauncher) throw new Error('续聊通路尚未准备好')
-          this.followups.restoreStates(worker.id, [
-            ...(this.priorityQueueStates.get(worker.id)?.values() ?? []),
-          ])
           await this.followupLauncher(
             structuredClone(worker),
             {
@@ -458,17 +638,21 @@ export class WorkerRuntime {
               this.blocked ?? (message.controller.signal.aborted ? '已停止发送' : String(error)),
             )
           if (this.latestPriority.get(worker.id) === message)
-            this.pauseFollowups(worker.id, message.error ?? '插队未完成，请确认后继续发送')
+            this.pauseFollowups(
+              worker.id,
+              message.error ?? '插队未完成，请确认后继续发送',
+              message.generation,
+            )
         } finally {
           if (this.latestPriority.get(worker.id) === message) this.latestPriority.delete(worker.id)
         }
       }
     })().finally(() => {
       this.priorityRunners.delete(worker.id)
+      this.changed()
       if (this.latestPriority.has(worker.id) && !this.disposed) this.startPriorityRunner(worker)
       else {
-        this.priorityQueueStates.delete(worker.id)
-        if (worker.status === 'completed') this.dispatchFollowup(worker)
+        this.dispatchFollowup(worker)
       }
     })
     this.priorityRunners.set(worker.id, operation)
@@ -486,7 +670,12 @@ export class WorkerRuntime {
     const item =
       this.followups.list(id).find((entry) => entry.id === queuedId) ??
       (known
-        ? { id: known.id, prompt: known.prompt, createdAt: known.createdAt, state: 'sending' as const }
+        ? {
+            id: known.id,
+            prompt: known.prompt,
+            createdAt: known.createdAt,
+            state: 'sending' as const,
+          }
         : undefined)
     if (!item) throw new Error('消息已发送或已取消，请刷新会话')
     this.interruptMessage(parent, worker.id, item.prompt, item.id, item.id, 1, signal)
@@ -498,32 +687,54 @@ export class WorkerRuntime {
     prompt: string,
     expectedRunId: string,
     requestId: string,
+    workerBound = false,
   ): QueuedFollowup {
     const worker = this.get(parent, id)
     this.assertCliEnabled(cliOf(worker.preference))
     const priority = this.priorityHistory.get(id)?.get(requestId)
     if (priority) {
       if (priority.prompt !== prompt) throw new Error('重复提交标识对应的消息不同')
-      return { id: requestId, prompt, createdAt: priority.createdAt, state: 'sending' }
+      return {
+        id: requestId,
+        prompt,
+        createdAt: priority.createdAt,
+        state: 'sending',
+      }
     }
     if (!this.tasks.has(id) && !this.storage.accountBinding(id)) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
-    if (worker.runId !== expectedRunId) throw new Error('本轮状态已变化，请刷新后重新发送')
+    if (!workerBound && worker.runId !== expectedRunId) throw new Error('本轮状态已变化，请刷新后重新发送')
+    const receipt = this.followups.receipt(id, prompt, requestId)
+    if (receipt) {
+      if (receipt.delivery !== 'queue' || !receipt.item) throw new Error('这条消息已经处理，请刷新会话')
+      return receipt.item
+    }
     if (
-      worker.status === 'stopping' ||
-      (!['queued', 'running', 'completed'].includes(worker.status) && !this.followups.list(id).length)
+      (!workerBound && worker.status === 'stopping') ||
+      (!['queued', 'running', 'completed'].includes(worker.status) &&
+        !this.followups.list(id).length &&
+        !(workerBound && (isUserInterrupted(worker) || this.stopOperations.get(id)?.size)))
     )
       throw new Error('本轮已暂停或异常，请确认后重新发送')
     const item = this.followups.add(id, prompt, requestId)
     this.changed()
-    if (worker.status === 'completed') this.dispatchFollowup(worker)
+    this.dispatchFollowup(worker)
     return item
   }
   cancelQueuedFollowup(parent: string, id: string, queuedId: string): void {
     this.get(parent, id)
     if (this.disposed) throw new Error('CLI Worker is shutting down')
-    if (this.tasks.get(id)?.queuedFollowupId === queuedId)
+    const task = this.tasks.get(id)
+    if (task?.queuedFollowupId === queuedId && task.spawnAttempted)
       throw new Error('消息已进入执行队列，请使用停止操作')
     this.followups.remove(id, queuedId)
+    if (task?.queuedFollowupId === queuedId) {
+      task.preserveFollowups = true
+      task.controller.abort(new UserStoppedError())
+      if (!this.running.has(task)) {
+        this.queue = this.queue.filter((entry) => entry !== task)
+        void this.finishQueued(task, 'interrupted', '待发送消息已取消')
+      }
+    }
     const dispatch = this.followupDispatches.get(id)
     if (dispatch?.id === queuedId) dispatch.controller.abort(new Error('待发送消息已取消'))
     this.changed()
@@ -540,10 +751,15 @@ export class WorkerRuntime {
     this.changed()
     this.dispatchFollowup(worker, true)
   }
-  private pauseFollowups(id: string, reason: string): void {
-    this.followupDispatches.get(id)?.controller.abort(new Error(reason))
+  private pauseFollowups(
+    id: string,
+    reason: string,
+    throughGeneration = this.followups.generation(id),
+  ): void {
+    const dispatch = this.followupDispatches.get(id)
+    if (dispatch && dispatch.generation <= throughGeneration) dispatch.controller.abort(new Error(reason))
     try {
-      this.followups.update(id, 'paused', reason)
+      this.followups.update(id, 'paused', reason, throughGeneration)
     } catch (error) {
       this.blocked = `待发送消息状态保存失败，已暂停执行：${String(error)}`
     }
@@ -556,13 +772,15 @@ export class WorkerRuntime {
       this.followupDispatches.has(worker.id) ||
       this.preparations.has(worker.id) ||
       this.latestPriority.has(worker.id) ||
-      this.priorityRunners.has(worker.id)
+      this.priorityRunners.has(worker.id) ||
+      this.stopOperations.get(worker.id)?.size ||
+      this.accepting(worker.id)
     )
       return
     if (
       this.tasks.has(worker.id) ||
       active(worker.status) ||
-      (!explicitlyRetried && worker.status !== 'completed')
+      (!explicitlyRetried && worker.status !== 'completed' && !isUserInterrupted(worker))
     )
       return
     let item: QueuedFollowup | undefined
@@ -574,22 +792,36 @@ export class WorkerRuntime {
       return
     }
     if (!item) return
-    const dispatch: { id: string; expectedRunId: string; controller: AbortController; done?: Promise<void> } =
-      { id: item.id, expectedRunId: worker.runId, controller: new AbortController() }
+    const dispatch: {
+      id: string
+      expectedRunId: string
+      generation: number
+      controller: AbortController
+      done?: Promise<void>
+      preserveOnAbort?: boolean
+    } = {
+      id: item.id,
+      expectedRunId: worker.runId,
+      generation: this.followups.generationOf(worker.id, item.id)!,
+      controller: new AbortController(),
+    }
     this.followupDispatches.set(worker.id, dispatch)
     this.changed()
     const running = this.followupLauncher(structuredClone(worker), item, dispatch, dispatch.controller.signal)
       .catch((error) => {
-        if (this.followups.list(worker.id).some((entry) => entry.id === item.id))
+        if (dispatch.preserveOnAbort && !this.blocked) this.followups.releaseClaim(worker.id, item.id)
+        else if (this.followups.list(worker.id).some((entry) => entry.id === item.id))
           this.pauseFollowups(
             worker.id,
             `发送已暂停：${error instanceof Error ? error.message : String(error)}`,
+            dispatch.generation,
           )
         this.changed()
       })
       .finally(() => {
         this.followupRuns.delete(running)
         if (this.followupDispatches.get(worker.id) === dispatch) this.followupDispatches.delete(worker.id)
+        this.changed()
         const current = this.storage.workers.get(worker.id)
         if (current && !current.archivedAt) this.dispatchFollowup(current, explicitlyRetried)
       })
@@ -641,9 +873,7 @@ export class WorkerRuntime {
     if (this.blocked) throw new Error(this.blocked)
     if (
       [...this.storage.workers.values()].some(
-        (worker) =>
-          (active(worker.status) || this.preparations.has(worker.id) || this.latestPriority.has(worker.id)) &&
-          cliOf(worker.preference) === cli,
+        (worker) => !!this.busyReason(worker) && cliOf(worker.preference) === cli,
       )
     )
       throw new Error('此 CLI 还有运行或排队中的任务，请等待结束后再修改此 CLI 设置或管理账号')
@@ -764,29 +994,46 @@ export class WorkerRuntime {
       throw new Error('Worker does not belong to this conversation')
     const worker = selectedWorker?.archivedAt ? undefined : selectedWorker
     const timeline = worker ? this.timeline(worker) : []
-    const telemetry = worker ? this.runTelemetry(worker, worker.runId) : undefined
+    const telemetry = worker
+      ? withContextTelemetry(worker, withConversationTelemetry(worker, this.runTelemetry(worker, worker.runId)))
+      : undefined
     const context =
       worker && cliOf(worker.preference) === 'antigravity'
         ? this.agyContextReader.read(worker.conversationId)
         : undefined
+    const {
+      replies: _replies,
+      replyDurations: _replyDurations,
+      finalReply: _finalReply,
+      runUsage: _runUsage,
+      ...publicTelemetry
+    } = telemetry ?? { replies: {} }
     return {
       telemetry:
         telemetry || context
           ? {
-              usage: telemetry?.usage,
-              sessionDurationSeconds: telemetry?.sessionDurationSeconds,
-              contextUsed: telemetry?.contextUsed,
-              contextCapacity: telemetry?.contextCapacity,
+              ...publicTelemetry,
               ...context,
             }
           : undefined,
       workers,
       archivedWorkers,
       selected: worker,
+      selectedBusy: worker ? !!this.busyReason(worker) : false,
+      selectedBusyReason: worker ? this.busyReason(worker) : undefined,
       queuedFollowups: worker ? this.followups.list(worker.id) : [],
       runningMessageMode: worker
-        ? this.storage.runningMessageSettings(worker.project, cliOf(worker.preference)).mode
+        ? this.storage.runningMessageSettings(worker.project, cliOf(worker.preference)).mode === 'steer' &&
+          !supportsWorkerNativeSteering(worker)
+          ? 'queue'
+          : this.storage.runningMessageSettings(worker.project, cliOf(worker.preference)).mode
         : undefined,
+      runningMessageModeReason:
+        worker &&
+        this.storage.runningMessageSettings(worker.project, cliOf(worker.preference)).mode === 'steer' &&
+        !supportsWorkerNativeSteering(worker)
+          ? '此历史会话使用的通信通路不支持原生引导，当前使用排队；不会更换原生会话协议'
+          : undefined,
       resumeBlockedReason:
         worker?.conversationId && !this.storage.accountBinding(worker.id)
           ? LEGACY_ACCOUNT_RECORD_NOTICE
@@ -797,8 +1044,14 @@ export class WorkerRuntime {
     }
   }
   private timeline(worker: Worker): TimelineItem[] {
+    const events = this.nativeTimelineReprojector.project(worker, this.storage.history(worker.id), (runId) =>
+      join(this.storage.directory, `${worker.id}.${runId}.raw.jsonl`),
+    )
     const rows = foldEvents(
-      this.storage.history(worker.id),
+      events.map((event) => ({
+        ...event,
+        ...projectPublicToolCall(cliOf(worker.preference), event),
+      })),
       active(worker.status) ? undefined : { runId: worker.runId, status: worker.status },
       cliOf(worker.preference),
     )
@@ -807,10 +1060,52 @@ export class WorkerRuntime {
     return rows
   }
   private runTelemetry(worker: Worker, runId: string) {
-    return this.telemetryReader.read(
-      join(this.storage.directory, `${worker.id}.${runId}.raw.jsonl`),
+    const rawPath = join(this.storage.directory, `${worker.id}.${runId}.raw.jsonl`)
+    const observed = { ...this.telemetryReader.read(
+      rawPath,
       cliOf(worker.preference),
-    )
+      runId === worker.runId
+        ? {
+            conversationId: worker.conversationId,
+            model: worker.observedModel ?? worker.preference.model,
+            project: worker.project,
+          }
+        : undefined,
+    ), ...this.supplementalContextReader.read({ worker, runId, rawPath, storageDirectory: this.storage.directory,
+      ...(runId === worker.runId ? { currentIdentity: { conversationId: worker.conversationId,
+        model: worker.observedModel ?? worker.preference.model } } : {}),
+    }) }
+    if (runId === worker.runId && worker.contextInvalidatedRunId === runId) return withoutContextTelemetry(observed)
+    if (runId === worker.runId && cliOf(worker.preference) === 'hermes') {
+      try {
+        const native = worker.transport === 'hermes-http-v1'
+        const session = this.hermesSessionReader.read(
+          native ? join(this.storage.directory, 'native', worker.id, 'hermes-http-home')
+            : effectiveHermesHome({ ...this.config, stateDirectory: this.storage.directory }),
+          worker.conversationId, native ? 'api_server' : 'oneshot', worker.project,
+        )
+        // Session totals replace only the cumulative meter. Exact run receipts
+        // remain separate and are never relabelled as provider responses.
+        if (session) return { ...observed, ...session }
+      } catch {
+        // Unavailable account/session metadata never changes execution or history.
+      }
+    }
+    return observed
+  }
+  /** A settled, exact run receipt for the official whole-turn disclosure. */
+  runUsage(parent: string, id: string, runId: string) {
+    const worker = this.get(parent, id)
+    if (!/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(runId)) return
+    if (worker.runId === runId && this.busyReason(worker)) return
+    const terminal = this.storage.history(id).findLast((event) => event.runId === runId && event.kind === 'status' &&
+      ['completed', 'failed', 'interrupted'].includes(event.state ?? ''))
+    if (!terminal) return
+    const receipt = this.telemetryReader.read(
+      join(this.storage.directory, `${worker.id}.${runId}.raw.jsonl`), cliOf(worker.preference),
+      { conversationId: worker.conversationId },
+    ).runUsage
+    return receipt?.scope === 'run' ? receipt : undefined
   }
   history(parent: string, workerId: string, anchor: string, direction: string): HistoryPage {
     const worker = this.get(parent, workerId)
@@ -836,14 +1131,47 @@ export class WorkerRuntime {
     if (this.disposed) throw new Error('CLI Worker is shutting down')
     const worker = this.get(parent, id)
     if (isRetiredCli(cliOf(worker.preference))) throw new Error(RETIRED_HARNESS_NOTICE)
-    if (active(worker.status) || this.preparations.has(id) || this.latestPriority.has(id))
-      throw new Error('请等待本轮结束后再修改模型与强度')
+    if (this.busyReason(worker)) throw new Error('请等待本轮结束后再修改模型与强度')
+    if (this.followups.list(id).length)
+      throw new Error('请先发送或取消待发送消息（包含已暂停消息），再修改模型与强度')
     if (cliOf(worker.preference) !== cliOf(preference)) throw new Error('已有会话不能切换 CLI')
     this.assertCliEnabled(cliOf(preference))
     const updated = { ...worker, preference: { ...preference } }
+    if (worker.preference.model !== preference.model) {
+      updated.contextInvalidatedRunId = worker.runId
+      updated.contextTelemetry = undefined
+      updated.observedModel = undefined
+    }
     this.storage.save(updated)
     this.changed()
     return updated
+  }
+  configureWorkerPermission(parent: string, id: string, mode: TaskMode, preparationId?: string): Worker {
+    if (this.disposed) throw new Error('CLI Worker is shutting down')
+    const worker = this.get(parent, id)
+    if (isRetiredCli(cliOf(worker.preference))) throw new Error(RETIRED_HARNESS_NOTICE)
+    if (!workerPermissionOptions(worker).some((option) => option.value === mode))
+      throw new Error('当前 CLI 通路不支持此权限模式')
+    if (preparationId) {
+      const preparation = this.preparations.get(id)
+      if (preparation?.id !== preparationId) throw new Error('权限修改准备已失效，请重试')
+      preparation.controller.signal.throwIfAborted()
+    }
+    if (this.busyReason(worker, preparationId)) throw new Error('请等待本轮结束后再修改权限')
+    if (this.followups.list(id).length)
+      throw new Error('请先发送或取消待发送消息（包含已暂停消息），再修改权限')
+    this.assertCliEnabled(cliOf(worker.preference))
+    const updated = { ...worker, mode }
+    this.storage.save(updated)
+    this.changed()
+    return updated
+  }
+  /** Capability and readiness of this exact run; never starts or retries a request. */
+  nativeSteeringState(parent: string, id: string): 'ready' | 'pending' | 'unsupported' {
+    const worker = this.get(parent, id)
+    if (!supportsWorkerNativeSteering(worker)) return 'unsupported'
+    const task = this.tasks.get(id)
+    return task?.steer && !task.controller.signal.aborted && worker.status === 'running' ? 'ready' : 'pending'
   }
   submit(
     parent: string,
@@ -857,12 +1185,21 @@ export class WorkerRuntime {
     authorizedBinding?: string,
     queuedAdmission?: QueuedAdmission,
     preparationId?: string,
+    submissionId?: string,
   ): Submission {
     if (this.disposed) throw new Error('CLI Worker is shutting down')
     if (this.blocked) throw new Error(this.blocked)
     if (!prompt.trim() || prompt.length > 100_000) throw new Error('Task must contain 1–100000 characters')
     const canonical = projectDirectory(project)
     const previous = previousId ? this.get(parent, previousId) : undefined
+    if (previous && submissionId) {
+      z.uuid().parse(submissionId)
+      if (this.directMessageReceipt(parent, previous.id, prompt, submissionId))
+        throw new Error('这条消息已经受理，请读取原提交回执')
+      const prior = this.followups.receipt(previous.id, prompt, submissionId)
+      if (prior && !queuedAdmission) throw new Error('这条消息已经处理，请刷新会话')
+    }
+    if (previous) usesNativeBridge(previous)
     const effective = previous?.preference ?? preference
     this.assertCliEnabled(cliOf(effective))
     if (
@@ -871,7 +1208,7 @@ export class WorkerRuntime {
       this.preparations.get(previous.id)!.id !== preparationId
     )
       throw new Error('此会话正在准备发送，请稍后再试')
-    if (previous && active(previous.status))
+    if (previous && (active(previous.status) || this.tasks.has(previous.id)))
       throw new Error('This CLI conversation already has a running or queued turn')
     const freshAfterStop = previous && !previous.conversationId && isUserInterrupted(previous)
     if (previous && !previous.conversationId && !freshAfterStop)
@@ -880,8 +1217,16 @@ export class WorkerRuntime {
       throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
     if (previous && previous.project !== canonical)
       throw new Error('Cannot resume a worker in another workspace')
-    if (cliOf(effective) === 'kimi' && (previous?.mode ?? mode) === 'plan')
+    const nativeAdmission = previous
+      ? usesNativeBridge(previous)
+      : usesNativeBridge({
+          preference: effective,
+          transport: this.initialTransport(cliOf(effective)),
+        })
+    if (cliOf(effective) === 'kimi' && (previous?.mode ?? mode) === 'plan' && !nativeAdmission)
       throw new Error('Kimi 非交互模式不支持只读派遣')
+    if (cliOf(effective) === 'qoder' && (previous?.mode ?? mode) === 'plan')
+      throw new Error('Qoder 当前 ACP 未公开只读规划模式，无法安全执行规划任务')
     if (
       previous &&
       this.latestPriority.has(previous.id) &&
@@ -907,11 +1252,16 @@ export class WorkerRuntime {
         dispatch.expectedRunId !== queuedAdmission.expectedRunId ||
         previous.runId !== queuedAdmission.expectedRunId ||
         dispatch.controller.signal.aborted ||
-        this.followups.list(previous.id)[0]?.id !== queuedAdmission.id ||
-        this.followups.list(previous.id)[0]?.state !== 'sending'
+        this.followups.list(previous.id).find((item) => item.id === queuedAdmission.id)?.state !== 'sending'
       )
         throw new Error('待发送消息已取消或本轮状态已变化')
-    } else if (previous) this.pauseFollowups(previous.id, '已手动发送新消息，请确认后继续队列')
+    } else if (previous) {
+      this.pauseFollowups(previous.id, '已手动发送新消息，请确认后继续队列')
+      this.followups.advanceGeneration(previous.id)
+      for (const reservation of this.reservations.get(previous.id)?.values() ?? [])
+        if (!reservation.controller.signal.aborted)
+          reservation.generation = this.followups.generation(previous.id)
+    }
     const now = new Date().toISOString()
     const worker: Worker = previous ?? {
       id: randomUUID(),
@@ -924,13 +1274,21 @@ export class WorkerRuntime {
       agentNameOrigin: identity?.agentName ? 'custom' : 'auto',
       role: identity?.role ? roleSnapshotSchema.parse(structuredClone(identity.role)) : undefined,
       preference: { ...preference },
+      transport: this.initialTransport(cliOf(preference)),
       mode,
       createdAt: now,
       updatedAt: now,
       runId: randomUUID(),
       status: 'queued',
     }
+    if (previous) {
+      const telemetry = this.runTelemetry(worker, worker.runId)
+      worker.conversationTelemetry = captureConversationTelemetry(worker, telemetry)
+      worker.lastRunUsageSnapshot = captureLastRunUsageSnapshot(worker, telemetry)
+      worker.contextTelemetry = captureContextTelemetry(worker, telemetry)
+    }
     worker.runId = randomUUID()
+    worker.contextInvalidatedRunId = undefined
     worker.status = 'queued'
     worker.error = undefined
     worker.interruptionReason = undefined
@@ -939,12 +1297,24 @@ export class WorkerRuntime {
     worker.updatedAt = now
     worker.jobId = undefined
     this.storage.save(worker)
+    if (!queuedAdmission || queuedAdmission.priority) {
+      this.storage.append(worker, {
+        kind: 'user',
+        text: prompt,
+        ...((queuedAdmission?.id ?? submissionId)
+          ? {
+              queuedFollowupId: queuedAdmission?.id ?? submissionId,
+              admittedRunId: worker.runId,
+            }
+          : {}),
+      })
+      if (submissionId && !queuedAdmission) this.followups.consume(worker.id, prompt, submissionId)
+    }
     this.storage.append(worker, {
-      kind: 'user',
-      text: prompt,
-      ...(queuedAdmission ? { queuedFollowupId: queuedAdmission.id } : {}),
+      kind: 'status',
+      text: 'queued',
+      state: 'queued',
     })
-    this.storage.append(worker, { kind: 'status', text: 'queued', state: 'queued' })
     let settle!: (worker: Worker) => void
     const done = new Promise<Worker>((resolve) => {
       settle = resolve
@@ -957,12 +1327,19 @@ export class WorkerRuntime {
     const task: Task = {
       worker,
       prompt: promptForWorker(worker, prompt),
+      userPrompt: prompt,
       controller,
       done,
       settle,
       admission,
       queuedFollowupId: queuedAdmission?.id,
       priority: queuedAdmission?.priority,
+      generation: queuedAdmission?.priority
+        ? this.latestPriority.get(worker.id)!.generation
+        : queuedAdmission
+          ? this.followupDispatches.get(worker.id)!.generation
+          : this.followups.generation(worker.id),
+      submissionId,
       steering: new Map(),
       steeringController: new AbortController(),
     }
@@ -986,7 +1363,14 @@ export class WorkerRuntime {
       worker,
       done,
       cancel: () => {
-        void this.stop(parent, worker.id)
+        if (this.tasks.get(worker.id) === task)
+          void this.stop(parent, worker.id).catch((error) => {
+            // The Jobs cancel hook is deliberately synchronous: waiting for a
+            // follow-up preparation here would await its own launch callback.
+            // Keep any late persistence failure visible after process cleanup.
+            this.blocked ??= String(error)
+            this.changed()
+          })
       },
     }
   }
@@ -997,7 +1381,9 @@ export class WorkerRuntime {
   }
   stop(parent: string, id: string): Promise<Worker> {
     this.get(parent, id)
-    this.priorityQueueStates.delete(id)
+    const throughGeneration = this.followups.advanceGeneration(id)
+    for (const reservation of this.reservations.get(id)?.values() ?? [])
+      if (reservation.generation <= throughGeneration) reservation.controller.abort(new UserStoppedError())
     const message = this.latestPriority.get(id)
     if (message) {
       message.controller.abort(new UserStoppedError())
@@ -1005,32 +1391,78 @@ export class WorkerRuntime {
         this.updatePriority(this.get(parent, id), message, 'cancelled', '已停止发送')
       this.latestPriority.delete(id)
     }
-    return this.stopCurrent(parent, id)
+    const token = Symbol('stop'),
+      operations = this.stopOperations.get(id) ?? new Set<symbol>()
+    operations.add(token)
+    this.stopOperations.set(id, operations)
+    const stopped = this.stopCurrent(parent, id, false, throughGeneration)
+    this.changed()
+    return stopped.finally(() => {
+      operations.delete(token)
+      if (!operations.size && this.stopOperations.get(id) === operations) this.stopOperations.delete(id)
+      this.changed()
+      const worker = this.storage.workers.get(id)
+      if (worker && !worker.archivedAt) this.dispatchFollowup(worker)
+    })
   }
-  private stopCurrent(parent: string, id: string): Promise<Worker> {
+  private stopCurrent(
+    parent: string,
+    id: string,
+    preserveFollowups = false,
+    throughGeneration = this.followups.generation(id),
+  ): Promise<Worker> {
     const worker = this.get(parent, id)
+    const before = structuredClone(worker)
     const preparation = this.preparations.get(id)
     preparation?.controller.abort(new UserStoppedError())
-    const dispatch = this.followupDispatches.get(id)?.done
-    this.pauseFollowups(id, '任务已停止，请确认后继续发送')
+    const entry = this.followupDispatches.get(id)
+    const dispatch = entry?.done
+    if (preserveFollowups && entry) {
+      entry.preserveOnAbort = true
+      entry.controller.abort(new UserStoppedError())
+      this.followups.releaseClaim(id, entry.id)
+    } else if (!preserveFollowups) this.pauseFollowups(id, '任务已停止，请确认后继续发送', throughGeneration)
     this.changed()
     const task = this.tasks.get(id)
     if (!task)
       return Promise.all([preparation?.done, dispatch]).then(() => {
         if (preparation && this.blocked) throw new Error(this.blocked)
-        return structuredClone(worker)
+        return before
       })
+    let persistenceError: unknown
     if (worker.status !== 'stopping') {
+      if (preserveFollowups) task.preserveFollowups = true
       worker.status = 'stopping'
-      this.storage.save(worker)
-      task.controller.abort(new UserStoppedError())
+      if (task.nativeStop && this.running.has(task)) {
+        task.nativeStopRequested = true
+        void Promise.resolve()
+          .then(() => task.nativeStop?.())
+          .catch(() => undefined)
+          .finally(() => task.controller.abort(new UserStoppedError()))
+      } else task.controller.abort(new UserStoppedError())
+      // Persisting the stopping state is not a prerequisite for cancelling the
+      // process. A disk failure still crosses the exact task.done barrier.
+      try {
+        this.storage.save(worker)
+      } catch (error) {
+        persistenceError = error
+      }
       this.changed()
       if (!this.running.has(task)) {
         this.queue = this.queue.filter((t) => t !== task)
         void this.finishQueued(task, 'interrupted', '用户已取消排队任务')
       }
     }
-    return Promise.all([task.done, preparation?.done, dispatch]).then(([result]) => result)
+    return Promise.all([task.done, preparation?.done, dispatch]).then(([result]) => {
+      if (persistenceError) {
+        const failure = new Error(`任务已完成停止清理，但停止状态持久化失败：${String(persistenceError)}`, {
+          cause: persistenceError,
+        })
+        this.blocked ??= failure.message
+        throw failure
+      }
+      return result
+    })
   }
   /** A queued task may already own a native account-query process. */
   private async finishQueued(task: Task, status: 'failed' | 'interrupted', reason: string): Promise<void> {
@@ -1086,6 +1518,10 @@ export class WorkerRuntime {
     worker.interruptionReason = interruptionReason
     worker.updatedAt = new Date().toISOString()
     try {
+      const telemetry = this.runTelemetry(worker, worker.runId)
+      worker.conversationTelemetry = captureConversationTelemetry(worker, telemetry)
+      worker.lastRunUsageSnapshot = captureLastRunUsageSnapshot(worker, telemetry)
+      worker.contextTelemetry = captureContextTelemetry(worker, telemetry)
       if (task.priority) {
         const message = this.priorityHistory.get(worker.id)?.get(task.queuedFollowupId!)
         if (message && !deliveryTerminal(message.state))
@@ -1113,9 +1549,9 @@ export class WorkerRuntime {
       worker.interruptionReason = undefined
       this.blocked = worker.error
     } finally {
-      this.tasks.delete(worker.id)
+      if (this.tasks.get(worker.id) === task) this.tasks.delete(worker.id)
       this.running.delete(task)
-      if (worker.status !== 'completed')
+      if (worker.status !== 'completed' && !task.preserveFollowups)
         this.pauseFollowups(
           worker.id,
           isUserInterrupted(worker)
@@ -1123,11 +1559,13 @@ export class WorkerRuntime {
             : worker.status === 'uncertain'
               ? '结果待核实，请核查后继续发送'
               : '前轮未正常完成，请确认后继续发送',
+          task.generation,
         )
+      const outcome = structuredClone(worker)
       this.changed()
       // A later followup mutates the live worker. Completion consumers must retain
       // the exact outcome of this run, including its runId and response.
-      task.settle(structuredClone(worker))
+      task.settle(outcome)
       this.drain()
       if (worker.status === 'completed') this.dispatchFollowup(worker)
     }
@@ -1136,18 +1574,28 @@ export class WorkerRuntime {
     const { worker, controller } = task
     let handle: SubprocessHandle | undefined
     let readers: Promise<void>[] = []
+    let harnessLease: { connection?: NativeHarnessConnection; close(): Promise<void> } | undefined
     let stderr = ''
     let totalBytes = 0
     const timeout = setTimeout(() => controller.abort(new Error('任务超时')), this.config.timeoutMs)
     const expectedConversation = worker.conversationId
-    const protocol = protocolFor(
+    const nativeTransport = usesNativeBridge(worker)
+    const createProtocol = nativeTransport
+      ? (
+          _cli: CliId,
+          emit: Parameters<typeof protocolFor>[1],
+          identify: Parameters<typeof protocolFor>[2],
+          limit: number,
+        ) => new BridgeProtocol(emit, identify, limit)
+      : protocolFor
+    const protocol = createProtocol(
       cliOf(worker.preference),
       (event) => {
         if (event.observedModel) {
           worker.observedModel = event.observedModel
           this.storage.save(worker)
         }
-        this.storage.append(worker, event)
+        this.storage.append(worker, projectPublicToolCall(cliOf(worker.preference), event))
         this.changed()
       },
       (id) => {
@@ -1190,6 +1638,10 @@ export class WorkerRuntime {
       )
       controller.signal.throwIfAborted()
       await assertFirstPartyConfiguration(cliOf(worker.preference), worker.project, controller.signal)
+      harnessLease = await this.harnessPreparation?.(worker, controller.signal, { submissionId: task.submissionId })
+      const executionConfig = harnessLease?.connection
+        ? { ...this.config, harnessTools: harnessLease.connection }
+        : this.config
       worker.status = 'running'
       this.storage.save(worker)
       this.changed()
@@ -1205,7 +1657,7 @@ export class WorkerRuntime {
           (await readCliAccountBinding(
             'claude',
             this.backend,
-            this.config,
+            executionConfig,
             worker.project,
             controller.signal,
             selectedClaudeRoute,
@@ -1221,11 +1673,16 @@ export class WorkerRuntime {
             worker.mode,
             task.prompt,
             join(this.storage.directory, 'native', worker.id),
-            this.config,
+            executionConfig,
             expectedConversation,
             (argv, env) =>
               captureCatalogMetadata(this.backend, this.config, argv, worker.project, controller.signal, env),
-            { backend: this.backend, signal: controller.signal, graceMs: this.config.graceMs },
+            {
+              backend: this.backend,
+              signal: controller.signal,
+              graceMs: this.config.graceMs,
+            },
+            nativeTransport,
           )
         : cliOf(worker.preference) === 'claude'
           ? await prepareClaudeWorkerLaunch(
@@ -1238,6 +1695,7 @@ export class WorkerRuntime {
                 task.prompt,
                 this.config.timeoutMs,
                 expectedConversation,
+                nativeTransport,
               ),
               this.storage.directory,
               controller.signal,
@@ -1246,6 +1704,7 @@ export class WorkerRuntime {
               env: {
                 ...firstPartyEnvironment(cliOf(worker.preference)),
                 ...agyBackgroundEnvironment(cliOf(worker.preference)),
+                ...(cliOf(worker.preference) === 'qoder' ? qoderEnvironment() : {}),
               },
               argv: workerArguments(
                 executable,
@@ -1255,9 +1714,42 @@ export class WorkerRuntime {
                 task.prompt,
                 this.config.timeoutMs,
                 expectedConversation,
+                nativeTransport,
               ),
             }
+      // Preparation can already own a private credential snapshot. Retain its
+      // cleanup before any later filesystem or native-bridge setup can fail.
       release = 'cleanup' in launch ? launch.cleanup : undefined
+      const nativeState = join(this.storage.directory, 'native', worker.id)
+      if (nativeTransport) mkdirSync(nativeState, { recursive: true, mode: 0o700 })
+      const execution =
+        nativeTransport && !isExtendedCli(cliOf(worker.preference))
+          ? await prepareNativeWorker(
+              launch,
+              {
+                cli: cliOf(worker.preference),
+                project: worker.project,
+                preference: worker.preference,
+                mode: worker.mode,
+                prompt: task.prompt,
+                conversationId: expectedConversation,
+                stateDirectory: nativeState,
+                ...(harnessLease?.connection ? { harnessTools: harnessLease.connection } : {}),
+                ...(selectedClaudeRoute?.source
+                  ? {
+                      claudeModelCandidates: selectedClaudeRoute.source.nativeModels
+                        .filter(({ choice }) => choice.id === worker.preference.model)
+                        .map(({ choice, remoteId }) => ({
+                          value: choice.id,
+                          resolvedModel: remoteId,
+                        })),
+                    }
+                  : {}),
+              },
+              executionConfig,
+            )
+          : launch
+      release = 'cleanup' in execution ? execution.cleanup : undefined
       controller.signal.throwIfAborted()
       if (
         binding !==
@@ -1271,10 +1763,18 @@ export class WorkerRuntime {
       )
         throw new Error(ACCOUNT_CHANGED)
       controller.signal.throwIfAborted()
-      if ('activate' in launch && typeof launch.activate === 'function') await launch.activate()
+      if ('activate' in execution && typeof execution.activate === 'function') await execution.activate()
       controller.signal.throwIfAborted()
       if (task.queuedFollowupId) this.queuedExecutionGuard?.(worker)
       this.storage.bindAccount(worker.id, binding)
+      if (task.queuedFollowupId && !task.priority) {
+        if (
+          this.tasks.get(worker.id) !== task ||
+          this.followups.list(worker.id).find((item) => item.id === task.queuedFollowupId)?.state !==
+            'sending'
+        )
+          throw new UserStoppedError()
+      }
       if (task.priority) {
         const message = this.latestPriority.get(worker.id)
         if (!message || message.id !== task.queuedFollowupId || message.controller.signal.aborted)
@@ -1282,14 +1782,25 @@ export class WorkerRuntime {
         // No await separates this ownership check from the native spawn attempt.
         message.spawnAttempted = true
       }
+      task.spawnAttempted = true
       handle = await spawnManagedAgent(this.backend, {
-        argv: launch.argv,
-        env: 'env' in launch ? launch.env : undefined,
+        argv: execution.argv,
+        env: 'env' in execution ? execution.env : undefined,
         cwd: worker.project,
         stdio: { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' },
         graceMs: this.config.graceMs,
         signal: controller.signal,
       })
+      if (task.queuedFollowupId && !task.priority) {
+        this.storage.append(worker, {
+          kind: 'user',
+          text: task.userPrompt,
+          queuedFollowupId: task.queuedFollowupId,
+          admittedRunId: worker.runId,
+        })
+        this.followups.remove(worker.id, task.queuedFollowupId)
+        this.changed()
+      }
       if (task.priority) {
         const message = this.priorityHistory.get(worker.id)!.get(task.queuedFollowupId!)!
         this.updatePriority(worker, message, 'running')
@@ -1297,13 +1808,14 @@ export class WorkerRuntime {
       // Observe spawn rejection immediately even while draining protocol streams.
       void handle.done.catch(() => undefined)
       controller.signal.throwIfAborted()
-      if ('steer' in launch && typeof launch.steer === 'function') task.steer = launch.steer
-      // Before a CLI process is actually launched, a rejected account/model or
-      // permission check must leave the original outbox message recoverable.
-      if (task.queuedFollowupId && !task.priority) {
-        this.followups.remove(worker.id, task.queuedFollowupId)
+      if ('steer' in execution && typeof execution.steer === 'function') {
+        task.steer = execution.steer
         this.changed()
       }
+      if ('stop' in execution && typeof execution.stop === 'function')
+        task.nativeStop = execution.stop as () => Promise<void>
+      // Before a CLI process is actually launched, a rejected account/model or
+      // permission check must leave the original outbox message recoverable.
       const capture = async (stream: SubprocessHandle['stdout'], isError: boolean) => {
         if (!stream) throw new Error('CLI pipe unavailable')
         for await (const chunk of stream) {
@@ -1320,6 +1832,15 @@ export class WorkerRuntime {
       const outcome = await handle.done
       controller.signal.throwIfAborted()
       protocol.end()
+      // Native cancellation may close its bridge before the mailbox sender has
+      // polled the receipt and aborted the outer Host range. Warnings on stderr
+      // must not replace this exact, run-scoped cancellation evidence.
+      if (
+        task.nativeStopRequested &&
+        protocol.result?.status === 'ERROR' &&
+        protocol.result.error === '任务已停止'
+      )
+        throw new UserStoppedError()
       if (outcome.exitCode !== 0)
         throw new Error(
           `CLI exited with ${outcome.exitCode}: ${stderr || protocol.result?.response || 'no diagnostic'}`,
@@ -1333,17 +1854,27 @@ export class WorkerRuntime {
         protocol.result.completedStepResponse
       )
         summaryConflict = `CLI 汇总状态冲突，结果待核实：本轮回复及已观察步骤均为 DONE，但 CLI 最终报告 ERROR。请核查本轮输出和实际产物，不要自动重试。原始汇总错误：${protocol.result.error || '未提供错误详情'}`
+      else if (nativeTransport && protocol.result.status === 'UNCERTAIN')
+        summaryConflict =
+          protocol.result.error || 'CLI 汇总状态冲突，结果待核实，请先核查实际产物，不要自动重试'
       else if (protocol.result.status !== 'SUCCESS')
         throw new Error(
           `CLI ${protocol.result.status}: ${protocol.result.error || protocol.result.response || stderr || '请检查 CLI 认证及模型/强度兼容性'}`,
         )
     } catch (error) {
       failure = error
-      failureBeforeStop = !!task.admissionFailure || !controller.signal.aborted
+      failureBeforeStop =
+        !!task.admissionFailure ||
+        (!controller.signal.aborted &&
+          !(
+            task.nativeStopRequested &&
+            (error instanceof UserStoppedError || String(error).includes('任务已停止'))
+          ))
       if (error instanceof ProcessCleanupUnconfirmedError) this.markCleanupBlocked(error)
     } finally {
       clearTimeout(timeout)
       task.steer = undefined
+      task.nativeStop = undefined
       task.steeringController.abort(new Error('当前运行已结束，引导通路已关闭'))
       if (handle) {
         handle.terminate()
@@ -1367,13 +1898,24 @@ export class WorkerRuntime {
     }
     await Promise.allSettled([...task.steering.values()].map((entry) => entry.done))
     try {
+      await harnessLease?.close()
+    } catch (error) {
+      failure = error
+      releaseFailed = true
+    }
+    try {
       if ((!handle || quiescent) && !this.blocked) await release?.()
     } catch (error) {
       failure = error
       releaseFailed = true
       if (error instanceof ProcessCleanupUnconfirmedError) this.markCleanupBlocked(error)
     }
-    if (stderr.trim()) this.storage.append(worker, { kind: 'diagnostic', text: 'CLI 诊断', detail: stderr })
+    if (stderr.trim())
+      this.storage.append(worker, {
+        kind: 'diagnostic',
+        text: 'CLI 诊断',
+        detail: stderr,
+      })
     let status: Worker['status'] = 'completed'
     let error: string | undefined
     let interruptionReason: Worker['interruptionReason']
@@ -1386,9 +1928,10 @@ export class WorkerRuntime {
     } else if (summaryConflict) {
       status = 'uncertain'
       error = summaryConflict
-    } else if (controller.signal.aborted) {
+    } else if (controller.signal.aborted || task.nativeStopRequested) {
       status = 'interrupted'
-      if (controller.signal.reason instanceof UserStoppedError) interruptionReason = 'user'
+      if (controller.signal.reason instanceof UserStoppedError || task.nativeStopRequested)
+        interruptionReason = 'user'
       else error = String(controller.signal.reason)
     } else if (failure) {
       status = 'failed'
@@ -1406,6 +1949,8 @@ export class WorkerRuntime {
       ...this.tasks.keys(),
       ...this.preparations.keys(),
       ...this.latestPriority.keys(),
+      ...this.reservations.keys(),
+      ...this.followupDispatches.keys(),
     ])
     const interruptions = [...this.priorityRunners.values()]
     await Promise.allSettled(
@@ -1417,6 +1962,7 @@ export class WorkerRuntime {
     await Promise.allSettled(interruptions)
     await Promise.allSettled([...this.followupRuns])
     this.listeners.clear()
+    this.supplementalContextReader.clear()
     this.storage.close()
   }
 }

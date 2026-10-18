@@ -38,6 +38,7 @@ function fixture() {
   ]
   const service: any = Object.create(CliWorkerService.prototype)
   Object.assign(service, {
+    nativeRunDone: new Map(),
     disposed: new AbortController(),
     pending: new Map(),
     dispatchWaits: new Map(),

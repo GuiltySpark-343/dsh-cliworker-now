@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { useEffect, useRef } from 'react'
-import type { PropsRuntime, SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
+import { useEffect, useLayoutEffect, useRef } from 'react'
+import type { PropsRuntime, PropsRenderSlots, SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
 import { Button, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
@@ -10,12 +10,23 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import remoteContribution from 'dsh-cliworker-now/remote'
 import { active } from '../shared/types.ts'
 import { Panel } from './panel.tsx'
+import { NativePresentationProvider } from './native-presentation.tsx'
+import { HarnessConversation, readHarnessConversationBinding } from './harness-conversation.tsx'
+import { HarnessBindingRegistry } from './harness-binding-registry.ts'
+import { HarnessNativeSessionSupports } from './harness-native-session-support.tsx'
+import { installHarnessControlGuards } from './harness-control-guards.tsx'
+import { installHarnessNativeContent } from './harness-native-content.tsx'
+import { installHarnessReasoningRecords, reasoningRecordsStyles } from './harness-reasoning-records.tsx'
+import { installHarnessNativeTelemetry } from './harness-native-telemetry.tsx'
+import { HARNESS_COMMAND_SOURCE, installHarnessNativeCommands } from './harness-native-commands.ts'
 import { useWorkers, type API } from './workers.ts'
 import {
   styles,
   nativeChatStyles,
   modelPickerStyles,
   telemetryStyles,
+  processStyles,
+  contextInspectionStyles,
   nativeInteractionStyles,
   hoverFeedbackStyles,
   conversationInteractionStyles,
@@ -29,13 +40,68 @@ import { renameCopyStyles } from './rename-copy-styles.ts'
 
 const ID = 'dsh-cliworker-now'
 
-export const inject = ['slots', 'sidebarRightTabs', 'sidebarRight', 'remote']
+export const inject = [
+  'slots',
+  'sidebarRightTabs',
+  'sidebarRight',
+  'remote',
+  'configForms',
+  'sessions',
+  'conversation',
+  'uiConversation',
+  'uiSession',
+]
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.remote.$mount(remoteContribution), 'cliworker:remote')
   ctx.inject(['remote.cliworker'], (scope) => {
     const remote = scope.remote,
       worker = remote.cliworker
     const api: API = { $stream: (options) => remote.$stream(options), cliworker: worker }
+    const nativeChatSettings = scope.configForms.get<{ transcriptView?: unknown }>('ui-chat')
+    const harnessServices = { sessions: scope.sessions }
+    const bindings = new HarnessBindingRegistry()
+    scope.effect(() => () => bindings.clear())
+    scope.effect(() => installHarnessControlGuards(scope, bindings, api))
+    scope.effect(() => installHarnessReasoningRecords(scope, bindings))
+    const nativeTelemetry = installHarnessNativeTelemetry(scope, bindings, api)
+    scope.effect(() => () => nativeTelemetry.dispose())
+    scope.inject(['inputTriggers', 'commandUi'], (commands) => {
+      commands.effect(() => installHarnessNativeCommands(commands, bindings, api))
+    })
+    function WorkerPanel(
+      props: PropsRuntime<'sidebar.right.pane.tab'> & PropsRenderSlots<'cliworker.native.sidebar'> & {
+        api: API
+        openNativeSettings?: () => void
+      },
+    ) {
+      const address = props.useSession((session) => session.subagent?.address)
+      const parentSessionId = address?.parentSessionId ?? props.sessionId
+      return (
+        <NativePresentationProvider source={nativeChatSettings}>
+          <Panel
+            {...props}
+            sessionId={parentSessionId}
+            activeHarnessSessionId={address?.childSessionId}
+            renderHarnessConversation={(worker) => (
+              <HarnessConversation
+                key={worker.id}
+                services={harnessServices}
+                bindings={bindings}
+                attachProjections={nativeTelemetry.attach}
+                api={api}
+                parentSessionId={parentSessionId}
+                worker={worker}
+                renderConversation={(reference) => (
+                  <props.SessionProvider session={reference}>
+                    {props.renderSlot('cliworker.native.sidebar', { composerPresentation: 'main', commandSource: HARNESS_COMMAND_SOURCE })}
+                  </props.SessionProvider>
+                )}
+              />
+            )}
+          />
+        </NativePresentationProvider>
+      )
+    }
     let nativeSettingsOpen: (() => void) | undefined
     function NativeSettingsBridge({ open }: { open?: () => void }) {
       useEffect(() => {
@@ -94,7 +160,10 @@ export function apply(ctx: Context): void {
         settingsStyles +
         rolePresetStyles +
         workerManagementStyles +
-        renameCopyStyles
+        renameCopyStyles +
+        processStyles +
+        contextInspectionStyles +
+        reasoningRecordsStyles
       document.head.append(style)
       return () => style.remove()
     })
@@ -121,6 +190,7 @@ export function apply(ctx: Context): void {
           {
             name: 'sidebar.right.pane.tab',
             key: ID,
+            children: { 'cliworker.native.sidebar': { kind: 'single', scope: 'session' } },
             inject: () => ({
               api,
               openNativeSettings: () => {
@@ -129,38 +199,59 @@ export function apply(ctx: Context): void {
               },
             }),
           },
-          Panel,
+          WorkerPanel,
         ),
       ),
     )
-    function Header({ sessionId }: PropsRuntime<'conversation.session.header.utilities'>) {
-      const { snapshot } = useWorkers(api, sessionId)
+    scope.effect(() => installHarnessNativeContent(scope))
+    function Header({ sessionId, useSession }: PropsRuntime<'conversation.session.header.utilities'>) {
+      const address = useSession((session) => session.subagent?.address)
+      const parentSessionId = address?.parentSessionId ?? sessionId
+      const { snapshot, connecting } = useWorkers(api, parentSessionId)
+      useLayoutEffect(() => {
+        if (connecting) return
+        for (const worker of snapshot.workers) {
+          if (worker.parentSessionId !== parentSessionId || !worker.harnessConversation) continue
+          try {
+            bindings.publish(
+              readHarnessConversationBinding(worker.harnessConversation, parentSessionId),
+              worker,
+            )
+          } catch {
+            /* Invalid Host identity never scopes native controls. */
+          }
+        }
+      }, [snapshot, connecting, parentSessionId])
       const seen = useRef(new Set<string>())
       useEffect(() => {
         seen.current.clear()
-      }, [sessionId])
+      }, [parentSessionId])
       const open = () => {
         if (scope.sidebarRight.mounted.getSnapshot() === sessionId) scope.sidebarRight.openTab('cliworker')
       }
       useEffect(() => {
+        if (address) return
         const ids = snapshot.workers.filter((w) => active(w.status)).map((w) => w.runId)
         if (snapshot.configuring) ids.push('configuring')
         if (ids.some((id) => !seen.current.has(id))) {
           ids.forEach((id) => seen.current.add(id))
           open()
         }
-      }, [snapshot])
+      }, [snapshot, address])
       return (
-        <Tooltip label="打开 CLI Worker" side="bottom" portal>
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label="打开 CLI Worker"
-            className="cwn-entry"
-            icon={<BrandIcon size={16} />}
-            onClick={open}
-          />
-        </Tooltip>
+        <>
+          <HarnessNativeSessionSupports bindings={bindings} conversation={scope.conversation} />
+          <Tooltip label="打开 CLI Worker" side="bottom" portal>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="打开 CLI Worker"
+              className="cwn-entry"
+              icon={<BrandIcon size={16} />}
+              onClick={open}
+            />
+          </Tooltip>
+        </>
       )
     }
     scope.effect(() =>

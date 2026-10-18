@@ -78,6 +78,15 @@ def enter(release_holder):
         own_dotenv()
         operation = runpy.run_path(str(Path(__file__).with_name("hermes-nous-refresh.py")))
         return operation["refresh_selected_nous"](account_home, arguments[1])
+    # Register only our explicitly supplied request observer through Hermes'
+    # public PluginContext API. Safe mode and discovery remain unchanged.
+    if arguments[:2] == ["gateway", "run"] and os.environ.get("CLIWORKER_HERMES_OBSERVER_DIR"):
+        try:
+            observer = runpy.run_path(str(Path(__file__).with_name("hermes-observer.py")))
+            release_holder.append(observer["install_observer"]())
+        except Exception:
+            # Unsupported/failed observation must not repeat or fail execution.
+            pass
     from hermes_cli.main import main
     raise SystemExit(main())
 

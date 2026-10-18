@@ -1,5 +1,8 @@
 // Subprocess protocol bridge. The Host owns the external sandbox, credentials,
 // deadlines, directory/session locks, and descendant cleanup. No shell is used.
+import { NativeBlockResponses, piOmpResponseUsage, piOmpReportedUsage } from './http-rpc-response.mjs'
+import { OmpContextInspection } from './omp-context-inspection.mjs'
+import { PI_CONTEXT_ENV, preparePiContextObserver, readPiContextObservation } from './pi-context-observer.mjs'
 import { spawnNativeProcess } from './native-spawn.mjs'
 import { createHash, randomBytes } from 'node:crypto'
 import { mkdir, writeFile, rename, realpath, unlink, rmdir, lstat, open, rm } from 'node:fs/promises'
@@ -10,7 +13,9 @@ import { readFile } from 'node:fs/promises'
 import { nativeLaunchArgv } from './native-launch.mjs'
 import { ownsOwnAccountLease, OWN_ACCOUNT_BUSY } from './own-account-lease.mjs'
 import { assertPiOmpRefreshSources, assertPiOmpRefreshCache } from './pi-omp-refresh.mjs'
-import { receivePiOmpControl } from './pi-omp-control.mjs'
+import { receivePiOmpControl, receiveNativeStopControl } from './pi-omp-control.mjs'
+import { HARNESS_CONNECTION_ENV, readNativeHarnessConnection } from './native-harness-mcp.mjs'
+import { prepareNativeHarnessExtension } from './native-harness-extension.mjs'
 import {
   queryNativeCandidates,
   snapshotNativeCandidates,
@@ -94,14 +99,31 @@ let child,
   session,
   finalized = false,
   controlReceiver,
+  stopReceiver,
+  nativeStop,
   closeGuidance = () => {}
 const metadataController = new AbortController()
 const stop = (reason) => {
   failure ??= reason
   closeGuidance()
-  child?.stdin?.end()
-  child?.kill('SIGTERM')
-  forceTimer ??= setTimeout(() => child?.kill('SIGKILL'), 5000)
+  const terminate = () => {
+    child?.stdin?.end()
+    child?.kill('SIGTERM')
+    forceTimer ??= setTimeout(() => child?.kill('SIGKILL'), 5000)
+  }
+  if (stopped && child?.stdin?.writable && !child.stdin.destroyed) {
+    nativeStop ??= new Promise((resolve) => {
+      child.stdin.write(JSON.stringify({ id: 'cliworker-stop', type: 'abort' }) + '\n', () => {
+        setTimeout(() => {
+          terminate()
+          resolve()
+        }, 200)
+      })
+    })
+    return nativeStop
+  }
+  terminate()
+  return Promise.resolve()
 }
 process.on('SIGTERM', () => {
   stopped = true
@@ -135,6 +157,7 @@ const persist = async () => {
   )
 }
 try {
+  const harnessTools = readNativeHarnessConnection()
   const requestPath = process.argv[2]
   config = JSON.parse(await privateFile(requestPath, true))
   await unlink(requestPath)
@@ -145,7 +168,14 @@ try {
     !isAbsolute(config.stateDirectory)
   )
     throw new Error('Invalid bridge request')
+  if (harnessTools && harnessTools.binding.cli !== config.cli) throw new Error('DSH tool bridge CLI identity mismatch')
   config.stateDirectory = await privateDirectory(config.stateDirectory)
+  if (config.stopNonce)
+    stopReceiver = await receiveNativeStopControl(config.stopDirectory, config.stopNonce, async () => {
+      stopped = true
+      metadataController.abort()
+      await stop('任务已停止')
+    })
   if (config.leaseDirectory) {
     if (typeof config.nativeRoot !== 'string' || dirname(config.nativeRoot) !== config.leaseDirectory)
       throw new Error('Invalid shared account directory')
@@ -213,6 +243,10 @@ try {
   )
     throw new Error('Invalid native environment snapshot')
   Object.assign(env, nativeEnvironment)
+  // Account .env/provider snapshots are not authority for another Worker's
+  // bridge. Only the Host-injected run capability can reach this extension.
+  if (harnessTools) env[HARNESS_CONNECTION_ENV] = JSON.stringify(harnessTools)
+  else delete env[HARNESS_CONNECTION_ENV]
   // Pi's SDK is loaded in this process and consults process.env itself. Apply
   // the same own-source environment before importing it, not only at spawn.
   process.env = env
@@ -287,10 +321,26 @@ try {
     output({ phase: 'native-candidates', count: snapshot.length })
     finalized = true
   } else if (config.metadataPhase === 'account-scope') {
-    const candidates = JSON.parse(
+    let candidates = JSON.parse(
       await privateFile(join(nativeRoot, 'catalog-candidates.json'), true, 16 * 1024 * 1024),
     )
     if (!Array.isArray(candidates)) throw new Error('Invalid native candidate snapshot')
+    if (config.cli === 'omp') {
+      // This online phase owns the same managed registry used by the eventual
+      // RPC process. Let OMP refresh/convert new account models before applying
+      // our stricter current-account intersection; never union remote names into
+      // stale candidates or write the user's native model cache.
+      candidates = snapshotNativeCandidates(await queryNativeCandidates(
+        config.cli, config.executable, nativeRoot, env,
+        (process) => {
+          child = process
+          if (stopped) stop('任务已停止')
+        },
+        { signal: metadataController.signal, refresh: true },
+      ), env)
+      if (stopped || failure) throw new Error('任务已停止')
+      await writePrivateFile(join(nativeRoot, 'catalog-candidates.json'), JSON.stringify(candidates))
+    }
     catalog = await accountSupportedChoices(config.cli, nativeRoot, candidates, env, {
       signal: metadataController.signal,
     })
@@ -345,12 +395,19 @@ try {
         throw new Error('Saved session path escaped its private directory or used a symlink')
       await privateFile(resume)
     }
+    const contextObserver = config.cli === 'pi' ? await preparePiContextObserver(config.executable) : { argv: [], env: {} }
+    delete env[PI_CONTEXT_ENV]
+    Object.assign(env, contextObserver.env)
+    const harnessExtension = await prepareNativeHarnessExtension(harnessTools, { signal: metadataController.signal })
     const tools = config.cli === 'pi' ? ['read', 'grep', 'find', 'ls'] : ['read', 'grep', 'glob']
     if (config.mode === 'accept-edits') tools.push('write', 'edit')
+    tools.push(...harnessExtension.tools)
     const nativeArgs = [
       '--mode',
       'rpc',
       ...isolated,
+      ...harnessExtension.argv,
+      ...contextObserver.argv,
       '--provider',
       selectedProvider,
       '--model',
@@ -368,7 +425,7 @@ try {
       cwd: config.project,
       env,
       detached: false,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: config.cli === 'pi' ? ['pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'],
     })
     let pending = '',
       bytes = 0,
@@ -379,13 +436,30 @@ try {
       response = '',
       currentText = '',
       assistantStep = 0
+    const eventOutput = event
+    const responses = new NativeBlockResponses(config.cli, event)
+    const responseId = () => `${session.id}:${assistantStep}`
+    const textBlocks = new Map()
+    const toolResponses = new Map()
+    const publicText = (index, text, snapshot = false) => {
+      if (typeof text !== 'string') throw new Error('Invalid native text content')
+      const key = Number.isSafeInteger(index) && index >= 0 ? `text:${index}` : 'text:stream'
+      const mapKey = `${responseId()}:${key}`, previous = textBlocks.get(mapKey) ?? ''
+      if (snapshot && !text.startsWith(previous)) throw new Error('Native final text conflicts with streamed content')
+      const delta = snapshot ? text.slice(previous.length) : text
+      textBlocks.set(mapKey, snapshot ? text : previous + text)
+      currentText += delta
+      response += delta
+      if (delta) responses.event(responseId(), key, { kind: 'assistant', step: assistantStep, text: delta }, index)
+    }
     const thinkingBlocks = new Map()
-    const thinkingKey = (value) => value.messageId ?? assistantStep
+    const thinkingKey = () => responseId()
     const publicThinking = (messageKey, index, text, state, force = false) => {
       if (!Number.isSafeInteger(index) || index < 0 || typeof text !== 'string') return
       const key = `${messageKey}:${index}`
       let block = thinkingBlocks.get(key)
       if (!block) {
+        if (!text) return
         block = { messageKey, index, step: thinkingBlocks.size, text: '', emittedAt: 0 }
         thinkingBlocks.set(key, block)
       }
@@ -396,13 +470,14 @@ try {
       const now = Date.now()
       if (!force && state === 'RUNNING' && now - block.emittedAt < 200) return
       block.emittedAt = now
-      event({
+      if (responses.completed(String(messageKey))) return
+      responses.event(String(messageKey), `thinking:${index}`, {
         kind: 'reasoning',
         step: block.step,
         text: `${config.cli === 'pi' ? 'Pi' : 'OMP'} 公开思考`,
         detail: text,
         state,
-      })
+      }, index)
     }
     const toolSteps = new Map()
     const send = (value) => {
@@ -410,11 +485,49 @@ try {
     }
     const nativeSteers = new Map(),
       steerRequestIds = new Set()
-    let finalRequested = false
+    let finalRequested = false, statsTimer, liveStatsTimer, liveStatsId, liveStatsSequence = 0
+    const emitStats = (value) => {
+      let contextUsage
+      const count = (value) => Number.isSafeInteger(value) && value >= 0
+      const tokens = value.data?.tokens, context = value.data?.contextUsage
+      const usage = tokens && Object.fromEntries(
+        ['input', 'output', 'cacheRead', 'cacheWrite', 'total', 'reasoning']
+          .filter((key) => count(tokens[key])).map((key) => [key, tokens[key]]),
+      )
+      contextUsage = context && count(context.contextWindow) && context.contextWindow > 0 &&
+        (context.tokens === null || count(context.tokens))
+        ? { tokens: context.tokens, contextWindow: context.contextWindow,
+            ...(typeof context.percent === 'number' && Number.isFinite(context.percent) ? { percent: context.percent } : {}) }
+        : undefined
+      if ((usage && Object.keys(usage).length) || contextUsage)
+        output({ type: 'native', record: { type: 'cliworker.rpc_usage', cli: config.cli,
+          sessionId: session.id, source: `${config.cli}.get_session_stats`,
+          ...(config.cli === 'omp' ? { basis: 'native-active-context' } : {}),
+          ...(usage && Object.keys(usage).length ? { usage } : {}),
+          ...(contextUsage ? { contextUsage } : {}) } })
+      return contextUsage
+    }
+    // These native read-only RPC snapshots do not invoke the model or alter
+    // messages. At most one optional live query is outstanding.
+    const requestLiveStats = () => {
+      if (liveStatsId || settled || stopped || failure) return
+      liveStatsId = `cliworker-live-stats-${++liveStatsSequence}`
+      liveStatsTimer = setTimeout(() => { liveStatsId = undefined }, 750)
+      send({ id: liveStatsId, type: 'get_session_stats' })
+    }
+    const contextInspection = config.cli === 'omp' ? new OmpContextInspection({ send,
+      emit: record => output({ type: 'native', record }), done: () => requestFinalState() }) : undefined
+    const requestFinalState = () => {
+      clearTimeout(statsTimer)
+      statsTimer = undefined
+      if (!stopped) send({ id: 'final', type: 'get_state' })
+    }
     const finishIfReady = () => {
       if (!settled || nativeSteers.size || finalRequested || stopped) return
       finalRequested = true
-      send({ id: 'final', type: 'get_state' })
+      // Optional metadata cannot change the generation outcome or keep the CLI alive.
+      statsTimer = setTimeout(requestFinalState, 750)
+      send({ id: 'usage', type: 'get_session_stats' })
     }
     closeGuidance = () => {
       for (const request of nativeSteers.values()) {
@@ -429,7 +542,11 @@ try {
         config.controlNonce,
         (message, _requestId, attempt) => {
           if (!sent || settled || stopped || failure || child.stdin.destroyed || child.exitCode !== null)
-            return Promise.reject(Object.assign(new Error('原生引导通路已关闭或尚未准备，请保留消息后重试'), { code: 'STEER_REJECTED' }))
+            return Promise.reject(
+              Object.assign(new Error('原生引导通路已关闭或尚未准备，请保留消息后重试'), {
+                code: 'STEER_REJECTED',
+              }),
+            )
           const id = `cwn-steer-${attempt}`
           steerRequestIds.add(id)
           return new Promise((resolve, reject) => {
@@ -473,10 +590,34 @@ try {
         throw new Error('CLI changed the saved session file')
       session = { id: state.sessionId, path: resolve(state.sessionFile) }
     }
+    let contextSequence = 0
     const consume = (value) => {
       if (!value || typeof value !== 'object' || typeof value.type !== 'string')
         throw new Error('Invalid native RPC record')
+      if (value.type === 'available_commands_update') {
+        contextInspection?.observeCommands(value.commands)
+        return
+      }
+      if (contextInspection?.consume(value)) return
       if (value.type === 'response') {
+        if (typeof value.id === 'string' && value.id.startsWith('cliworker-live-stats-')) {
+          if (value.id !== liveStatsId) return
+          clearTimeout(liveStatsTimer)
+          liveStatsId = undefined
+          if (!settled && value.success === true && value.command === 'get_session_stats' && session)
+            emitStats(value)
+          return
+        }
+        if (value.id === 'usage') {
+          const contextUsage = statsTimer && value.success === true && value.command === 'get_session_stats' && session
+            ? emitStats(value) : undefined
+          if (statsTimer) {
+            clearTimeout(statsTimer); statsTimer = undefined
+            if (contextInspection) contextInspection.start(session.id, contextUsage)
+            else requestFinalState()
+          }
+          return
+        }
         if (steerRequestIds.has(value.id)) {
           const request = nativeSteers.get(value.id)
           if (request) {
@@ -487,13 +628,16 @@ try {
             if (value.command === 'steer' && value.success === true && !settled && !stopped && !failure)
               request.resolve()
             else if (value.command === 'steer' && value.success === false)
-              request.reject(Object.assign(new Error('Native CLI rejected guidance'), { code: 'STEER_REJECTED' }))
+              request.reject(
+                Object.assign(new Error('Native CLI rejected guidance'), { code: 'STEER_REJECTED' }),
+              )
             else request.reject(new Error('Native CLI ended before its guidance receipt'))
             finishIfReady()
           }
           return
         }
         if (!value.success) throw new Error('Native CLI rejected an RPC request')
+        if (value.id === 'cliworker-stop') return
         if (value.id === 'select-model') {
           if (config.preference.effort !== 'default')
             send({
@@ -533,6 +677,10 @@ try {
           }
           validateState(value.data)
           clearTimeout(startupTimer)
+          if (Number.isSafeInteger(value.data.model?.contextWindow) && value.data.model.contextWindow > 0)
+            output({ type: 'native', record: { type: 'cliworker.model_context', scope: 'model',
+              source: `${config.cli}.get_state.model.contextWindow`, providerID: selectedProvider,
+              modelID: selectedModel, contextCapacity: value.data.model.contextWindow } })
           output({
             type: 'session',
             id: session.id,
@@ -545,6 +693,7 @@ try {
           })
           if (!stopped && !failure) {
             sent = true
+            requestLiveStats()
             send({ id: 'prompt', type: 'prompt', message: config.prompt })
           }
         } else if (value.id === 'final') {
@@ -567,16 +716,13 @@ try {
         return
       }
       if (value.type === 'message_start' && value.message?.role === 'assistant') {
+        if (assistantStep) responses.finish(responseId())
         currentText = ''
         assistantStep++
         return
       }
       if (value.type === 'message_update' && value.assistantMessageEvent?.type === 'text_delta') {
-        const text = value.assistantMessageEvent.delta
-        if (typeof text !== 'string') throw new Error('Invalid text delta')
-        currentText += text
-        response += text
-        event({ kind: 'assistant', step: assistantStep, text })
+        publicText(value.assistantMessageEvent.contentIndex, value.assistantMessageEvent.delta)
         return
       }
       if (
@@ -618,22 +764,40 @@ try {
           if (block.type === 'thinking' && block.redacted !== true && typeof block.thinking === 'string')
             publicThinking(messageKey, index, block.thinking, 'COMPLETED')
         }
-        if (!currentText) {
-          const text = (value.message.content ?? [])
-            .filter((c) => c.type === 'text')
-            .map((c) => c.text ?? '')
-            .join('')
-          if (text) {
-            response += text
-            event({ kind: 'assistant', step: assistantStep, text })
-          }
+        // Without contentIndex, historical streams establish no individual text
+        // blocks; do not apply an uncorrelated final snapshot to an invented block.
+        if (!textBlocks.has(`${responseId()}:text:stream`)) {
+          for (const [index, block] of content.entries())
+            if (block.type === 'text') publicText(index, block.text, true)
         }
+        for (const [index, block] of content.entries()) {
+          if (block.type !== 'toolCall' || typeof block.id !== 'string') continue
+          const step = 100000 + toolSteps.size
+          toolSteps.set(block.id, step)
+          const owner = responseId()
+          toolResponses.set(block.id, { owner, blockId: `tool:${block.id}` })
+          responses.event(owner, `tool:${block.id}`, { kind: 'tool', step, text: block.name ?? '工具', state: 'RUNNING',
+            toolCall: { callId: block.id, name: block.name, input: block.arguments } }, index)
+        }
+        const identityMatches = (!value.message.model || value.message.model === selectedModel) &&
+          (!value.message.provider || value.message.provider === selectedProvider)
+        const usage = identityMatches ? piOmpResponseUsage(value.message.usage, config.cli) : undefined
+        const reportedUsage = identityMatches ? piOmpReportedUsage(value.message.usage, config.cli) : undefined
+        if (reportedUsage) output({ type: 'native', record: { type: 'cliworker.rpc_response', cli: config.cli,
+          sessionId: session.id, source: `${config.cli}.message_end`, responseId: responseId(),
+          usage: reportedUsage } })
+        responses.finish(responseId(), usage)
+        requestLiveStats()
         return
       }
       if (value.type === 'tool_execution_start') {
-        const step = 100000 + toolSteps.size
+        const step = toolSteps.get(value.toolCallId) ?? 100000 + toolSteps.size
         toolSteps.set(value.toolCallId, step)
-        event({ kind: 'tool', step, text: String(value.toolName ?? '工具'), state: 'RUNNING' })
+        const owner = toolResponses.get(value.toolCallId)
+        const emitTool = (event) => owner ? responses.event(owner.owner, owner.blockId, event) : eventOutput(event)
+        emitTool({ kind: 'tool', step, text: String(value.toolName ?? '工具'), state: 'RUNNING',
+          toolCall: { callId: value.toolCallId, name: String(value.toolName ?? '工具'), input: value.args,
+            ...(typeof value.args?.command === 'string' ? { command: value.args.command } : {}) } })
         return
       }
       if (value.type === 'tool_execution_end') {
@@ -643,12 +807,15 @@ try {
           .map((c) => c.text ?? '')
           .join('\n')
           .slice(0, 32768)
-        event({
+        const owner = toolResponses.get(value.toolCallId)
+        const emitTool = (event) => owner ? responses.event(owner.owner, owner.blockId, event) : eventOutput(event)
+        emitTool({
           kind: 'tool',
           step: toolSteps.get(value.toolCallId),
           text: String(value.toolName ?? '工具'),
           state: value.isError ? 'FAILED' : 'COMPLETED',
           detail,
+          toolCall: { callId: value.toolCallId, output: value.result },
         })
         return
       }
@@ -661,6 +828,31 @@ try {
         finishIfReady()
       }
     }
+    // An independent numeric-only pipe avoids Pi's RPC stdout guard and
+    // never parses user diagnostics, prompt text or arbitrary CLI stderr.
+    let contextPending = '', contextBytes = 0
+    const contextPipe = child.stdio[3]
+    contextPipe?.setEncoding('utf8')
+    contextPipe?.on('error', () => {})
+    contextPipe?.on('data', chunk => {
+      contextBytes += Buffer.byteLength(chunk)
+      if (contextBytes > 1024 * 1024) { contextPending = ''; return }
+      contextPending += chunk
+      if (Buffer.byteLength(contextPending) > 65536) { contextPending = ''; return }
+      while (contextPending.includes('\n')) {
+        const index = contextPending.indexOf('\n'), line = contextPending.slice(0, index)
+        contextPending = contextPending.slice(index + 1)
+        try {
+          const value = JSON.parse(line)
+          if (value.type === 'cliworker.pi_context_observation') {
+            if (!sent || settled || stopped || !session) continue
+            const context = readPiContextObservation(value, { nonce: contextObserver.nonce,
+              sessionId: session.id, provider: selectedProvider, model: selectedModel, sequence: contextSequence, active: sent && !settled && !stopped })
+            if (context) { contextSequence++; output({ type: 'native', record: context }) }
+          }
+        } catch { /* Optional malformed metadata never changes generation. */ }
+      }
+    })
     child.stdin.on('error', () => {})
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk) => {
@@ -693,11 +885,14 @@ try {
       child.once('close', (code, signal) => resolve({ code, signal }))
     })
     closeGuidance()
+    contextInspection?.dispose()
     await controlReceiver?.close()
     controlReceiver = undefined
     for (const block of thinkingBlocks.values())
       publicThinking(block.messageKey, block.index, block.text, block.state, true)
     clearTimeout(startupTimer)
+    clearTimeout(statsTimer)
+    clearTimeout(liveStatsTimer)
     clearTimeout(closeTimer)
     clearTimeout(forceTimer)
     if (pending.trim()) failure ??= 'Truncated native RPC frame'
@@ -708,7 +903,7 @@ try {
     } catch (error) {
       failure ??= errorMessage(error)
     }
-    output({ type: 'result', status: failure || stopped ? 'ERROR' : 'SUCCESS', response, error: failure })
+    output({ type: 'result', status: failure || stopped ? 'ERROR' : 'SUCCESS', response, error: failure, resultScope: 'run' })
     finalized = true
     if (failure || stopped) process.exitCode = 1
   }
@@ -721,3 +916,4 @@ try {
   process.exitCode = 1
 }
 await controlReceiver?.close().catch(() => undefined)
+await stopReceiver?.close().catch(() => undefined)

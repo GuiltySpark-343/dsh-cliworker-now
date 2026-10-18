@@ -16,6 +16,7 @@ export const CLI_ALIASES: Record<ActiveCliId, readonly string[]> = {
   pi: ['pi', 'pi coding agent'],
   hermes: ['hermes', 'hermes agent', 'harmes'],
   opencode: ['opencode', 'open code'],
+  qoder: ['qoder'],
 }
 
 export type CliResolution =
