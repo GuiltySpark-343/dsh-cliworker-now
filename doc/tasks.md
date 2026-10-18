@@ -2119,3 +2119,6 @@ Claude/Kimi/MiMo/Grok 没有此项目保存模型与强度，本轮没有模型�
 - npm经用户完成官方发布二次验证后返回HTTP 202，CLI退出0；提交包同上。公开registry的版本及摘要另行只读回查，不把服务端接受等同于已经可安装。
 - 按用户补充要求，在中英文README增加“开源参考与致谢”及导航，列明codex-host、Codingns4DSH、DeepSeek Harness的作者与实际参考内容，并链接已核对的相关CLI官方项目。该修改仅提交GitHub文档，已上传0.8.1安装包内的README保持冻结内容。
 - 按停测指示没有新增测试、真实模型任务、构建或发布后安装；Windows自动回归的4项失败及其余未验收边界继续保留。
+
+- 06:10 UTC只读回查：npm `0.8.1`端点仍404，公开latest及dist-tags仍为0.7.9；上传已被接受，但公开下载尚未确认。npm官方说明新包需先完成发布扫描，通常约5分钟，繁忙或较大包可能15分钟以上：[发布扫描说明](https://github.blog/changelog/2026-07-28-npm-publish-time-malware-scanning-and-dual-use-metadata/)。未重复发布、未更换包，也未据CLI成功输出宣称公开安装成功。
+- 已审核市场条目通过npm更新：发布同包名新版本并保持repository指向本仓库即可，无需重新申请上架或复用已合并PR。市场插件检查registry/latest后由用户更新；列表刷新和镜像存在延迟。条目静态tgz备用链接若需换成0.8.1，另开目录更新PR；本轮没有擅自创建该PR。[市场贡献说明](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md#npm-package--npm-包optional--可选)、[市场更新实现](https://github.com/dsh-market/dsh-market/blob/main/src/updates.ts#L114)。
