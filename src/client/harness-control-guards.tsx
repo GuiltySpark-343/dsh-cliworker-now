@@ -2,7 +2,7 @@ import { createElement, useEffect, useLayoutEffect, useRef, useState, type Compo
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-plan-mode/client'
 import type { PropsRuntime, StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
-import { Button, IconPlanOutlineRegular, Toast, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Toast, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import { harnessFeatureReason, harnessPermissionReason } from './harness-feature-support.ts'
 import {
   useHarnessSessionBinding,
@@ -310,12 +310,12 @@ function registerHarnessControlGuards(
                 unavailable={unavailable}
               />
             )
+          // No plan mode: leave the seat empty; the "+" menu still explains why.
+          if (unavailable && feature === 'plan') return null
           if (unavailable) return (
             <Tooltip label={unavailable} side="top" portal>
               <span tabIndex={0} aria-label={unavailable}>
-                {feature === 'plan'
-                  ? <Button size="sm" variant="ghost" disabled icon={<IconPlanOutlineRegular size={14} />} aria-label="规划模式">规划</Button>
-                  : createElement(Native, { ...props, locked: true, select: async () => false, exitPlanMode: async () => null })}
+                {createElement(Native, { ...props, locked: true, select: async () => false, exitPlanMode: async () => null })}
               </span>
             </Tooltip>
           )

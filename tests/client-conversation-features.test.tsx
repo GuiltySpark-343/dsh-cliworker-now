@@ -59,6 +59,11 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => {
     IconCloseOutlineRegular: Icon,
     IconBranchOutlineRegular: Icon,
     IconPlanOutlineRegular: Icon,
+    IconDataOutlineRegular: Icon,
+    IconPaperPlaneOutlineRegular: Icon,
+    IconPaperclipOutlineRegular: Icon,
+    PermissionIconFullAccessRegular: Icon,
+    rankByName: (items: any[], query: string) => items.filter((item) => item.name.includes(query) || item.label?.includes(query)),
   }
 })
 const trees: ReactTestRenderer[] = []
@@ -256,11 +261,11 @@ describe('模拟：能力与菜单', () => {
     const f = commandFixture(next)
     const candidates = await f.source.candidates({ sessionId: 'child' }, req())
     expect(candidates.map((candidate: any) => candidate.name)).toEqual([
-      'model',
-      'permission',
-      'plan',
       'goal',
+      'plan',
       'feedback',
+      'permission',
+      'model',
       'fork',
     ])
     expect(candidates.find((candidate: any) => candidate.name === 'plan').description).toBe(
@@ -695,7 +700,7 @@ describe('模拟：原生分支入口改道', () => {
   })
 })
 
-it('模拟：PlanChip 按能力禁用并提示原因，不读取/保存权限（权限控件见 harness-native-controls）', async () => {
+it('模拟：不支持规划的 CLI 子会话不显示规划按钮，普通会话保留原生 PlanChip，不读取/保存权限', async () => {
   const core = new SlotCore()
   const names = ['conversation.input.permission', 'conversation.input.plan']
   core.register(
@@ -725,9 +730,14 @@ it('模拟：PlanChip 按能力禁用并提示原因，不读取/保存权限（
       tree = create(createElement(entry.component as any, { sessionId: 'child' }))
       trees.push(tree)
     })
-    expect(tree.root.findByType('button').props.disabled).toBe(true)
-    expect(JSON.stringify(tree.toJSON())).toContain('当前 CLI 不支持规划模式')
-    if (name.endsWith('.permission')) await act(async () => tree.root.findByType('button').props.onClick())
+    // The seat stays empty; the "+" menu row still carries the reason.
+    expect(tree.toJSON()).toBeNull()
+    let other!: ReactTestRenderer
+    await act(async () => {
+      other = create(createElement(entry.component as any, { sessionId: 'unbound' }))
+      trees.push(other)
+    })
+    expect(other.root.findByType('button').props.disabled).toBeFalsy()
   }
   expect(api.cliworker.permissionForWorker).not.toHaveBeenCalled()
   expect(api.cliworker.configureWorkerPermission).not.toHaveBeenCalled()

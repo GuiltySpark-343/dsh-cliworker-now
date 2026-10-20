@@ -2432,3 +2432,20 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - Desktop 复验（Mac）：确认无活动 Worker 后，以系统正常退出关闭 Harness，23:18 重新打开。Codex gpt-6.1-sol high 用 Computer Use 只读查看：普通会话与 Qoder 子会话的输入框都恢复了“+”、访问模式、模型选择、发送和三个统计组件（普通会话 `28 轮 84 步 · 65 tok/s`、`2.1M tok · 缓存命中 84%`、`上下文已用 5%`；子会话 `1 轮 1 步`、`0.2835 积分`、`上下文已用 17.6%`）。两个“+”菜单都能打开，子会话菜单列出模型、权限、规划、目标、反馈、分支等 8 项。23:22 在 Harness 运行中重新构建，触发真实热重载，以上组件全部保留。
 - 同时修正：不支持规划的 CLI 的访问模式按钮原先显示“当前：Custom”（锁定分支直接渲染原生控件，没有传入该 CLI 的权限目录）。现在锁定状态也走 `CliControl`，读取 CLI 的实际权限（只读，不保存），显示为“访问模式，当前：允许编辑”，悬停提示“当前 CLI 只有“允许编辑”一种权限模式”。新增模拟测试，覆盖映射到原生预设、保持锁定、不保存；Desktop 已由 Codex 确认。
 - 未验证：分支按钮的悬停提示。合成鼠标移动事件没有触发 Harness 的悬停，截图里也没有提示框，结论只来自单元测试；需要用户手动悬停确认，尤其是较早轮次或运行中的禁用按钮。Windows 未重新打包（安装版不链接仓库，不受构建热重载影响）；没有 Git 提交。
+
+## 2026-10-20 v0.8.1：CLI 子会话“+”菜单改为原生分段样式
+
+- 需求（用户）：CLI 子会话的“+”菜单原先是平铺列表，没有图标和分段标题；改成与原生菜单一致，能复用原生的就直接复用。
+- 对照来源：原生 `dsh-client-ui-commands` 的 `SECTION_ROWS`/`HOST_FACES`（添加：文件、目标、计划、反馈；指令：压缩、权限、模型、下载日志），模型行图标取自 Desktop 内置 `ui-model-selection`（`IconDataOutlineRegular`），文件行取自 `ui-conversation`（`IconPaperclipOutlineRegular`）。
+- 实现：`harness-native-commands.ts` 与 `harness-native-attachments.ts` 的候选项改用原生图标、名称和分段：添加（file 文件、image 图片、goal 目标、plan 计划、feedback 反馈），指令（permission 权限、model 模型、fork 分支）。分段标题取原生 `command` 词典的 `section.add`/`section.commands`，缺失时回退“添加/指令”。空查询按分段排列；输入关键字时改用原生 `rankByName` 排序，且不显示分段标题，与原生 `candidates` 一致。说明文字保留 CLI 专属文案，不支持的入口仍显示原因。`/规划` 与 `/计划` 都对应计划。README 中英文同步。
+- 检查：类型检查通过；全量 `vitest run` **213 文件通过、3 跳过；4277 通过、13 跳过**（新增断言覆盖分段、名称、图标、关键字排序；测试中 primitives 为模拟桩）。`build-preview` 确认 primitives 仍为外部原生依赖；确认无活动 Worker 后正式 `build` 触发 Desktop 热重载。Codex gpt-6.1-sol high 代码审查无问题。
+- Desktop 验证（Codex Computer Use，只读）：`qoder-1｜说你好` 子会话“+”菜单显示“添加”“指令”两段，8 行顺序、名称、标签、图标全部符合预期；`/mod` 只剩模型一行，无分段标题；与普通主会话原生菜单对照一致（原生另有压缩、下载日志、dsh-visible-workflows，CLI 子会话不提供）。热重载后输入框的访问模式、规划、模型、`1 轮 1 步`、`0.2835 积分`、`上下文 17.6%` 均保留。首次验证发现文件行名称为 `attach-file`，已改为与原生一致的 `file`（图片行改为 `image`）并复验通过。
+- 未执行：未点击菜单行实际触发功能（行为未改，沿用既有测试）；Windows 未重新打包；没有 Git 提交。
+
+## 2026-10-20 v0.8.1：不支持规划的 CLI 子会话移除禁用的“规划”按钮
+
+- 需求（用户）：Qoder 等不支持规划的 CLI 子会话，输入框下的禁用“规划”按钮可以移除。
+- 实现：`harness-control-guards.tsx` 中，规划不可用时 `conversation.input.plan` 不再渲染禁用按钮，直接留空；可用的 CLI 和普通会话仍用原生 PlanChip。“+”菜单的“计划”行保留，并照常显示“当前 CLI 不支持规划模式”。README 中英文和 `doc/design.md` 已同步。
+- 检查：类型检查通过；PlanChip 测试改为断言“不支持时不渲染、未绑定会话仍显示原生控件、不读写权限”；全量 `vitest run` **213 文件通过、3 跳过；4277 通过、13 跳过**。确认无活动 Worker 后，`build-preview` 与正式 `build` 均通过，Desktop 已热重载。
+- Desktop 验证（Codex Computer Use，只读）：`qoder-1｜说你好` 的控件从左到右为“+”、“允许编辑”（禁用）、“Low”（Qwen3.8-Flash）、发送，没有“规划”按钮。下方统计仍为 `1 轮 1 步`、`0.2835 积分`、`17.6%`。“+”菜单的“计划”行仍在，原因文字正确。主会话控件不受影响。
+- 未执行：支持规划的 CLI 没有在 Desktop 复验（代码路径未改动，由既有测试覆盖）；Windows 未重新打包；没有 Git 提交。

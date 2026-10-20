@@ -10,7 +10,12 @@ const nativeSidebar = nativeSidebarConversation()
 
 // Presentation, native store state and Cordis wiring are simulated. Official
 // SlotCore enforces real slot ownership and shared root-handle scope rules.
-vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({ Button: () => null, Tooltip: () => null }))
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
+  Button: () => null, Tooltip: () => null, rankByName: (items: unknown[]) => items,
+  IconBranchOutlineRegular: () => null, IconDataOutlineRegular: () => null, IconGoalOutlineRegular: () => null,
+  IconPaperPlaneOutlineRegular: () => null, IconPaperclipOutlineRegular: () => null, IconPlanOutlineRegular: () => null,
+  PermissionIconFullAccessRegular: () => null,
+}))
 vi.mock('../src/client/panel.tsx', () => ({ Panel: () => null }))
 vi.mock('../src/client/icons.tsx', () => ({ BrandIcon: () => null }))
 vi.mock('../src/client/workers.ts', () => ({ useWorkers: vi.fn(() => ({ snapshot: { workers: [] } })) }))

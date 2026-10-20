@@ -15,6 +15,27 @@ import { HarnessBindingRegistry } from '../src/client/harness-binding-registry.t
 import { installHarnessNativeCommands } from '../src/client/harness-native-commands.ts'
 import { installHarnessNativeCommandMenu } from '../src/client/harness-native-command-menu.tsx'
 
+// Glyph stubs and a subsequence ranking; the real primitives bundle needs a browser.
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => {
+  const icon = (name: string) => Object.assign(() => null, { displayName: name })
+  const matches = (text: string, query: string) => {
+    let at = 0
+    for (const char of text.toLowerCase()) if (char === query[at]) at++
+    return at === query.length
+  }
+  return {
+    IconBranchOutlineRegular: icon('branch'),
+    IconDataOutlineRegular: icon('data'),
+    IconGoalOutlineRegular: icon('goal'),
+    IconPaperPlaneOutlineRegular: icon('paper-plane'),
+    IconPaperclipOutlineRegular: icon('paperclip'),
+    IconPlanOutlineRegular: icon('plan'),
+    PermissionIconFullAccessRegular: icon('permission'),
+    rankByName: vi.fn((items: { name: string; label?: string }[], query: string) =>
+      items.filter((item) => matches(item.name, query.toLowerCase()) || matches(item.label ?? '', query.toLowerCase()))),
+  }
+})
+
 // Load unmodified installed rc.2 browser bundles through their public exported
 // factories. Real Trigger/Popup controllers and stores; synthetic Gateway,
 // session lifetime and catalog. No external CLI, account or model is contacted.
@@ -239,7 +260,7 @@ describe('owned CLI commands through actual native trigger and Popup controllers
     expect(f.trigger.launcher.getSnapshot()).toBe(source)
     expect(menu.groups).toHaveLength(1)
     const rows = menu.groups[0].items
-    expect(rows.map((row: any) => row.name)).toEqual(['model', 'permission', 'plan', 'goal', 'feedback', 'fork'])
+    expect(rows.map((row: any) => row.name)).toEqual(['goal', 'plan', 'feedback', 'permission', 'model', 'fork'])
     f.trigger.pick(source, rows.findIndex((row: any) => row.name === 'plan'))
     await vi.waitFor(() => expect(f.popup.state.getSnapshot().status).toBe('ready'))
     expect(f.popup.state.getSnapshot().command).toBe('plan')
@@ -256,14 +277,20 @@ describe('owned CLI commands through actual native trigger and Popup controllers
       drilled: false,
       signal: new AbortController().signal,
     }
-    expect((await source.candidates({ sessionId: 'child' } as any, req)).map((item) => item.name)).toEqual([
-      'model',
-      'permission',
-      'plan',
-      'goal',
-      'feedback',
-      'fork',
+    // The native menu's face: Add then Commands, native labels and glyphs.
+    const rows = await source.candidates({ sessionId: 'child' } as any, req)
+    expect(rows.map((item) => [item.section, item.name, item.label, (item.icon as any)?.displayName])).toEqual([
+      ['添加', 'goal', '目标', 'goal'],
+      ['添加', 'plan', '计划', 'plan'],
+      ['添加', 'feedback', '反馈', 'paper-plane'],
+      ['指令', 'permission', '权限', 'permission'],
+      ['指令', 'model', '模型', 'data'],
+      ['指令', 'fork', '分支', 'branch'],
     ])
+    // A typed query uses the native name-and-label ranking and drops the headings.
+    const typed = await source.candidates({ sessionId: 'child' } as any, { ...req, query: 'mod' })
+    expect(typed.map((item) => [item.name, item.section])).toEqual([['model', undefined]])
+    expect(typed[0]!.icon).toBe(rows[4]!.icon)
     expect(await source.candidates({ sessionId: 'parent' } as any, req)).toEqual([])
     expect(
       await source.matchEnter!({ sessionId: 'parent' } as any, '/model', req.signal, { attachments: 0 }),

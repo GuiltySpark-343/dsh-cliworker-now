@@ -789,7 +789,7 @@ Cordis patch id `cliworker-now`、Gateway `cliworker`、工具 `cliworker_*`、�
 
 按最新截图要求，顶部恢复原 CLI Worker 的返回、Worker 名称/标题与任务操作；删除先前添加的原生父面包屑、对话/轨迹页签、标准模式与页头按钮。原生正文使用独立公开视图 seat 固定为聊天，避免继承主页面轨迹选择；窗口和全局侧栏控制仍由外层宿主管理。打开子会话不切换主页面。切换 Worker、关闭栏或插件卸载释放读取引用，不停止已运行任务。子 Agent 始终绑定所属主对话并排除在普通会话列表外；旧历史和旧队列保留只读管理入口，不自动迁入新 Inbox 或执行。
 
-模型/强度复用实际原生 ModelSelect，目录及选择回调接真实 CLI 选型；权限/规划复用 PermissionSelect、PlanChip，以当前 CLI 支持范围和 Host 保存结果为准。运行、准入、停止清理、任何原生 next-turn/next-step 待发消息及兼容队列（含 paused）均锁定模型与权限设置；不因切换 UI 绕过 Host 原有互斥、账号和能力检查。精确 parent/child/Worker 身份不匹配或数据未就绪时禁用，普通主对话保持原生控件及原数据。
+模型/强度复用实际原生 ModelSelect，目录及选择回调接真实 CLI 选型；权限/规划复用 PermissionSelect、PlanChip，以当前 CLI 支持范围和 Host 保存结果为准；不支持规划的 CLI 子会话不渲染 PlanChip，原因只在“+”菜单的“计划”行说明。运行、准入、停止清理、任何原生 next-turn/next-step 待发消息及兼容队列（含 paused）均锁定模型与权限设置；不因切换 UI 绕过 Host 原有互斥、账号和能力检查。精确 parent/child/Worker 身份不匹配或数据未就绪时禁用，普通主对话保持原生控件及原数据。
 
 ContextMeter 和 StatsPills 使用真实原生组件与菜单。InputBar 的公开注册结构仍保留实际 keyboard、注入和子槽，仅将 tokenUsage/contextPressure/contextBreakdown 映射为匹配 Worker 的可核查遥测；不拿显示投影估算冒充 CLI 上下文，不累加重复快照，不以累计用量代替窗口占用，缺失分类不补零。数据不足时遵循原生组件的隐藏规则，不另画统计区。附件/分支尚未接通时原位说明；附件限制不禁用仍可用的原生指令菜单。
 

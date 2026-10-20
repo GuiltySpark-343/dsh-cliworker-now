@@ -1,11 +1,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ClientSessionContext, InputTriggerCandidate, InputTriggerPick } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
+import { IconPaperclipOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { HarnessBindingRegistry } from './harness-binding-registry.ts'
 
 const SOURCE = 'cliworker-selected-files'
 const items = [
-  { name: 'attach-file', label: '添加文件', description: '引用桌面端选择的本地文件' },
-  { name: 'attach-image', label: '添加图片', description: '通过 Harness 上传图片' },
+  // Native Add-section face: the root composer's File row name, label and glyph.
+  { name: 'file', label: '文件', section: 'add', icon: IconPaperclipOutlineRegular, description: '引用桌面端选择的本地文件' },
+  { name: 'image', label: '图片', section: 'add', icon: IconPaperclipOutlineRegular, description: '通过 Harness 上传图片' },
 ] as const
 type Services = Pick<Context, 'sessions' | 'conversation' | 'inputTriggers'>
 type HostPaths = { pathFor(file: File): string }
@@ -44,16 +46,16 @@ export function installHarnessNativeAttachments(ctx: Services, bindings: Harness
     },
   })
   return {
-    candidates(sessionId: ClientSessionContext['sessionId'], query: string): readonly InputTriggerCandidate[] {
+    /** Every available row; the command source sections or ranks them. */
+    candidates(sessionId: ClientSessionContext['sessionId']): readonly (InputTriggerCandidate & { section: 'add' })[] {
       if (!owned(sessionId)) return []
-      return items.filter(item => (item.name !== 'attach-file' || hostPaths()) &&
-        (!query || item.name.includes(query) || item.label.includes(query)))
+      return items.filter(item => item.name !== 'file' || hostPaths())
     },
     pick(pick: InputTriggerPick): boolean {
       const target = owned(pick.session.sessionId)
       if (!target || !items.some(item => item.name === pick.candidate.name)) return false
       const input = ctx.conversation.input.for(target.scope.ctx)
-      if (pick.candidate.name === 'attach-image') {
+      if (pick.candidate.name === 'image') {
         // Invoke the native File action through its public adjudication contract;
         // it owns the mounted picker, MIME checks, draft bytes and upload retirement.
         void ctx.inputTriggers.sessionOf(target.scope.ctx).adjudicate('/file', lifetime.signal, { attachments: 0 })

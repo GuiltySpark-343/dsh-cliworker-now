@@ -4,6 +4,15 @@ import type {
   ClientSessionContext,
   InputTriggerSource,
 } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
+import {
+  IconBranchOutlineRegular,
+  IconDataOutlineRegular,
+  IconGoalOutlineRegular,
+  IconPaperPlaneOutlineRegular,
+  IconPlanOutlineRegular,
+  PermissionIconFullAccessRegular,
+  rankByName,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   PopupSelectController,
   SelectOption,
@@ -56,16 +65,30 @@ function publishCommandServices(bindings: HarnessBindingRegistry, services?: Har
   else installedSources.delete(bindings)
   for (const listener of sourceListeners.get(bindings) ?? []) listener()
 }
+// Native '/' menu faces: the same rows, glyphs and section order as DSH's own
+// command menu (ui-commands presentation and ui-model-selection), so a CLI child
+// reads like the root composer. Fork is CLI-only and closes the Commands section.
 const commands = [
-  { name: 'model', label: '模型', description: '选择当前 CLI 的模型和思考强度' },
-  { name: 'permission', label: '权限', description: '选择当前 CLI 的权限模式' },
-  { name: 'plan', label: '规划', description: '切换当前 CLI 的规划模式' },
-  { name: 'goal', label: '目标', description: '设置或编辑当前 CLI 的目标' },
-  { name: 'feedback', label: '反馈', description: '向当前 Harness 子会话提交反馈' },
-  { name: 'fork', label: '分支', description: '从最新完成轮创建 CLI 子会话分支' },
+  { name: 'goal', label: '目标', section: 'add', icon: IconGoalOutlineRegular, description: '设置或编辑当前 CLI 的目标' },
+  { name: 'plan', label: '计划', section: 'add', icon: IconPlanOutlineRegular, description: '切换当前 CLI 的计划模式' },
+  { name: 'feedback', label: '反馈', section: 'add', icon: IconPaperPlaneOutlineRegular, description: '向当前 Harness 子会话提交反馈' },
+  { name: 'permission', label: '权限', section: 'commands', icon: PermissionIconFullAccessRegular, description: '选择当前 CLI 的权限模式' },
+  { name: 'model', label: '模型', section: 'commands', icon: IconDataOutlineRegular, description: '选择当前 CLI 的模型和思考强度' },
+  { name: 'fork', label: '分支', section: 'commands', icon: IconBranchOutlineRegular, description: '从最新完成轮创建 CLI 子会话分支' },
 ] as const
 const commandOf = (text: string) =>
-  commands.find((command) => command.name === text || command.label === text || (text === '计划' && command.name === 'plan'))
+  commands.find((command) => command.name === text || command.label === text || (text === '规划' && command.name === 'plan'))
+type Translate = (key: string) => string
+/** The native `command` dictionary's section headings, so the language follows DSH. */
+function sectionTitles(ctx: unknown) {
+  const locale = (ctx as { get?(name: 'locale'): { bind(ns: string): Translate } | undefined }).get?.('locale')
+  const t = locale?.bind('command')
+  const title = (key: string, fallback: string) => {
+    const text = t?.(key)
+    return text && text !== key ? text : fallback
+  }
+  return { add: title('section.add', '添加'), commands: title('section.commands', '指令') }
+}
 const sameBinding = (left: HarnessNativeBinding | undefined, right: OwnedBinding) =>
   left?.sessionId === right.sessionId &&
   left.parentSessionId === right.parentSessionId &&
@@ -339,11 +362,20 @@ export function installHarnessNativeCommands(
       req.signal.throwIfAborted()
       const binding = owned(session)
       if (!binding) return []
-      const query = req.query.toLowerCase()
-      return [...(attachments?.candidates(session.sessionId, query) ?? []), ...commands.filter(
-        (command) =>
-          (!query || command.name.includes(query) || command.label.includes(query)),
-      ).map((command) => ({ ...command, description: reasonFor(binding, command.name) || command.description }))]
+      const rows = [
+        ...(attachments?.candidates(session.sessionId) ?? []),
+        ...commands.map(({ section, ...command }) => ({
+          ...command,
+          section,
+          description: reasonFor(binding, command.name) || command.description,
+        })),
+      ]
+      // Like the native menu: sections for an empty query, shared name-and-label ranking otherwise.
+      if (req.query) return rankByName(rows, req.query).map(({ section: _, ...row }) => row)
+      const titles = sectionTitles(ctx)
+      return (['add', 'commands'] as const).flatMap((section) =>
+        rows.filter((row) => row.section === section).map((row) => ({ ...row, section: titles[section] })),
+      )
     },
     onPick: (pick) => {
       if (!owned(pick.session)) return
