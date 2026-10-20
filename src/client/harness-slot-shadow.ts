@@ -36,12 +36,17 @@ export function shadowHarnessSlot(
         replacement.component as never,
       )
       const shadow = slots.entries(name).find((entry) => entry.component === replacement.component)
-      if (shadow && next.children) shadow.children = next.children
+      // Disposing an entry that carries children collapses every child slot. The
+      // Cordis scope may dispose this registration before our own cleanup runs
+      // (hot reload), so expose the borrowed children only while it is listed.
+      if (shadow && next.children)
+        Object.defineProperty(shadow, 'children', {
+          configurable: true,
+          enumerable: true,
+          get: () => (slots.entries(name).includes(shadow) ? next.children : undefined),
+        })
       own = shadow
-      unregister = () => {
-        if (shadow && shadow.children === next.children) delete shadow.children
-        dispose()
-      }
+      unregister = dispose
     } else unregister = undefined
     updating = false
   }

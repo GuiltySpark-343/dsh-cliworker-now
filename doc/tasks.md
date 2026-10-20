@@ -2420,3 +2420,15 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 检查：类型检查通过；`client-conversation-features`、`harness-native-commands` 35/35 通过。确认 Mac 无活动 Worker 后，`build-preview` 与正式 `build` 均通过，`build-dependencies` 10/10。
 - 收尾：Windows Harness 保持正常运行，无活动 Worker；本轮界面自动化的计划任务都已注销。远端还有 15 个更早留下的 `CLIWorker-AGYBridge-*` 计划任务，不属于本轮，未删除。
 - 未执行：Windows 上没有发起真实模型调用或实际分支（分支已在 Mac 真实验收）；Kimi 按用户决定不验收；没有全量回归，没有 Git 提交或发布。
+
+## 2026-10-20 v0.8.1：热重载清空原生输入框控件与分支双提示框修复
+
+- 现象（用户报告，Codex 只读查看 Mac Desktop 确认）：普通会话和 CLI 子会话的输入框只剩“+”、发送和上下文占用；模型选择、访问模式、规划、步数/Token 统计都消失，“+”也打不开菜单。Windows 同一构建冷启动后一切正常。
+- 根因：Mac Desktop 通过 link 直接加载本仓库，Harness 开着 HMR。22:36 在 Harness 运行中重新构建 `lib/` 触发插件热重载。`ctx.slots.register` 本身是 Cordis effect，作用域销毁时它先于插件自己的清理执行，于是 `conversation.composer.bar` 替身条目带着借来的 `children` 被销毁。slot 核心销毁带 `children` 的条目时会清空全部子槽位（model、permission、plan、left、right、overlay 等），对所有会话生效，且不会自动重建。
+- 修复：`src/client/harness-slot-shadow.ts` 用 getter 暴露借来的 `children`，替身仍在条目列表中时才返回，任何销毁路径都不会再连带清空原生子槽位。
+- 分支按钮双提示框：DOM 守卫在禁用时除了 Harness Tooltip 还写了浏览器 `title`，导致出现两个提示。现在不再写 `title`（保留按钮原有值）。按钮可用时也不再叠加插件 Tooltip，只用原生按钮自带的“在新对话中分支”。
+- 回归测试：新增“热重载时作用域先销毁替身注册”测试（真实 SlotCore），在修复前失败（子槽位声明被清空）、修复后通过；新增可用分支不叠加提示、守卫不写 `title` 的断言。全量 `vitest run`：**213 文件通过、3 跳过；4276 通过、0 失败、13 跳过**；类型检查通过。
+- 端到端（隔离 `dsh web`，DSH_HOME 与 HOME 均在 `.test-data/web-repro`，仅 127.0.0.1）：加载本插件后，同一页面连续热重载两次，访问模式和模型选择都保留；临时换回旧代码后热重载，两者立即消失，只剩“+”和发送，与用户现象一致；恢复修复后刷新页面，控件恢复，再热重载两次仍保留。隔离环境没有配置模型，“+”菜单在原生对照中同样打不开，因此“+”菜单和统计组件未在该环境验证。
+- Desktop 复验（Mac）：确认无活动 Worker 后，以系统正常退出关闭 Harness，23:18 重新打开。Codex gpt-6.1-sol high 用 Computer Use 只读查看：普通会话与 Qoder 子会话的输入框都恢复了“+”、访问模式、模型选择、发送和三个统计组件（普通会话 `28 轮 84 步 · 65 tok/s`、`2.1M tok · 缓存命中 84%`、`上下文已用 5%`；子会话 `1 轮 1 步`、`0.2835 积分`、`上下文已用 17.6%`）。两个“+”菜单都能打开，子会话菜单列出模型、权限、规划、目标、反馈、分支等 8 项。23:22 在 Harness 运行中重新构建，触发真实热重载，以上组件全部保留。
+- 同时修正：不支持规划的 CLI 的访问模式按钮原先显示“当前：Custom”（锁定分支直接渲染原生控件，没有传入该 CLI 的权限目录）。现在锁定状态也走 `CliControl`，读取 CLI 的实际权限（只读，不保存），显示为“访问模式，当前：允许编辑”，悬停提示“当前 CLI 只有“允许编辑”一种权限模式”。新增模拟测试，覆盖映射到原生预设、保持锁定、不保存；Desktop 已由 Codex 确认。
+- 未验证：分支按钮的悬停提示。合成鼠标移动事件没有触发 Harness 的悬停，截图里也没有提示框，结论只来自单元测试；需要用户手动悬停确认，尤其是较早轮次或运行中的禁用按钮。Windows 未重新打包（安装版不链接仓库，不受构建热重载影响）；没有 Git 提交。

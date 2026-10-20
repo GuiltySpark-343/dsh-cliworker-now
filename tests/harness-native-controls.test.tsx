@@ -302,6 +302,31 @@ it('lets the installed native PermissionSelect choose its glyph, trigger and men
   expect(f.api.cliworker.configureWorkerPermission).toHaveBeenCalledTimes(2)
 })
 
+it('shows the CLI real mode on a locked PermissionSelect when the CLI has no plan mode', async () => {
+  // SIMULATION: a CLI whose only permission mode is accept-edits (e.g. Qoder).
+  const f = fixture()
+  f.api.cliworker.permissionForWorker.mockResolvedValue({
+    ok: true,
+    value: JSON.stringify({
+      currentValue: 'accept-edits',
+      writable: true,
+      options: [{ value: 'accept-edits', name: '允许编辑', description: 'Synthetic only mode' }],
+    }),
+  })
+  const planless = { ...binding, capabilities: { ...binding.capabilities, plan: false } }
+  f.bindings.publish(planless, { ...worker, harnessConversation: planless })
+  const tree = await f.mount(names[1])
+  const props = f.native[names[1]]!.mock.calls.at(-1)![0]
+  // Mapped to the native workspace-write preset, not left on the parent's preset.
+  expect(props.usePermissionCatalog((state: any) => state.value.defaultPreset)).toBe('workspace-write')
+  expect(props.useProjection('permissions')).toEqual({ currentValue: 'workspace-write' })
+  expect(props.locked).toBe(true)
+  expect(JSON.stringify(tree.toJSON())).toContain('当前 CLI 只有“允许编辑”一种权限模式')
+  expect(await props.select('workspace-write')).toBe(false)
+  expect(f.api.cliworker.permissionForWorker).toHaveBeenCalled()
+  expect(f.api.cliworker.configureWorkerPermission).not.toHaveBeenCalled()
+})
+
 it('keeps native controls locked when the selected receipt belongs to another Worker and cancels permission reads on unmount', async () => {
   const f = fixture()
   f.bindings.publish(binding, worker)

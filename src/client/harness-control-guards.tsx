@@ -40,12 +40,15 @@ function CliControl({
   binding,
   feature,
   api,
+  unavailable,
 }: {
   Native: NativeControl
   props: ControlProps
   binding: HarnessNativeBinding
   feature: Feature
   api: API
+  /** A permanent reason the control stays locked; it still shows the CLI's real mode. */
+  unavailable?: string
 }) {
   const { snapshot, connecting, error } = useWorkers(api, binding.parentSessionId, binding.workerId!)
   // The public session-list store receives the same Host projection frames as
@@ -77,7 +80,7 @@ function CliControl({
         : nativeQueued || snapshot.queuedFollowups?.length
           ? '请先发送或移除待发消息（包含已暂停消息），再修改设置'
           : snapshot.resumeBlockedReason
-  const locked = props.locked || !!reason
+  const locked = props.locked || !!reason || !!unavailable
   const [directory, setDirectory] = useState<NativeCliModelDirectory>()
   const initialWorker = useRef(worker)
   initialWorker.current = worker
@@ -218,7 +221,7 @@ function CliControl({
         (await selectPermission('accept-edits')) ? null : '权限设置未保存，请核对当前任务与权限状态',
     })
   }
-  const explanation = reason || (feature !== 'model' ? permission?.reason : undefined)
+  const explanation = unavailable || reason || (feature !== 'model' ? permission?.reason : undefined)
   return (
     <>
       {explanation ? (
@@ -294,6 +297,19 @@ function registerHarnessControlGuards(
           if (!binding) return createElement(Native, props)
           const unavailable =
             feature === 'plan' ? harnessFeatureReason(binding, 'plan') : feature === 'permission' && harnessPermissionReason(binding)
+          // Locked, but mapped to the CLI's real mode instead of the parent's preset.
+          if (unavailable && feature === 'permission' && api && binding.workerId)
+            return (
+              <CliControl
+                key={`${binding.sessionId}:${binding.workerId}`}
+                Native={Native}
+                props={props}
+                binding={binding}
+                feature={feature}
+                api={api}
+                unavailable={unavailable}
+              />
+            )
           if (unavailable) return (
             <Tooltip label={unavailable} side="top" portal>
               <span tabIndex={0} aria-label={unavailable}>

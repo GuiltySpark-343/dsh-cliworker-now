@@ -83,7 +83,8 @@ it('leaves native send, stop, command menus and input handling with their origin
   const f = fixture()
   const commands = new f.Button('添加文件或调用指令')
   f.nodes.push(commands)
-  const dispose = installHarnessDomGuard(f.root, f.binding)
+  const targets = vi.fn()
+  const dispose = installHarnessDomGuard(f.root, f.binding, targets)
   for (const button of [f.stop, f.send, commands]) {
     expect(button.disabled).toBe(false)
     expect(button.getAttribute('aria-disabled')).toBeNull()
@@ -92,9 +93,13 @@ it('leaves native send, stop, command menus and input handling with their origin
     expect(click.preventDefault).not.toHaveBeenCalled()
   }
   expect(commands.getAttribute('aria-label')).toBe('调用指令（附件不可用）')
-  expect(commands.getAttribute('title')).toContain('仍可打开此菜单调用可用指令')
+  // One tooltip per control: reasons go to the overlay targets, never a browser title.
+  expect(commands.getAttribute('title')).toBeNull()
   expect(f.branch.disabled).toBe(true)
-  expect(f.branch.getAttribute('title')).toBe('CLI 尚未接通分支')
+  expect(f.branch.getAttribute('title')).toBeNull()
+  const reasons = targets.mock.lastCall![0].map((target: { reason: string }) => target.reason)
+  expect(reasons).toContain('CLI 尚未接通分支')
+  expect(reasons.some((reason: string) => reason.includes('仍可打开此菜单调用可用指令'))).toBe(true)
   const fork = f.event(f.branch)
   f.listeners.get('click')!(fork as unknown as Event)
   expect(fork.preventDefault).toHaveBeenCalledOnce()

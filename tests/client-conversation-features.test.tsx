@@ -190,6 +190,33 @@ describe('模拟：能力与菜单', () => {
     expect(core.entriesOfSlot('conversation.composer.bar')).toEqual([original])
     expect(core.specDynamic('conversation.input.left')).toBeDefined()
   })
+  it('热重载时作用域先销毁替身注册，原生输入框子槽位及其控件仍保留', () => {
+    const core = new SlotCore()
+    core.register({ name: 'root', children: {
+      'conversation.composer.bar': { kind: 'single', scope: 'session-maybe' },
+    } } as any, () => null)
+    core.register({ name: 'conversation.composer.bar', children: {
+      'conversation.input.model': { kind: 'single', scope: 'session' },
+      'conversation.input.left': { kind: 'list', scope: 'session' },
+    } } as any, () => null)
+    const model = () => null
+    core.register({ name: 'conversation.input.model' } as any, model)
+    // Like ctx.slots.register: the Cordis scope owns each registration's disposer.
+    const scoped: (() => void)[] = []
+    const slots = new Proxy(core, { get: (target, key) => key === 'register'
+      ? (options: any, component: any) => { const dispose = target.register(options, component); scoped.push(dispose); return dispose }
+      : (target as any)[key]?.bind?.(target) ?? (target as any)[key] })
+    const release = installHarnessNativeCommandMenu({ slots } as any, new HarnessBindingRegistry())
+    const shadow = core.entriesOfSlot('conversation.composer.bar')[0]!
+    expect(shadow.children).toBeDefined()
+    // Scope disposal runs first (newest effect), then the plugin's own cleanup.
+    for (const dispose of scoped.reverse()) dispose()
+    release()
+    expect(core.specDynamic('conversation.input.model')).toBeDefined()
+    expect(core.specDynamic('conversation.input.left')).toBeDefined()
+    expect(core.entriesOfSlot('conversation.input.model').map((entry) => entry.component)).toEqual([model])
+    expect(shadow.children).toBeUndefined()
+  })
   it('普通/无会话保留原命令源；CLI 绑定晚到及清除时更新原生 composer', async () => {
     const core = new SlotCore()
     core.register({ name: 'root', children: {
@@ -491,7 +518,7 @@ describe('模拟：原生分支入口改道', () => {
       reason: () => f.forks.reason('child', cut()), fork: () => { void f.forks.fork('child', cut()) },
     }))
     expect(button.disabled).toBe(true)
-    expect(attrs.get('title')).toContain('已完成')
+    expect(attrs.has('title')).toBe(false)
     for (const type of ['click', 'keydown']) listeners.get(type)({
       type, key: 'Enter', target: button, preventDefault: vi.fn(), stopImmediatePropagation: vi.fn(),
     })
@@ -668,7 +695,7 @@ describe('模拟：原生分支入口改道', () => {
   })
 })
 
-it('模拟：PermissionSelect 与 PlanChip 按能力禁用，提示原因且不读取/保存权限', async () => {
+it('模拟：PlanChip 按能力禁用并提示原因，不读取/保存权限（权限控件见 harness-native-controls）', async () => {
   const core = new SlotCore()
   const names = ['conversation.input.permission', 'conversation.input.plan']
   core.register(
@@ -691,7 +718,7 @@ it('模拟：PermissionSelect 与 PlanChip 按能力禁用，提示原因且不�
   })
   const api = { cliworker: { permissionForWorker: vi.fn(), configureWorkerPermission: vi.fn() } }
   releases.push(installHarnessControlGuards({ slots: core } as any, bindings, api as any))
-  for (const name of names) {
+  for (const name of names.filter((name) => name.endsWith('.plan'))) {
     const entry = core.entriesOfSlot(name)[0]!
     let tree!: ReactTestRenderer
     await act(async () => {
@@ -699,9 +726,7 @@ it('模拟：PermissionSelect 与 PlanChip 按能力禁用，提示原因且不�
       trees.push(tree)
     })
     expect(tree.root.findByType('button').props.disabled).toBe(true)
-    expect(JSON.stringify(tree.toJSON())).toContain(
-      name.endsWith('.permission') ? '当前 CLI 只有“允许编辑”一种权限模式' : '当前 CLI 不支持规划模式',
-    )
+    expect(JSON.stringify(tree.toJSON())).toContain('当前 CLI 不支持规划模式')
     if (name.endsWith('.permission')) await act(async () => tree.root.findByType('button').props.onClick())
   }
   expect(api.cliworker.permissionForWorker).not.toHaveBeenCalled()
@@ -731,8 +756,12 @@ it('模拟：消息分支按钮捕获点击及键盘，禁用不调用，清理�
   }
   let reason: string | undefined
   const fork = vi.fn()
-  const release = installHarnessDomGuard(root, binding, undefined, { reason: () => reason, fork })
+  const targets = vi.fn()
+  const release = installHarnessDomGuard(root, binding, targets, { reason: () => reason, fork })
   expect(button.disabled).toBe(false)
+  // An available fork keeps only the native button's tooltip.
+  expect(targets).toHaveBeenLastCalledWith([])
+  expect(attrs.has('title')).toBe(false)
   expect(attrs.has('data-unavailable')).toBe(false)
   const event = (extra = {}) => ({
     type: 'click',

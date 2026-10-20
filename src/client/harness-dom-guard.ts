@@ -83,11 +83,14 @@ export function installHarnessDomGuard(
         } else button.removeAttribute('data-unavailable')
         button.removeAttribute('aria-describedby')
       }
-      if (reason) button.setAttribute('title', reason)
-      else button.removeAttribute('title')
+      // One tooltip only: the overlay shows the reason; a title attribute would add a browser tooltip.
+      const title = saved.get(button)!.title
+      if (title === null) button.removeAttribute('title')
+      else if (button.getAttribute('title') !== title) button.setAttribute('title', title)
       if (capability === 'attachments' && button.getAttribute('aria-label') !== '调用指令（附件不可用）')
         button.setAttribute('aria-label', '调用指令（附件不可用）')
-      if (reason || capability === 'fork') targets.push({ element: button, feature: capability, reason: reason || '在新对话中分支' })
+      // An available fork keeps the native button's own tooltip.
+      if (reason) targets.push({ element: button, feature: capability, reason })
     }
     onTargets?.(targets)
   }
