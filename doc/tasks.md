@@ -2449,3 +2449,12 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 检查：类型检查通过；PlanChip 测试改为断言“不支持时不渲染、未绑定会话仍显示原生控件、不读写权限”；全量 `vitest run` **213 文件通过、3 跳过；4277 通过、13 跳过**。确认无活动 Worker 后，`build-preview` 与正式 `build` 均通过，Desktop 已热重载。
 - Desktop 验证（Codex Computer Use，只读）：`qoder-1｜说你好` 的控件从左到右为“+”、“允许编辑”（禁用）、“Low”（Qwen3.8-Flash）、发送，没有“规划”按钮。下方统计仍为 `1 轮 1 步`、`0.2835 积分`、`17.6%`。“+”菜单的“计划”行仍在，原因文字正确。主会话控件不受影响。
 - 未执行：支持规划的 CLI 没有在 Desktop 复验（代码路径未改动，由既有测试覆盖）；Windows 未重新打包；没有 Git 提交。
+
+## 2026-10-21 v0.8.2：发布与 README 精简
+
+- 范围（用户批准发布为 v0.8.2）：CLI 子会话“+”菜单原生分段、移除不支持规划的禁用按钮、热重载保留原生输入框控件、分支单提示框，以及 goal/plan/feedback/fork 桥接。版本号、Codex/ACP/MCP/Hermes 客户端标识改为 0.8.2。
+- README：中英文改为精简概览；原有各 CLI 账号、路径、模型规则、安装细节、兼容队列与开发说明原文迁入 `doc/usage-details.md` / `doc/usage-details.en.md`，README 只保留链接。
+- macOS：类型检查通过；全量 `vitest run` **213 文件通过、3 跳过；4277 通过、0 失败、13 跳过**；OpenSpec 严格校验 23/23；`build-preview` 与正式 `build` 通过，Host 及全部 helper 逐字相同，Client 仅打包路径注释不同。
+- 安装包：`dsh-cliworker-now-0.8.2.tgz`，845 文件，18071954 字节，SHA-256 `7d0c8ca847f19b76d8e1f4e27c3c1602ebe150fc8a9cd9cef130147e99ea1793`；扫描无私人路径、账号或运行日志。独立 `DSH_HOME`/`HOME` profile 用该 tgz 安装（exit 0），回环地址启动 Web 后插件列为已启用，CLI Worker Now 侧栏正常加载，无控制台错误；之后已停止。
+- Windows（x64，Node 24，固定 pnpm 11.25.0）：远程脚本的冻结依赖安装、类型检查、7 个 Windows CI 文件和安装包 Host 加载全部通过。另在同一源码目录跑全量：使用隔离 HOME/TEMP 环境时 **4203 通过、8 失败、43 跳过**；失败集中在 6 个 Host 读取器/PTY 测试文件（Grok、Kimi、Qoder 持久记录读取与 OMP 账号 PTY），本版没有改动这些代码。同一 6 文件改用正常用户环境串行重跑 **179/179 通过**，判断为隔离环境（或并发时序）造成，原因未进一步定位。
+- 未执行：v0.8.2 的 Windows Desktop 实机安装与界面检查；本版没有新的真实模型调用（改动只涉及界面，桥接功能已在 v0.8.1 开发期完成低成本真实验收）；支持规划的 CLI 未在 Desktop 复查规划按钮。
