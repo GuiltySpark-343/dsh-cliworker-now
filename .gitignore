@@ -17,3 +17,6 @@ artifacts/
 
 # Personal machine runbooks and connection notes (never publish)
 /doc/local/
+
+# Social media promotion drafts and screenshots (local only; index in promotion/README.md)
+/promotion/
