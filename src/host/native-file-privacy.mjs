@@ -18,11 +18,17 @@ const canonical = path => process.platform === 'win32' ? win32.normalize(path).t
 /** A normal NTFS DACL, with current-user ownership; group ownership is never enough.
  * mask=0022 admits other principals' read-only access to Qoder's native root,
  * matching the existing POSIX root rule. Transcript paths remain private. */
-export function privateWindowsAcl(value, currentSid, mask = 0o077) {
-  if (!object(value) || !userSid.test(currentSid ?? '') || value.owner !== currentSid || value.nullDacl !== false ||
+export function privateWindowsAcl(value, currentSid, mask = 0o077, allowAdministratorsOwner = false) {
+  if (!object(value) || !userSid.test(currentSid ?? '') || value.nullDacl !== false ||
     !Number.isInteger(value.control) || !(value.control & 4) || (value.control & 64) ||
     !Array.isArray(value.aces) || !value.aces.length || value.aces.length > 256 ||
     typeof value.descriptor !== 'string' || !value.descriptor || value.descriptor.length > 32768) return false
+  // Native Qoder files created from an elevated terminal can be owned by the
+  // Administrators group. Group ownership alone is insufficient: require a
+  // direct, applying full-control ACE for the current user on every exact path.
+  if (value.owner !== currentSid && !(allowAdministratorsOwner && value.owner === 'S-1-5-32-544' &&
+    value.aces.some(ace => object(ace) && ace.type === 0 && !(ace.flags & 8) && ace.sid === currentSid &&
+      Number.isInteger(ace.mask) && (((ace.mask >>> 0) & 0x1f01ff) === 0x1f01ff || ((ace.mask >>> 0) & 0x10000000) !== 0)))) return false
   for (const ace of value.aces) {
     if (!object(ace) || ![0, 1].includes(ace.type) || !Number.isInteger(ace.flags) || ace.flags < 0 ||
       (ace.flags & ~31) || !Number.isInteger(ace.mask) || ace.mask < -2147483648 || ace.mask > 4294967295 ||
@@ -68,7 +74,7 @@ async function aclBatch(entries, options, deadline) {
     if (result.version !== 1 || !Array.isArray(result.items) || result.items.length !== entries.length ||
       new Set(result.items.map(value => value.path)).size !== entries.length) throw new Error('Native privacy projection invalid')
     const byPath = new Map(result.items.map(value => [value.path, value]))
-    if (!entries.every(entry => privateWindowsAcl(byPath.get(entry.path), result.currentSid, entry.mask ?? 0o077)))
+    if (!entries.every(entry => privateWindowsAcl(byPath.get(entry.path), result.currentSid, entry.mask ?? 0o077, options.allowAdministratorsOwner === true)))
       throw new Error('Native file is not private')
     ok = true
     return { currentSid: result.currentSid, descriptors: entries.map(entry => byPath.get(entry.path).descriptor) }

@@ -16,6 +16,14 @@
 
 ## Decisions
 
+### 2026-10-18 Antigravity 本轮工具接入
+
+使用 `--add-dir` 把只含本轮 MCP/Hook 配置的私有目录加入 AGY；不把整个私有请求目录作为工作区，不改 HOME、用户设置、项目 `.agents` 或模型/会话绑定。MCP 载体沿用现有 stdio carrier，连接凭据只经进程环境传递。原生 PreToolUse Hook 仅对结构化报告的当前专属服务器及实时目录精确匹配的工具申请 `auto_approve`，保留 AGY 显式 deny/ask 规则并仍由 Harness 逐次审批。其余调用不提升权限；目录撤销、会话冲突、停止和失败均拒绝准入。临时目录与原生进程一同清理。参考项目实现和当前安装版实际验证分开记录。
+
+### 2026-10-18 附件与逐 CLI 工具桥
+
+附件保留 DSH 原生上传、历史和消息身份；Host 通过公开 attachments 与 fs 服务解析路径，各 runner 根据自己的协议发送图片块、资源链接或可读取路径。输入去重包含附件身份；不将已提交附件的运行中消息降为纯文本引导。私有临时副本跟随受管进程清理，不改原附件。Skill/MCP 使用既有真实 child scope、临时注入、tools.execute 和取消链，按安装版能力逐项准入；无可靠入口者明确受限。macOS 与 Windows 共用模块，路径使用 node:path/node:url；桌面验收仅 Windows，最小关联检查不扩展为全量测试或发布。
+
 14. 上下文读数与图形拆开格式化：共享原生 ContextMeter 保留精确、限界后的比例绘制圆环/条形；正数小于1%时显示至两位小数，更小值显示“<0.01%”，仅真实零显示0%。底部、标题和无障碍名称使用同一格式化函数；普通DSH与CLI均复用此原生实现，不在插件造新组件。无效、负数、非有限数及零容量不可变成0%。原生三分类行在CLI数据未知时保留“—”与“当前记录未提供分类统计”，只有实际已报告的完整三分类绘制分类色条；任何额外CLI分类不得冒充闭合的三桶。Hermes可用分类仅来源于同一真实请求的官方接口/算法；旧记录无对应分类则不猜测。完整渲染验收覆盖真零、微小正数、正常/超容量、缺容量、无分类、有分类、运行中保留、切换和冷恢复。
 
 13. 首次请求尚无统计时，通过显式 `telemetryAvailability` 会话 projection 区分 pending/unavailable 及原因，原生 StatsPills/ContextMeter 保留模块并显示未知说明；不将 undefined 推断为协议不支持、不填零、不借父会话。`externalRequestState` 只接受当前 run 的安全官方 request/error 生命周期，原生运行状态负责呈现；没有真实退避时长和策略时不伪造 `llm/retry`。Hermes observer 必须独立串行刷新、验证身份和 occurrence 序号，并在停止时排空清理。真实推理与工具仍按原生节点合同投影。
@@ -95,3 +103,7 @@ Pi 使用与当前安装绑定的官方请求 hook/估算器，经专用 fd3 发
 DSH peer 依赖保留为 `*`，不声明最低版本或指定版本白名单；开发 SDK 精确锁定用于可复现类型检查和构建。Host 按真实 subagent activation/continuable 接口选择通路，Client 检查原生侧栏入口及投影接口，缺必需能力给出具体原因，不将未知版本视为已兼容。实际验收版本写入 Release，开发日志保留源码/SDK/构建证据。
 
 用户手动升级的应用不由插件修改。原生四包扩展属于对应官方源码的独立候选，必须校验来源与哈希，不能因 peer 放宽就把旧 bundle 强装新宿主。阶段18重新准备 rc.2 完整隔离依赖图、四包构建和原生UI回放；与工作流任务只协调重启，双方不修改对方项目。正式安装重新读取当前 profile，备份并保留原配置字节及历史数据，失败回退自有构建。
+
+2026-10-18 Windows 原生桌面检查发现 rc.2 InputBar 和 SessionFace 的子会话只接收图片上传。插件通过公开输入 source/codec 与 SessionInput.insertReference 增加普通桌面文件引用，通过公开 adjudication 调用原生 File action 增加图片入口；保留真实子会话身份、不替换输入机，不修改 Harness 核心。普通文件与原生 root composer 一样使用用户选定的本地路径，Web 普通文件回执保持不可用。
+
+私有 CLI 生成路由按真实 native transport 开放图片输入，表示可转成原生内容块或路径，不作为下游模型的视觉声明。ACP initialize 未明确宣告图片块能力时使用验证后的路径，不能猜测该 CLI 支持 image prompt。

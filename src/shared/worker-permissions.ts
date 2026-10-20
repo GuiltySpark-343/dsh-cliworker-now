@@ -13,7 +13,7 @@ export function workerPermissionOptions(
 ): WorkerPermissionState['options'] {
   const cli = cliOf(worker.preference)
   const canPlan =
-    cli !== 'hermes' && cli !== 'harness' && cli !== 'qoder' && (cli !== 'kimi' || worker.transport === 'kimi-acp-v1')
+    cli !== 'hermes' && cli !== 'harness' && cli !== 'qoder' && cli !== 'qodercn' && (cli !== 'kimi' || worker.transport === 'kimi-acp-v1')
   return [
     ...(canPlan
       ? [

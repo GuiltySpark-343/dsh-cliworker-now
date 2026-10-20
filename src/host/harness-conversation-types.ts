@@ -1,4 +1,5 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { HarnessConversationBinding, Worker, WorkerEvent } from '../shared/types.ts'
 
 /** Private durable association; the three session identities are deliberately distinct. */
@@ -58,12 +59,15 @@ export interface HarnessConversationDependencies {
     requestId: string,
     signal: AbortSignal,
   ): Promise<void>
+  fork?(record: HarnessConversationRecord, signal: AbortSignal): Promise<string>
   /** Native slash-command query/set through the same authoritative Worker permission API. */
   permission?(
     record: HarnessConversationRecord,
     mode: string | undefined,
     signal: AbortSignal,
   ): Promise<string>
+  /** Plugin-owned persistent goal; never arms Harness or CLI automatic rounds. */
+  goal?(record: HarnessConversationRecord, input: string, signal: AbortSignal): Promise<string>
   /** Unbounded by the UI row limit, monotonically ordered, and scoped to this exact run. */
   events(record: HarnessConversationRecord, runId: string, afterSeq: number): readonly WorkerEvent[]
   /** Notification only. The bridge reads events with a sequence cursor after subscribing. */
@@ -74,6 +78,7 @@ export interface HarnessConversationDependencies {
     prompt: string,
     requestId: string,
     signal: AbortSignal,
+    messages?: readonly UserMessage[],
   ): Promise<HarnessConversationRun>
   /** Existing run, including complete history; never launches a task. */
   wait(record: HarnessConversationRecord, runId: string): Promise<Worker>
@@ -91,6 +96,9 @@ export interface HarnessConversationEnsureOptions {
 }
 
 export interface HarnessConversationApi {
+  forkHistory(worker: Worker, atMessageId: string, signal: AbortSignal): Promise<import('./worker-fork.ts').ForkHistory>
+  createFork(parent: Agent, worker: Worker, history: import('./worker-fork.ts').ForkHistory, signal: AbortSignal): Promise<import('./worker-fork.ts').ForkChild>
+
   /** Explicit idle-only repair of a corrupt display Session; never launches a CLI turn. */
   repairDisplay(
     parent: Agent,

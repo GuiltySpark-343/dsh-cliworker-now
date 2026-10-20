@@ -6,8 +6,9 @@ import { claudeLaunchEnvironment } from './claude-own-route.ts'
 
 const record = (value: unknown): value is Record<string, any> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
+// Native ids may end in a context-window suffix such as `[1m]`; keep it exactly.
 const id = (value: unknown): value is string =>
-  typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(value)
+  typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]*(?:\[[A-Za-z0-9]+\])?$/.test(value)
 const text = (value: unknown): value is string =>
   typeof value === 'string' && !!value.trim() && value.length <= 512 && !/[\x00-\x1f\x7f]/.test(value)
 
@@ -23,15 +24,21 @@ export interface ClaudeNativeOAuthCatalog {
   models: ModelChoice[]
   /** Host-only identity evidence. Do not persist this object or send it through Gateway. */
   account: { email: string; organization?: string }
+  /** 'unknown': the CLI returned no usable plan limits; real calls still enforce them. */
+  quota: 'confirmed' | 'unknown'
 }
 
 /** Native initialize is capability metadata: even an unauthenticated CLI returns models. */
 function ownAccount(value: unknown): ClaudeNativeOAuthCatalog['account'] {
   const email = record(value) ? accountEmail(value.email) : undefined
+  // Claude 2.1.296 reports tokenSource; 2.1.287 omits it and reports the plan as subscriptionType.
+  const claudeAi =
+    record(value) &&
+    (value.tokenSource === 'claude.ai' || (value.tokenSource === undefined && text(value.subscriptionType)))
   if (
     !record(value) ||
     value.apiProvider !== 'firstParty' ||
-    value.tokenSource !== 'claude.ai' ||
+    !claudeAi ||
     (value.apiKeySource !== undefined && value.apiKeySource !== 'none') ||
     !email
   )
@@ -46,16 +53,24 @@ function ownAccount(value: unknown): ClaudeNativeOAuthCatalog['account'] {
  * successful read can still use the CLI's own account-bound snapshot younger than 60s. We add
  * no cache and make no claim of a separate live model entitlement API.
  */
-function remainingQuota(value: unknown, now: number): void {
-  const unknown = () =>
-    new ClaudeNativeOAuthError('Claude 原生账号剩余额度暂无法确认，请检查登录与订阅后刷新')
-  if (
-    !record(value) ||
-    value.rate_limits_available !== true ||
-    !['pro', 'max', 'team', 'enterprise'].includes(value.subscription_type) ||
-    !record(value.rate_limits) ||
-    !Array.isArray(value.rate_limits.limits)
-  )
+function remainingQuota(value: unknown, now: number): 'confirmed' | 'unknown' {
+  if (!record(value) || !['pro', 'max', 'team', 'enterprise'].includes(value.subscription_type))
+    throw new ClaudeNativeOAuthError('Claude 原生账号订阅暂无法确认，请检查登录与订阅后刷新')
+  // Unknown quota does not hide the models; only a confirmed exhausted window blocks them.
+  try {
+    checkQuota(value, now)
+    return 'confirmed'
+  } catch (error) {
+    if (error instanceof QuotaUnknown) return 'unknown'
+    throw error
+  }
+}
+
+class QuotaUnknown {}
+const unknown = () => new QuotaUnknown()
+
+function checkQuota(value: Record<string, any>, now: number): void {
+  if (value.rate_limits_available !== true || !record(value.rate_limits) || !Array.isArray(value.rate_limits.limits))
     throw unknown()
   const limits = value.rate_limits
   const windows = ['five_hour', 'seven_day', 'seven_day_oauth_apps', 'seven_day_opus', 'seven_day_sonnet']
@@ -106,9 +121,10 @@ export function parseClaudeNativeOAuthCatalog(
 ): ClaudeNativeOAuthCatalog {
   if (!record(initialize)) throw new ClaudeNativeOAuthError()
   const account = ownAccount(initialize.account)
-  remainingQuota(usage, now)
+  const quota = remainingQuota(usage, now)
   if (!Array.isArray(initialize.models)) throw new ClaudeNativeOAuthError()
   const models = new Map<string, ModelChoice>()
+  const resolved = new Map<string, string>()
   for (const model of initialize.models) {
     if (
       !record(model) ||
@@ -135,11 +151,17 @@ export function parseClaudeNativeOAuthCatalog(
       label: text(model.displayName) ? model.displayName : model.value,
       efforts: ['default', ...efforts],
     }
-    if (models.has(choice.id)) throw new ClaudeNativeOAuthError('Claude 原生模型目录存在重复选项，请刷新')
+    // Claude 2.1.287 repeats the selected `default` entry; only a conflicting duplicate is ambiguous.
+    if (resolved.has(choice.id)) {
+      if (resolved.get(choice.id) !== model.resolvedModel)
+        throw new ClaudeNativeOAuthError('Claude 原生模型目录存在重复选项，请刷新')
+      continue
+    }
+    resolved.set(choice.id, model.resolvedModel)
     models.set(choice.id, choice)
   }
   if (!models.size) throw new ClaudeNativeOAuthError('Claude 原生账号暂未返回可确认的模型，请刷新')
-  return { account, models: [...models.values()] }
+  return { account, models: [...models.values()], quota }
 }
 
 /** Only initialize/get_usage controls are sent. No user message, token read, login or model request. */

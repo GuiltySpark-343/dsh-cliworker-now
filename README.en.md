@@ -21,6 +21,8 @@ Choose a CLI, model and role, dispatch a named agent, follow its work in the sid
 
 The current development version is **v0.8.1**. The v0.7.10 source, uncommitted work and build were independently backed up and verified before migration. The native conversation and tool bridge migration, and further fixes before the next formal submission, belong to v0.8.1. Bug fixes use focused verification; full macOS and Windows acceptance runs before the formal GitHub submission. Actual results and verification boundaries are recorded in the [implementation log](doc/tasks.md).
 
+Qoder bills in credits. Turn usage displays confirmed `CLI/provider/model` identities, such as `omp/zhipu-coding-plan/glm-5.3-flash`, rather than internal Worker routes; undisclosed providers stay explicit. Its composer and completed-turn usage indicators display the credits for their exact bound run and its dialog is titled “Credits usage”, without token units in that module; missing credits remain unknown. A verified native context percentage remains visible without a token count or window; an actual same-turn native window may supplement an explicitly estimated count. Windows supports Qoder's native administrator ownership and inherited read-only ACLs while rejecting untrusted writers and preserving file permissions. This fix was checked on Windows Desktop using existing history and focused regressions; no new model calls or Mac tests were run. See the [Qoder protocol notes](doc/qoder-protocol.md#63-积分计费显示2026-10-18).
+
 The current v0.8.1 migration runs the complete official `sidebar.chat.conversation` view and its state logic inside the right CLI Worker sidebar, while retaining the original parent management page. Its top area retains the original Worker back button, title and task actions; it does not add main-page breadcrumbs, Chat/Trace tabs or header utilities. Opening a Worker leaves the main page in place. Each child stays bound to its parent and excluded from ordinary session lists; CLI Worker retains task management and read-only legacy history. The CLI keeps its own Agent, account, selected model, session identity and transport. Native sending, queue editing/removal and stopping use the actual DSH Session and Inbox. The official view owns transcript, composer, queue and running state, retaining the native keyboard, Store and slot ownership.
 
 Model/effort and permission/planning controls are the actual native components, with their public data and save callbacks connected to the selected CLI. Settings remain locked during execution, admission or cleanup, and while any native inbox item or compatibility queue item exists, including paused items. The user-authorized four-package host extension ships with this plugin and supplies main-conversation button presentation and session-scoped telemetry sources. See the [source and rollback contract](doc/native-conversation-host-extension.md). Native ContextMeter and StatsPills consume verifiable telemetry for the exact Worker. All three native modules remain visible while data is unknown, showing “—” and explaining the reason in native details. Context never uses DSH display estimates or cumulative tokens as a substitute. Hermes public request/error observations update independently of message events; only received public reasoning and tool events enter native process views. Unsupported attachments and forks keep specific reasons, while available commands remain usable. These adapters apply only to the exact bound child.
@@ -58,7 +60,7 @@ The plugin requires DeepSeek Harness and the CLIs you choose to use. Model acces
 
 ## 2. Features
 
-All 12 CLIs share **Reasoning records** within the native turn process when public reasoning is available. Expand the completed turn's process, then open its reasoning rows. Native previews remain visible during generation; saved records can be reopened with the conversation. New Codex turns request public summaries and display received public deltas as they arrive, retaining them after a stop or failure. Missing historical or private reasoning is never reconstructed. See [public process boundaries](doc/public-process.md).
+All 13 CLIs share **Reasoning records** within the native turn process when public reasoning is available. Expand the completed turn's process, then open its reasoning rows. Native previews remain visible during generation; saved records can be reopened with the conversation. New Codex turns request public summaries and display received public deltas as they arrive, retaining them after a stop or failure. Missing historical or private reasoning is never reconstructed. See [public process boundaries](doc/public-process.md).
 
 | Feature | How it works | Benefit |
 | --- | --- | --- |
@@ -95,7 +97,7 @@ The settings dialog manages role cards by name and summary. Seven writing roles 
 
 ### 3.3 CLI connections, accounts and model preferences
 
-Enable each CLI separately and manage its account, project default model and reasoning effort. Selecting a model or effort saves the project defaults automatically; opening settings or refreshing the list does not change them. Save failures remain visible and can be retried by selecting again. Supported CLIs can open their native account terminal. Authentication information follows the CLI's actual account source.
+Enable each CLI separately and manage its account, project default model and reasoning effort. Selecting a model or effort updates a local draft immediately. Leaving the current CLI page or closing settings saves the final pair in the background without delaying navigation; submitted writes continue after closing. Opening settings or refreshing the list does not change defaults. Failed selections and errors remain available when reopening the CLI page and can be retried on a later departure. Supported CLIs can open their native account terminal. Authentication information follows the CLI's actual account source.
 
 After each Harness start, opening a CLI settings page for the first time discovers and saves its model and effort choices. Later opens reuse the verified list. The next start refreshes the list and rewrites the cache only when it changes. Valid saved defaults remain selected; unavailable defaults require a new choice. Refresh Models forces a new check.
 
@@ -140,28 +142,29 @@ An integrated adapter does not mean every model, subscription or platform has be
 | Hermes Agent | Installed checkout 6c80c32734 | Own account directory, native account menus and Nous model access checked; a read-only check returned 10 free models; generation and continuation remain unverified |
 | OpenCode | 1.18.21 | Native model directory and JSONL adapter integrated; Zhipu models were tested historically; a free MiMo request previously returned HTTP 403 |
 | Qoder CLI | 1.1.73 | Native ACP added in v0.8.1; real account metadata and a 17-model dynamic catalog checked; live model tasks, tool artifacts, restoration, in-run cancellation and Windows remain unverified |
+| Qoder CN CLI | 1.1.74 | Its own account and 15-model catalog checked on Windows; Qwen3.8-Flash / low passed generation, file tools, same-session continuation and in-run cancellation; a separate normal new-chat dispatch and native child UI check also passed; other models and the Mac runtime remain untested |
 
 MiMo refers to [XiaomiMiMo/MiMo-Code](https://github.com/XiaomiMiMo/MiMo-Code). Hermes Agent replaced the old external Harness CLI adapter; DeepSeek Harness remains the plugin's host.
 
 v0.8.1 adds **Qoder CLI** through the official `qoder --acp` interface in the same native sidebar. Models and reasoning efforts come from its structured catalog and are confirmed before sending. Only the edit mode is available: the current ACP implementation advertises no read-only planning mode, so planning tasks fail before prompt admission. Hidden token counts remain unknown, with inspectable usage entries both below the composer and on exactly bound completed messages. A context ratio reported by the exact native session is shown independently; missing token counts, capacity, cache and categories remain unknown. Turns and steps describe the host child conversation, not Qoder's internal request count. See the [Qoder protocol checks](doc/qoder-protocol.md).
 
-When an external CLI omits cache usage, the usage control shows “Cache hit —” and explains the missing value in its details. Unknown cache values are not converted to zero. Grok and OMP turns without public process content add no extra notice; published reasoning and tools remain expandable.
+When an external CLI omits cache usage, the usage control shows “Cache hit —” without an explanatory paragraph. Unknown cache values are not converted to zero. Grok and OMP turns without public process content add no extra notice; published reasoning and tools remain expandable.
 
 OMP catalog refresh first updates the native registry in its plugin-managed runtime directory, then filters by OMP’s own current account scope and quota. Tasks use the same registry. Models absent from the account response are not hardcoded into the menu, and catalog visibility does not establish successful generation.
 
 MiMo reuses a bounded, short-lived in-memory cache of native capabilities to reduce repeated CLI startup on Windows. The first load still queries the native CLI. Changes to the account, configuration, project or executable invalidate the cache, and each dispatch still checks the current account's access.
 
-The settings dialog allows at most two concurrent account-status requests, including the selected CLI. The selected item goes first when settings opens; switching only reprioritizes queued requests. Model catalogs are queried separately, so this is not a limit on all subprocesses. Closing or disabling cancels the relevant reads; Host remains responsible for process cleanup.
+macOS and Windows share one settings display cache. The first open warms account summaries, models and reasoning efforts for every enabled CLI, with the selected CLI first and at most two warmup jobs. Each job reads its account then its catalog. Closing cancels unfinished work and retains completed receipts; reopening checks lightweight Host/project/source metadata and fills only missing or invalidated entries. Disabled CLIs are not queried. These jobs still follow each native CLI process cleanup rules; the limit does not count every subprocess inside a catalog operation. Current project defaults are preserved, and display caches never authorize selection saves or task execution.
 
 Verified Kimi managed OAuth model capabilities and Claude command-parameter capabilities can also be reused briefly. Each actual catalog rediscovery still checks current credentials, expiry and remote access; remote quota is not cached. Windows launchers hide extra console windows for background queries and embedded account terminals.
 
-Initial settings loading, refreshes and automatic model/effort saves retain their account and catalog checks. For the verified Codex npm 0.162.1 launcher, Windows background calls use the native CLI from the same installation, avoiding an extra terminal created inside the JavaScript launcher. The saved installation path, package-manager environment and process cleanup are preserved. Other launcher revisions keep their existing behavior; see the [verification log](doc/tasks.md) for the observed window coverage.
+Initial warmup, explicit refreshes and automatic model/effort saves retain their account and catalog checks. Reopening a completed display cache does not repeat native queries. For the verified Codex npm 0.162.1 launcher, Windows background calls use the native CLI from the same installation, avoiding an extra terminal created inside the JavaScript launcher. The saved installation path, package-manager environment and process cleanup are preserved. Other launcher revisions keep their existing behavior; see the [verification log](doc/tasks.md) for the observed window coverage.
 
 On Windows, background Antigravity model queries and tasks use the official environment switch to disable auto-update for that child process, preventing its updater from opening another terminal. This does not change updates in user-opened Antigravity terminals or behavior on macOS.
 
 Successful extended-CLI catalog queries remove their private temporary directory and extracted native cache after process exit is confirmed. Failed or unconfirmed cleanup preserves the query files and never deletes native account files.
 
-Probe records: [ZCode](doc/zcode-probe.md) · [Grok](doc/grok-probe.md) · [Pi / OMP](doc/pi-omp-probe.md) · [Hermes](doc/hermes-probe.md) · [OpenCode](doc/opencode-probe.md) · [Qoder](doc/qoder-protocol.md)
+Probe records: [ZCode](doc/zcode-probe.md) · [Grok](doc/grok-probe.md) · [Pi / OMP](doc/pi-omp-probe.md) · [Hermes](doc/hermes-probe.md) · [OpenCode](doc/opencode-probe.md) · [Qoder](doc/qoder-protocol.md) · [Qoder CN](doc/qodercn-protocol.md)
 
 ### Qoder CLI installation and login
 
@@ -179,11 +182,15 @@ irm https://qoder.com/install.ps1 | iex
 
 With Node.js installed, the official npm compatibility entry remains `npm install -g @qoder-ai/qodercli`. Run `qoder --version`, then `qoder login` and complete its native browser flow. The CLI also supports its own `QODER_PERSONAL_ACCESS_TOKEN`; keep tokens out of chat and the repository. This integration did not install Qoder or sign in automatically.
 
+**Qoder CN CLI** is a separate `cli=qodercn` entry, with `~/.qoder-cn`, `QODERCN_PERSONAL_ACCESS_TOKEN`, its own account, preferences and `qodercn-acp-v1` sessions. Its npm compatibility package is `@qodercn-ai/qoderclicn`. Windows discovers the native `~/.qoder-cn/bin/qoderclicn/qoderclicn.exe` and validates same-brand npm entries. A generic “use Qoder” request selects the only installed edition; when both are installed, a native question asks for Qoder or Qoder CN before model selection. Explicit edition requests never fall back to the other edition. Models and reasoning options remain native and dynamic. See the [CN protocol and isolation notes](doc/qodercn-protocol.md) and [official installation guide](https://docs.qoder.cn/cli/installation).
+
+All supported CLIs share bounded Windows discovery through common user bin/npm/Bun/Scoop/pnpm locations and, after inherited PATH misses, the latest user and machine PATH. Edition-specific directories, package identities and native entry checks remain explicit. Unregistered portable locations outside PATH still need a manual path; no arbitrary-drive scans, newest-version guesses or GUI launches are used.
+
 Select Qoder in CLI connections, refresh its models and explicitly choose a model before dispatch. Initialization, authentication and model discovery are separate checks; a successful handshake does not establish live execution. See the [protocol checks](doc/qoder-protocol.md) and [verification record](doc/tasks.md) for account and live-test boundaries.
 
 On Windows, discovery checks the official native `~/.qoder/bin/qodercli/qodercli.exe` and current-user npm entries even when Desktop has not inherited the updated PATH. PATH lookup prefers the standalone `qodercli` command and supports the legacy `qoder` CLI alias when that command is absent. npm entries are checked against the official package's declared bins. Manual paths retain priority; broken or inaccessible entries report an error and can be checked in advanced settings.
 
-Qoder settings combine account and model discovery within each catalog operation to avoid repeated CLI startups. Cached catalogs still check the current account, and an explicit refresh always queries again. Account and catalog queries use the same installed CLI's official metadata interface, with writable caches and necessary configuration copies in a private temporary directory. Native login and PAT sources are handled separately; the plugin does not decrypt browser account files. Queries clean up after exit and show only enabled models. Legacy project settings requiring native migration, and unbound authentication or runtime declarations in `.env`, are rejected before querying. Real account metadata and catalog checks passed on macOS; PAT, live tasks and other platforms still require separate acceptance.
+Qoder settings combine account and model discovery within each catalog operation to avoid repeated CLI startups. Actual catalog reads still check the current account, and explicit refreshes query again. Reopening completed settings reuses display receipts without another native query. Account and catalog queries use the same installed CLI's official metadata interface, with writable caches and necessary configuration copies in a private temporary directory. Native login and PAT sources are handled separately; the plugin does not decrypt browser account files. Queries clean up after exit and show only enabled models. Legacy project settings requiring native migration, and unbound authentication or runtime declarations in `.env`, are rejected before querying. Real account metadata and catalog checks passed on macOS; PAT, live tasks and other platforms still require separate acceptance.
 
 ### Claude Code with CC Switch
 
@@ -409,6 +416,19 @@ Included roles: **commercial reviewer, logic reviewer, style reviewer, prose rev
 
 An empty model directory for an unconfigured CLI stays gray. Account reads finish before model loading. Refreshing authentication or finishing an account operation invalidates and reloads the model list. Stale models cannot be selected while a refresh is pending or after it fails. Stored defaults remain for rechecking. The navigation dot and account summary use the same status rules; the account section keeps necessary information on one line.
 
+### 6.4 Goal, plan, feedback and branch
+
+CLI child conversations support Harness goal, plan, feedback and branch. An unsupported control stays visible but disabled, and its tooltip explains why; clicking it sends no request and shows no error.
+
+| Feature | Behavior | Coverage |
+| --- | --- | --- |
+| Goal | Set, edit, pause, resume or clear the goal from the goal bar, the "+" menu or `/goal`. An active goal is prepended as a delimited block to each turn sent to the CLI, while the conversation keeps showing your original message. A goal never starts a turn by itself and does not use any CLI's own goal auto-continuation. | All CLIs |
+| Plan | Uses the existing mapping to each CLI's native plan or read-only mode, from the "+" menu, the permission control, the plan chip or `/plan`. Those CLIs have only the accept-edits permission mode, so the permission control is also disabled with that reason. | Disabled for Hermes, Qoder, Qoder CN and the legacy Kimi transport |
+| Feedback | Thumbs and the feedback dialog use Harness feedback services and stay recorded in Harness only. Nothing is sent to the CLI or its vendor, and nothing enters model context. | All CLIs |
+| Branch | The message branch button, the conversation menu, the shortcut and `/fork` call the CLI's native fork to create a new native session. A sibling Worker conversation then gets the history up to the cut point, and the original stays usable. You cannot branch while a turn is running or messages are queued. | Latest completed turn: Codex, Claude Code, Kimi (ACP), MiMo, ZCode, Pi, OpenCode, Qoder, Qoder CN. Earlier turns: Codex only. Not supported: Antigravity, Hermes, Grok, OMP |
+
+ZCode forks inclusively from the latest native assistant message; a conversation without workspace edits needs no checkpoint. Pi, OpenCode and ZCode branches retain the source session's native state directory across Host restarts and nested forks.
+
 ## 7. Permissions, data and FAQ
 
 ### 7.1 Execution and data
@@ -417,7 +437,7 @@ An empty model directory for an unconfigured CLI stays gray. Account reads finis
 - **Scheduling:** two concurrent tasks by default, one active turn per native session, and serial write tasks in the same directory. The hierarchy is main conversation → direct child agent. The v0.8.1 native view uses DSH Inbox delivery and the actual CLI steering capability. Legacy Steering, Interrupt and Queue preferences apply only to the compatibility path; interrupt still waits for process cleanup and never runs two turns in one session concurrently. Recursive dispatch is not supported.
 - **Permissions:** Harness planning mode or read-only host permissions prevent task startup. Once execution is allowed, supported CLIs can receive read-only tasks. New Kimi ACP tasks require confirmed native plan mode; legacy Kimi, Hermes and Qoder still reject read-only dispatch. See probe documents for native CLI permission and tool capabilities.
 - **Local records:** plugin records live under `$DSH_HOME/cliworker-now`, normally `~/.dsh/cliworker-now`. On POSIX systems, directories use `0700` and files `0600`. External CLIs still send model requests according to their services and configuration.
-- **Sourced usage:** only CLI-reported or verifiable statistics are shown. All three native modules remain visible with `—` and an explanation when data is unavailable; unknown values are not filled with zero. Context usage is distinct from cumulative token usage. The native context popup keeps occupancy, its bar, and the system prompt, tool definitions and conversation messages rows. Missing-value explanations, estimate markers and accounting scope remain; source explanations and extra category rows are hidden in every state. Source metadata and OMP's extra context categories remain in the underlying data for verification.
+- **Sourced usage:** only CLI-reported or verifiable statistics are shown. All three native modules remain visible with `—` and an explanation when data is unavailable; unknown values are not filled with zero. Context usage is distinct from cumulative token usage. The native context popup keeps occupancy, its bar, and the system prompt, tool definitions and conversation messages rows. Unknown values use —; estimate markers and accounting scope remain, without missing-value paragraphs; source explanations and extra category rows are hidden in every state. Source metadata and OMP's extra context categories remain in the underlying data for verification.
 - **Own accounts:** valid native sessions display green; own API configuration identifies its source, and models are scoped to the account. API keys are not displayed. Some account sources are shared with native terminals, so logging out can affect that CLI in other terminals.
 
 ### 7.2 FAQ
@@ -450,6 +470,8 @@ Only explicitly supported effort options are offered. The native `default` value
 
 </details>
 
+Account, path and model refresh failures are isolated by CLI. Authentication renewal, network errors, timeouts and invalid catalogs do not block other CLIs. Unconfirmed metadata-process cleanup pauses further queries, account changes and task admission for that CLI, with a persistent safety record. Repeated refresh does not bypass it. Unconfirmed task-process cleanup and older unattributed records still block dispatch globally. Recovery requires verifying full process exit and preserving the original record; reopening settings does not clear it.
+
 ## 8. Development and verification
 
 The project uses **TypeScript ESM and React**. The Host manages processes and persistence; the Client accesses it through Harness's native Gateway, with shared protocol definitions between them.
@@ -466,6 +488,18 @@ Builds verify the shipped native packages against the tracked source patch. They
 The isolated package is written to `.cache/preview-package`. Verify it in a separate profile first, then check that no tasks are active before the production build, so development does not overwrite the version used by an active Desktop session.
 
 After building on Mac, use SSH to install isolated native dependencies and run targeted regressions on your own Windows machine, then return logs and package hashes. See the [Windows remote testing guide](doc/windows-remote-testing.md) (Chinese). Run `pnpm --config.verifyDepsBeforeRun=false test:windows:remote --config .test-data/windows-remote/config.json`; the default workflow makes no model requests and does not verify the Desktop UI.
+
+The local `.test-data`, `.cache` and `artifacts` directories are Git-ignored. `pnpm run clean` applies a retention policy to them. It only previews by default, listing each item's size and reason; add `--apply` to delete:
+
+```sh
+pnpm run clean
+pnpm run clean --older-than 14d --keep-last 20
+pnpm run clean --older-than 14d --keep-last 20 --apply
+```
+
+- Always removed: `node_modules`, `npm-cache`, `pnpm-store`, `_cacache` and `*.tgz` copies inside `.test-data`; tgz and sha256 files in `artifacts` older than the 3 newest formal releases.
+- Removed only with `--older-than`: `.cache` entries other than the pinned DSH target (such as `*021rc2*`), `dsh-host-build-deps`, `preview-package`, `typert` and `build-configs`; pre-release tgz files; `.test-data` evidence entries (`--keep-last N` keeps the newest N prunable entries).
+- Always kept: scopes or top-level entries with a `.keep` file in their root, active locks, paths cited in `doc/` or `openspec/` Markdown, Git-tracked files, `verification.json` and `.test-data/windows-remote/`. Links are never followed, and `lib/`, `node_modules/` and `doc/local/` are never touched. Use `--scope test-data,cache,artifacts` to limit the scope and `--root <dir>` for another checkout.
 
 Live CLI acceptance is separate and uses the selected account's model allowance:
 
@@ -486,6 +520,7 @@ In Codex, use `openspec-propose` to prepare a change, `openspec-apply-change` to
 
 ## 9. Documentation, feedback and license
 
+- [Documentation index](doc/README.md) and [implementation notes](doc/knowledge/README.md) (Chinese): CLI integration, performance, architecture, and verification.
 - [Design and protocol](doc/design.md): architecture, scheduling, permissions and persistence.
 - [OpenSpec development guide](doc/openspec.md): planning, implementation, verification and archiving.
 - [Tasks and verification records](doc/tasks.md): implemented work and actual checks.
@@ -511,3 +546,5 @@ Thank you to the authors, maintainers and contributors of these projects for sha
 We also thank the developers of [Codex](https://github.com/openai/codex), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Kimi Code](https://github.com/MoonshotAI/kimi-code), [Grok Build](https://github.com/xai-org/grok-build), [Pi](https://github.com/earendil-works/pi), [Oh My Pi](https://github.com/can1357/oh-my-pi), [OpenCode](https://github.com/anomalyco/opencode) [MiMo Code](https://github.com/XiaomiMiMo/MiMo-Code) and [ZCode](https://github.com/zai-org/ZCode). Their public source code and protocol documentation helped us check native events, session lifecycles and usage accounting.
 
 The [CLI data interface audit](doc/cli-native-data-audit.md) and [Codingns4DSH reference notes](doc/codingns-reference-audit.md) record the versions and scope of these references. Thank you for your continued work and generosity in sharing it.
+
+The native CLI plus menu offers Desktop file references on macOS/Windows and Harness image uploads. Admitted native attachment blocks are converted to each CLI's supported content blocks, resource links or file paths. Generic browser file receipts remain unavailable in rc.2 child sessions. Attachment identities participate in retry deduplication; uploads submitted during generation stay in the native queue. Harness Skills and configured MCP tools reuse the scoped Host bridge and approval pipeline. ACP approval is limited to exact, currently granted bridge tools. See the [per-CLI capability matrix](doc/cli-harness-capabilities.md) for limits and platform evidence.

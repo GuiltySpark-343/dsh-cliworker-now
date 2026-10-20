@@ -51,7 +51,9 @@ function sameOwner(left: HarnessNativeBinding | undefined, right: HarnessNativeB
 /** Keep only exact previously bound Turn identities after their source disconnects. */
 function unavailableTurns(previous: NativeTelemetryProjections['externalTurnUsage']) {
   if (!previous || typeof previous !== 'object' || Array.isArray(previous)) return undefined
-  return Object.fromEntries(Object.keys(previous).map((turn) => [turn, null]))
+  return Object.fromEntries(Object.entries(previous).map(([turn, value]) => [turn,
+    value && 'usageUnit' in value && value.usageUnit === 'credits'
+      ? { basis: 'external-run' as const, runIds: value.runIds, usageUnit: 'credits' as const } : null]))
 }
 
 /** One Gateway watch per exact Client generation; native rendering consumes bare session sources. */
@@ -114,7 +116,11 @@ export function installHarnessNativeTelemetry(
             // while this exact owner and generation still hold the source.
             const externalTurnUsage = !created.closed && sameOwner(bindings.get(created.owner.sessionId), created.owner)
               ? unavailableTurns(sources.externalTurnUsage.getSnapshot()) : undefined
-            publish({ ...EMPTY, externalTurnUsage, telemetryAvailability: telemetryAvailability(false, true) })
+            const usageUnit = !created.closed && sameOwner(bindings.get(created.owner.sessionId), created.owner)
+              ? sources.telemetryAvailability.getSnapshot()?.usageUnit : undefined
+            publish({ ...EMPTY, externalTurnUsage, telemetryAvailability: {
+              ...telemetryAvailability(false, true), ...(usageUnit ? { usageUnit } : {}),
+            } })
             if (!created.watching) return
             created.watching = false
             stopStream()

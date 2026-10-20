@@ -137,6 +137,7 @@ describe('Claude own native OAuth catalog', () => {
         { id: 'sonnet', label: 'Synthetic Sonnet', efforts: ['default', 'low', 'high'] },
         { id: 'haiku', label: 'haiku', efforts: ['default'] },
       ],
+      quota: 'confirmed',
     })
     expect(JSON.stringify(result)).not.toContain('rate_limits')
   })
@@ -154,19 +155,35 @@ describe('Claude own native OAuth catalog', () => {
     Object.assign(data.account, change)
     expect(() => parseClaudeNativeOAuthCatalog(data, usage(), now)).toThrow(ClaudeNativeOAuthError)
   })
-  it.each([
-    { rate_limits_available: false },
-    { subscription_type: null },
-    { subscription_type: 'api' },
-    { rate_limits: null },
-    { rate_limits: {} },
-  ])('requires actual plan quota and ignores API billing metadata: %j', (change) => {
-    expect(() => parseClaudeNativeOAuthCatalog(initialize(), { ...usage(), ...change }, now)).toThrow(/额度/)
+  it('accepts the Claude 2.1.287 account shape, which reports subscriptionType instead of tokenSource', () => {
+    const data: any = initialize()
+    delete data.account.tokenSource
+    data.account.subscriptionType = 'Claude Pro'
+    expect(parseClaudeNativeOAuthCatalog(data, usage(), now)).toMatchObject({ quota: 'confirmed' })
   })
-  it('rejects native failure fallback snapshots which lack the original server limits array', () => {
+  it('rejects an account with neither tokenSource nor a subscription (API key or anonymous)', () => {
+    const data: any = initialize()
+    delete data.account.tokenSource
+    expect(() => parseClaudeNativeOAuthCatalog(data, usage(), now)).toThrow(ClaudeNativeOAuthError)
+  })
+  it.each([{ subscription_type: null }, { subscription_type: 'api' }])(
+    'requires a plan subscription and ignores API billing metadata: %j',
+    (change) => {
+      expect(() => parseClaudeNativeOAuthCatalog(initialize(), { ...usage(), ...change }, now)).toThrow(/订阅/)
+    },
+  )
+  it.each([{ rate_limits_available: false }, { rate_limits: null }, { rate_limits: {} }])(
+    'keeps the models but marks quota unknown when limits are not reported: %j',
+    (change) => {
+      const result = parseClaudeNativeOAuthCatalog(initialize(), { ...usage(), ...change }, now)
+      expect(result.quota).toBe('unknown')
+      expect(result.models.map((model) => model.id)).toEqual(['sonnet', 'haiku'])
+    },
+  )
+  it('treats native failure fallback snapshots which lack the original server limits array as unknown quota', () => {
     const value: any = usage()
     delete value.rate_limits.limits
-    expect(() => parseClaudeNativeOAuthCatalog(initialize(), value, now)).toThrow(/额度/)
+    expect(parseClaudeNativeOAuthCatalog(initialize(), value, now).quota).toBe('unknown')
   })
   it.each([
     null,
@@ -176,10 +193,10 @@ describe('Claude own native OAuth catalog', () => {
     { utilization: -1, resets_at: reset },
     { utilization: Infinity, resets_at: reset },
     { utilization: 0, resets_at: '2020-01-01' },
-  ])('rejects unknown/malformed/stale general quota: %j', (window) => {
+  ])('marks unknown/malformed/stale general quota as unknown without hiding models: %j', (window) => {
     const value: any = usage()
     value.rate_limits.five_hour = window
-    expect(() => parseClaudeNativeOAuthCatalog(initialize(), value, now)).toThrow(/额度/)
+    expect(parseClaudeNativeOAuthCatalog(initialize(), value, now).quota).toBe('unknown')
   })
   it.each(['five_hour', 'seven_day', 'seven_day_oauth_apps', 'seven_day_opus', 'seven_day_sonnet'])(
     'blocks a depleted %s window even with extra paid usage enabled',
@@ -190,15 +207,22 @@ describe('Claude own native OAuth catalog', () => {
       expect(() => parseClaudeNativeOAuthCatalog(initialize(), value, now)).toThrow(/限额/)
     },
   )
-  it('requires valid returned model-specific quota and refuses active server limit rows at capacity', () => {
+  it('treats malformed model-specific quota as unknown and refuses active server limit rows at capacity', () => {
     const value: any = usage()
     value.rate_limits.model_scoped = [{ utilization: null, resets_at: reset }]
-    expect(() => parseClaudeNativeOAuthCatalog(initialize(), value, now)).toThrow(/额度/)
+    expect(parseClaudeNativeOAuthCatalog(initialize(), value, now).quota).toBe('unknown')
     value.rate_limits.model_scoped = []
     value.rate_limits.limits = [{ percent: 100, is_active: true }]
     expect(() => parseClaudeNativeOAuthCatalog(initialize(), value, now)).toThrow(/限额/)
     value.rate_limits.limits[0].is_active = false
     expect(parseClaudeNativeOAuthCatalog(initialize(), value, now).models).toHaveLength(2)
+  })
+  it('collapses an identical repeated entry but rejects a conflicting duplicate id', () => {
+    const data: any = initialize()
+    data.models.push({ value: 'haiku', resolvedModel: 'claude-haiku-synthetic', displayName: 'haiku' })
+    expect(parseClaudeNativeOAuthCatalog(data, usage(), now).models.map((model) => model.id)).toEqual(['sonnet', 'haiku'])
+    data.models.push({ value: 'haiku', resolvedModel: 'claude-other-synthetic' })
+    expect(() => parseClaudeNativeOAuthCatalog(data, usage(), now)).toThrow(/重复/)
   })
   it('does not invent resolved models and excludes hidden/disabled/non-entitled native entries', () => {
     const data: any = initialize()
@@ -208,8 +232,13 @@ describe('Claude own native OAuth catalog', () => {
       { value: 'denied', resolvedModel: 'denied', entitled: false },
     )
     expect(parseClaudeNativeOAuthCatalog(data, usage(), now).models).toHaveLength(2)
-    data.models.push(data.models[0])
-    expect(() => parseClaudeNativeOAuthCatalog(data, usage(), now)).toThrow(/重复/)
+  })
+  it('keeps an exact native context-window suffix such as [1m] in the model id', () => {
+    const data: any = initialize()
+    data.models.push({ value: 'claude-fable-synthetic[1m]', resolvedModel: 'claude-fable-synthetic', displayName: 'Fable' })
+    expect(parseClaudeNativeOAuthCatalog(data, usage(), now).models.map((model) => model.id)).toContain(
+      'claude-fable-synthetic[1m]',
+    )
   })
   it('sends only initialize/get_usage controls and suppresses hooks, MCP and session persistence for metadata', async () => {
     const f = fixture({ split: true })

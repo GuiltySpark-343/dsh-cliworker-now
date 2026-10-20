@@ -98,11 +98,14 @@ async function fixture(cli: 'kimi' | 'grok', scenario = 'success', continuation 
   const script = join(root, 'agent.mjs'),
     audit = join(root, 'audit.ndjson')
   await writeFile(script, source, { mode: 0o600 })
+  const uploaded = join(root, '附件 #1.txt')
+  if (scenario === 'attachments') await writeFile(uploaded, 'synthetic attachment')
   const config = {
     cli,
     project: root,
     stateDirectory: root,
     prompt: 'Simulated request',
+    ...(scenario === 'attachments' ? { attachments: [{ kind: 'file', path: uploaded, name: '附件 #1.txt', bytes: Buffer.byteLength('synthetic attachment') }] } : {}),
     mode: 'plan',
     preference: { model: 'chosen/model', effort: 'high' },
     argv:
@@ -162,6 +165,13 @@ async function fixture(cli: 'kimi' | 'grok', scenario = 'success', continuation 
 }
 
 describe('Native ACP runners (simulated native processes)', () => {
+  it.each(['kimi', 'grok'] as const)('%s transmits a real temporary upload reference in its ACP prompt', async cli => {
+    const { records, result } = await fixture(cli, 'attachments')
+    expect(result.status).toBe('SUCCESS')
+    const prompt = records.find(record => record.method === 'session/prompt').params.prompt
+    expect(prompt[1]).toMatchObject({ type: 'resource_link', name: '附件 #1.txt', size: Buffer.byteLength('synthetic attachment') })
+    expect(prompt[1].uri).toContain('%20%231.txt')
+  })
   it('does not admit a prompt when stopped during asynchronous native preparation', async () => {
     // Synthetic peer exercises the real ACP runner without a process or model.
     const controller = new AbortController(), calls: string[] = []

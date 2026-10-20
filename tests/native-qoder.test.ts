@@ -32,14 +32,15 @@ const reject=(request,message)=>out({jsonrpc:'2.0',id:request.id,error:{code:-32
 const update=(value,extra={})=>out({jsonrpc:'2.0',method:'session/update',params:{sessionId,...extra,update:value}});
 const text=(value,eventId,extra={})=>update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:value},...(eventId?{eventId}:{})},extra);
 const finish=request=>{
- const usage=scenario==='missing-usage'?undefined:scenario==='masked-zero-usage'?{inputTokens:0,outputTokens:0,totalTokens:0}:{inputTokens:60,outputTokens:7,totalTokens:scenario==='invalid-usage'?68:67,cachedReadTokens:999,contextUsed:999,secret:'SYNTHETIC_NOT_USAGE'};
- reply(request,{stopReason:scenario.startsWith('stop-')?scenario.slice(5):'end_turn',...(scenario==='prompt-wrong-session'?{sessionId:'different-session'}:{}),...(usage?{usage}:{}),_meta:{quota:{token_count:{input_tokens:99999,output_tokens:99999}}}});
+ const usage=scenario==='missing-usage'?undefined:['masked-zero-usage','quota-only'].includes(scenario)?{inputTokens:0,outputTokens:0,totalTokens:0}:{inputTokens:60,outputTokens:7,totalTokens:scenario==='invalid-usage'?68:67,cachedReadTokens:999,contextUsed:999,secret:'SYNTHETIC_NOT_USAGE'};
+ const token_count=scenario==='quota-only'?{input_tokens:41,output_tokens:5,total_tokens:46}:{input_tokens:99999,output_tokens:99999,total_tokens:1};
+ reply(request,{stopReason:scenario.startsWith('stop-')?scenario.slice(5):'end_turn',...(scenario==='prompt-wrong-session'?{sessionId:'different-session'}:{}),...(usage?{usage}:{}),_meta:{quota:{token_count}}});
 };
 createInterface({input:process.stdin}).on('line',line=>{
  const request=JSON.parse(line);log(request);
  if(!request.method){if(pending){finish(pending);pending=undefined;}return;}
  if(request.jsonrpc!=='2.0')process.exit(20);
- if(request.method==='initialize')return reply(request,{protocolVersion:1,agentCapabilities:{loadSession:scenario!=='no-restore'}});
+ if(request.method==='initialize')return reply(request,{protocolVersion:1,agentInfo:{name:process.env.QODER_TEST_AGENT||'qoder-cli'},agentCapabilities:{loadSession:scenario!=='no-restore'}});
  if(request.method==='session/new'||request.method==='session/load'){
   if(scenario==='session-error')return reject(request,'Simulated Qoder authentication/session error');
   if(request.method==='session/load'){
@@ -97,22 +98,25 @@ createInterface({input:process.stdin}).on('line',line=>{
 
 async function fixture(
   scenario = 'success',
-  options: { continuation?: boolean; mode?: string; effort?: string } = {},
+  options: { continuation?: boolean; mode?: string; effort?: string; cli?: 'qoder' | 'qodercn'; agentName?: string } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), 'cliworker-native-qoder-simulated-'))
   roots.push(root)
   const script = join(root, 'simulated-qoder.mjs')
   const audit = join(root, 'audit.ndjson')
   await writeFile(script, source, { mode: 0o600 })
+  const uploaded = join(root, 'Qoder 附件.txt')
+  if (scenario === 'attachments') await writeFile(uploaded, 'synthetic attachment')
   const config = {
-    cli: 'qoder',
+    cli: options.cli ?? 'qoder',
     project: root,
     stateDirectory: root,
     prompt: 'Simulated Qoder request',
+    ...(scenario === 'attachments' ? { attachments: [{ kind: 'file', path: uploaded, name: 'Qoder 附件.txt', bytes: Buffer.byteLength('synthetic attachment') }] } : {}),
     mode: options.mode ?? 'accept-edits',
     preference: { model: 'native/model-key', effort: options.effort ?? 'high' },
     argv: [process.execPath, script, '--acp'],
-    env: { SCENARIO: scenario, AUDIT: audit },
+    env: { SCENARIO: scenario, AUDIT: audit, QODER_TEST_AGENT: options.agentName ?? (options.cli === 'qodercn' ? 'qoder-cli-cn' : 'qoder-cli') },
     timeoutMs: 1000,
     maxLineBytes: 1024 * 1024,
     maxRunBytes: 8 * 1024 * 1024,
@@ -164,6 +168,11 @@ const usageReceipts = (frames: any[]) =>
   frames.filter((frame) => frame.record?.type === 'cliworker.qoder_prompt_usage').map((frame) => frame.record)
 
 describe('Native Qoder ACP runner (simulated native processes; no real model)', () => {
+  it('passes uploaded files through the actual Qoder runner without losing ACP content blocks', async () => {
+    const { records, result } = await fixture('attachments')
+    expect(result.status).toBe('SUCCESS')
+    expect(methods(records, 'session/prompt')[0].params.prompt[1]).toMatchObject({ type: 'resource_link', name: 'Qoder 附件.txt', mimeType: 'text/plain' })
+  })
   it('confirms native model, dynamic effort, and acceptEdits scalar configuration before prompt', async () => {
     const { records, result, processExited } = await fixture()
     expect(result).toMatchObject({ status: 'SUCCESS', response: 'HELLO', resultScope: 'run' })
@@ -201,6 +210,12 @@ describe('Native Qoder ACP runner (simulated native processes; no real model)', 
       'model',
       'mode',
     ])
+  })
+
+  it('supplements hidden primary counters from an independently consistent native quota receipt', async () => {
+    const { frames, result } = await fixture('quota-only')
+    expect(result.status).toBe('SUCCESS')
+    expect(usageReceipts(frames)[0]?.usage).toEqual({ inputTokens: 41, outputTokens: 5, totalTokens: 46 })
   })
 
   it('restores the same session without counting replayed history as this turn', async () => {
@@ -357,4 +372,63 @@ describe('Native Qoder ACP runner (simulated native processes; no real model)', 
       expect((await fixture(`stop-${reason}`)).result.status).toBe('ERROR')
     },
   )
+})
+
+
+describe('Native Qoder CN ACP runner (simulated processes; no native login or real model)', () => {
+  it.each([false, true])('uses the selected CN agent and dynamic model/effort for continuation=%s', async continuation => {
+    const { records, frames, result, processExited } = await fixture('success', { cli: 'qodercn', continuation })
+    expect(result).toMatchObject({ status: 'SUCCESS', response: 'HELLO' })
+    expect(methods(records, continuation ? 'session/load' : 'session/new')).toHaveLength(1)
+    expect(methods(records, continuation ? 'session/new' : 'session/load')).toHaveLength(0)
+    expect(methods(records, 'session/set_config_option').map(record => [record.params.configId, record.params.value])).toEqual([
+      ['model', 'native/model-key'], ['reasoning_effort', 'high'], ['mode', 'acceptEdits'],
+    ])
+    expect(frames.filter(frame => frame.record?.type === 'cliworker.qodercn_prompt_usage').map(frame => frame.record)).toEqual([
+      { type: 'cliworker.qodercn_prompt_usage', sessionId: 'qoder-simulated-session', model: 'native/model-key',
+        usage: { inputTokens: 60, outputTokens: 7, totalTokens: 67 } },
+    ])
+    expect(usageReceipts(frames)).toEqual([])
+    expect(JSON.stringify(frames.filter(frame => frame.type === 'event'))).not.toMatch(/OLD HISTORY|OLD THOUGHT|old-tool|FOREIGN/)
+    expect(processExited).toBe(true)
+  })
+
+  it.each([
+    { cli: 'qodercn' as const, agentName: 'qoder-cli' },
+    { cli: 'qoder' as const, agentName: 'qoder-cli-cn' },
+  ])('rejects a crossed native executable before creating a session or sending a prompt: %j', async options => {
+    const { records, frames, result, processExited } = await fixture('success', options)
+    expect(result).toMatchObject({ status: 'ERROR', response: '' })
+    expect(methods(records, 'initialize')).toHaveLength(1)
+    for (const method of ['session/new', 'session/load', 'session/prompt']) expect(methods(records, method)).toHaveLength(0)
+    expect(frames.filter(frame => frame.record?.type?.endsWith('_prompt_usage'))).toEqual([])
+    expect(processExited).toBe(true)
+  })
+
+  it.each(['permission', 'permission-no-reject'])('denies CN extra permissions (%s)', async scenario => {
+    const { records, result, processExited } = await fixture(scenario, { cli: 'qodercn' })
+    expect(result).toMatchObject({ status: 'ERROR', response: 'HELLO' })
+    expect(records.find(record => record.id === 'permission-simulated')?.result).toEqual({ outcome:
+      scenario === 'permission' ? { outcome: 'selected', optionId: 'reject' } : { outcome: 'cancelled' } })
+    expect(processExited).toBe(true)
+  })
+
+  it('sends native CN cancellation and confirms process exit', async () => {
+    const { records, result, processExited } = await fixture('cancel', { cli: 'qodercn' })
+    expect(result).toMatchObject({ status: 'ERROR', response: 'HELLO' })
+    expect(methods(records, 'session/cancel')).toHaveLength(1)
+    expect(processExited).toBe(true)
+  })
+
+  it.each(['unavailable-model', 'unsupported-effort', 'unconfirmed-model'])('never submits CN with unconfirmed selection (%s)', async scenario => {
+    const { records, result } = await fixture(scenario, { cli: 'qodercn' })
+    expect(result.status).toBe('ERROR')
+    expect(methods(records, 'session/prompt')).toHaveLength(0)
+  })
+
+  it.each(['missing-usage', 'invalid-usage', 'masked-zero-usage'])('keeps missing or masked CN accounting unknown (%s)', async scenario => {
+    const { frames, result } = await fixture(scenario, { cli: 'qodercn' })
+    expect(result.status).toBe('SUCCESS')
+    expect(frames.filter(frame => frame.record?.type?.endsWith('_prompt_usage'))).toEqual([])
+  })
 })

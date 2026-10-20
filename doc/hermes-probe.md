@@ -23,3 +23,13 @@
 - 自动测试及隔离界面验收见 `doc/tasks.md`。真实模型完成、续聊与取消未验收，不把协议夹具或登录界面当成真实模型通过。
 
 官方依据：[CLI 参考](https://hermes-agent.nousresearch.com/docs/reference/cli-commands)、[固定版本 stream-json](https://github.com/NousResearch/hermes-agent/blob/4787e4d56fc8d9265d4c7d3c0fe5accee86b4078/hermes_cli/stream_json.py)、[安装文档](https://hermes-agent.nousresearch.com/docs/getting-started/installation)。
+
+## Windows 原生网关就绪修复（2026-10-18）
+
+当前原生通路使用 Hermes Runs API。Windows 安装版本0.21.7、checkout `71d34bad1045610252eda02ee79549436896e784` 的两个失败任务均在提交请求前超时；原生状态和日志证明网关已监听。隔离实机复现确认：venv 的 python.exe 是启动器，实际 Python 网关 PID 不同，而且原生没有向 stdout 输出监听行；旧门禁始终要求状态 PID 等于启动器，因而拒绝正确就绪状态。
+
+Windows venv 重定向启动器机制亦见 [Python 官方文档](https://docs.python.org/3.14/library/venv.html#venv.EnvBuilder.setup_python)；本次故障结论来自上述实机进程、原生状态及修复前后复现，并非仅据文档推断。
+
+仅对已核验的自有 Python 入口传递每次随机 nonce，入口在本次管道报告当前解释器 PID，并在进入原生 CLI 前移除 nonce。Host 随后仍核对新鲜状态的 pid/writer_pid、精确本机监听地址和带鉴权的能力响应。磁盘 PID、错误 nonce、旧状态或不同端口不能单独触发鉴权请求；其他入口保留既有路径。原生安装、账号、权限和停止范围不变。
+
+Windows 实机修复后约4秒完成网关就绪及能力检查。该检查没有创建模型请求，不能替代真实生成、续聊和运行中取消验收；完整关联结果、桌面安装及清理记录见 `doc/tasks.md`。

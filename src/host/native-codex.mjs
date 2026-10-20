@@ -244,7 +244,7 @@ export async function runNativeCodex(config, io) {
     completion.catch(() => {})
     const turn = await peer.request('turn/start', {
       threadId,
-      input: [{ type: 'text', text: `任务：\n${config.prompt}` }],
+      input: await nativeAttachmentInput('codex', `任务：\n${config.prompt}`, config.attachments, io.signal),
       model: config.preference.model,
       ...(config.preference.effort !== 'default' ? { effort: config.preference.effort } : {}),
       // Public summaries are opt-in (some models default to none). Never request raw reasoning.
@@ -267,6 +267,40 @@ export async function runNativeCodex(config, io) {
   } finally {
     releaseSteer?.()
     io.signal?.removeEventListener('abort', abort)
+    unsubscribe()
+    await peer.close()
+  }
+}
+import { nativeAttachmentInput } from './native-attachments.mjs'
+
+/** Metadata only: thread/fork never starts a turn. lastTurnId is inclusive (native schema). */
+export async function forkNativeCodex(config, io) {
+  const peer = await io.openStdio(nativeCodexArgv(config), { env: config.env, cwd: config.project })
+  const unsubscribe = peer.onMessage((message) => {
+    if (message.id !== undefined && message.method)
+      return peer.send({ id: message.id, error: { code: -32601, message: '分支不接受交互请求' } })
+  })
+  try {
+    await peer.request('initialize', { clientInfo: { name: 'cli_worker_native', version: '0.8.1' }, capabilities: { experimentalApi: false } })
+    await peer.send({ method: 'initialized', params: {} })
+    if (config.forkOperation === 'delete') {
+      // Codex exposes archive, not deletion. Keep an explicit orphan/archival receipt.
+      await peer.request('thread/archive', { threadId: config.conversationId })
+      io.native({ type: 'cliworker.fork_cleanup', note: 'Codex 原生分支已归档；原生协议未提供永久删除接口' })
+      io.result('SUCCESS', '')
+      return
+    }
+    const result = await peer.request('thread/fork', {
+      threadId: config.conversationId,
+      ...(config.forkAt?.turnId ? { lastTurnId: config.forkAt.turnId } : {}),
+      cwd: config.project, model: config.preference.model, approvalPolicy: 'never',
+      sandbox: config.mode === 'plan' ? 'read-only' : 'workspace-write', excludeTurns: true,
+    })
+    if (!string(result?.thread?.id) || result.thread.id === config.conversationId)
+      throw fail('分支回执没有新的原生会话 ID')
+    io.native({ type: 'cliworker.fork_created', id: result.thread.id })
+    io.result('SUCCESS', '')
+  } finally {
     unsubscribe()
     await peer.close()
   }

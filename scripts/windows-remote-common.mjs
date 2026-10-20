@@ -17,7 +17,11 @@ export const SOURCE_ROOT_FILES = [
   'tsconfig.base.json', 'tsconfig.host-build.json', 'tsconfig.client.json',
   'vitest.config.ts', 'cordis.patch.yml',
 ]
-const SOURCE_SCRIPTS = new Set(['scripts/build.mjs', 'scripts/build-preview.mjs'])
+// build.mjs imports these helpers and verifies runtime-host before typecheck.
+export const SOURCE_SCRIPTS = new Set(['scripts/build.mjs', 'scripts/build-preview.mjs', 'scripts/build-dependencies.mjs',
+  'scripts/host-runtime.mjs', 'scripts/host-extension-guard.mjs'])
+export const RUNTIME_HOST = 'runtime-host'
+const RUNTIME_MANIFEST = `${RUNTIME_HOST}/manifest.json`
 export const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 export const validRunId = (id) => /^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/.test(id)
 
@@ -62,6 +66,7 @@ export function validateSourcePath(value) {
     throw new Error(`Sensitive or excluded source path: ${value}`)
   if (SOURCE_ROOT_FILES.includes(value) || SOURCE_SCRIPTS.has(value)) return value
   if (/^(?:src|tests)\/.+\.(?:ts|tsx|mts|mjs|js|json|py|cmd|ps1|txt)$/.test(value) || /^src\/client\/assets\/.+\.(?:png|svg)$/.test(value)) return value
+  if (/^runtime-host\/(?:manifest\.json|README\.md|source\.patch|dsh-client-ui-(?:session|conversation|subagent|chat)\/(?:LICENSE|package\.json|lib\/.+\.(?:js|d\.ts)))$/.test(value)) return value
   throw new Error(`Source path is outside the allowlist: ${value}`)
 }
 
@@ -90,7 +95,7 @@ export async function createSnapshot(root) {
     } finally { await handle.close() }
     files.push({ path: relative, sha256: sha256(bytes), data: bytes.toString('base64') })
   }
-  for (const file of [...SOURCE_ROOT_FILES, ...SOURCE_SCRIPTS, 'src', 'tests']) await collect(file)
+  for (const file of [...SOURCE_ROOT_FILES, ...SOURCE_SCRIPTS, 'src', 'tests', RUNTIME_HOST]) await collect(file)
   return { schema: 1, files }
 }
 
@@ -109,19 +114,43 @@ export function validateSnapshot(snapshot) {
     total += bytes.length
     if (total > 50 * 1024 * 1024 || sha256(bytes) !== file.sha256) throw new Error(`Source integrity failure: ${file.path}`)
   }
-  for (const required of [...SOURCE_ROOT_FILES, ...WINDOWS_TESTS]) if (!names.has(required.toLowerCase())) throw new Error(`Source snapshot missing ${required}`)
+  for (const required of [...SOURCE_ROOT_FILES, ...SOURCE_SCRIPTS, ...WINDOWS_TESTS, RUNTIME_MANIFEST]) if (!names.has(required.toLowerCase())) throw new Error(`Source snapshot missing ${required}`)
   return snapshot
 }
 
-export function validateArchiveEntries(listing, verboseListing) {
+/** runtime-host/manifest.json lists every packaged runtime file (paths relative to runtime-host). */
+export function validateRuntimeManifest(manifest) {
+  if (!Array.isArray(manifest?.files) || !manifest.files.length || manifest.files.length > 500) throw new Error('Invalid runtime-host manifest')
+  for (const file of manifest.files) validateSourcePath(`${RUNTIME_HOST}/${file?.path}`)
+  return manifest
+}
+
+export function runtimeManifestFromSnapshot(snapshot) {
+  const file = snapshot.files.find((item) => item.path === RUNTIME_MANIFEST)
+  if (!file) throw new Error(`Source snapshot missing ${RUNTIME_MANIFEST}`)
+  return validateRuntimeManifest(JSON.parse(Buffer.from(file.data, 'base64').toString('utf8')))
+}
+
+/** package/runtime-host/ must hold exactly manifest.json and the files it lists. */
+export function validateArchiveEntries(listing, verboseListing, runtimeManifest) {
   const names = listing.trim().split(/\r?\n/).filter(Boolean)
   if (!names.length || names.length > 10000) throw new Error('Invalid package archive')
+  const manifest = validateRuntimeManifest(runtimeManifest)
+  const runtimeFiles = new Set([RUNTIME_MANIFEST, ...manifest.files.map((file) => `${RUNTIME_HOST}/${file.path}`)].map((path) => `package/${path}`))
+  const runtimeDirectories = new Set([...runtimeFiles].flatMap((path) => path.split('/').slice(0, -1).map((_, index, parts) => parts.slice(0, index + 1).join('/'))))
+  const seenRuntime = new Set()
   for (const name of names) {
     const value = name.replace(/\/$/, '')
     validateWindowsComponents(value)
-    if (value.includes('\\') || posix.normalize(value) !== value || value.split('/').some((part) => part === '..' || part === '.') || !/^package(?:\/lib(?:\/.*)?|\/package\.json|\/cordis\.patch\.yml|\/README(?:\.en)?\.md|\/LICENSE)?$/.test(value))
+    if (value.includes('\\') || posix.normalize(value) !== value || value.split('/').some((part) => part === '..' || part === '.') || !/^package(?:\/lib(?:\/.*)?|\/runtime-host(?:\/.*)?|\/package\.json|\/cordis\.patch\.yml|\/README(?:\.en)?\.md|\/LICENSE)?$/.test(value))
       throw new Error(`Unsafe package entry: ${name}`)
+    if (!value.startsWith(`package/${RUNTIME_HOST}`)) continue
+    if (runtimeFiles.has(value)) {
+      if (name.endsWith('/') || seenRuntime.has(value)) throw new Error(`Unexpected runtime-host entry: ${name}`)
+      seenRuntime.add(value)
+    } else if (!runtimeDirectories.has(value)) throw new Error(`Runtime-host entry is outside its manifest: ${name}`)
   }
+  for (const path of runtimeFiles) if (!seenRuntime.has(path)) throw new Error(`Package is missing runtime-host file: ${path}`)
   if (verboseListing.trim().split(/\r?\n/).some((line) => !/^[-d]/.test(line))) throw new Error('Package links or special files are forbidden')
   if (!names.includes('package/lib/index.js') || !names.includes('package/package.json')) throw new Error('Package is missing its Host entry')
   return names

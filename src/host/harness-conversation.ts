@@ -1,3 +1,5 @@
+import { selectForkHistory, type ForkHistory, type ForkChild } from './worker-fork.ts'
+import { bridgedFeatureSupport, type BridgedConversationFeature, type BridgedFeatureSupport } from '../shared/conversation-features.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { emitAgentEvent, type Agent } from '@deepseek-ai/dsh-agent'
@@ -17,6 +19,9 @@ import { cliOf, type HarnessConversationBinding, type Worker, type WorkerEvent }
 import { HarnessConversationStream } from './harness-conversation-stream.ts'
 import { HarnessConversationCommandGuard } from './harness-conversation-commands.ts'
 import { bindHarnessTurnRun } from './harness-turn-usage.ts'
+import { harnessInputText, harnessInputHash, hasHarnessAttachments } from './harness-attachments.ts'
+import { nativeAttachmentCapability } from './native-attachments.mjs'
+import { transportFor } from './native-worker.ts'
 import type {
   HarnessConversationApi,
   HarnessConversationDependencies,
@@ -29,6 +34,7 @@ export * from './harness-conversation-types.ts'
 export const HARNESS_CLI_PROVIDER = 'cliworker-native'
 export const HARNESS_CLI_SUBAGENT_PROVIDER = 'cliworker-native-conversation'
 const SENTINEL = 'cliworker:attach-existing-run:'
+const FORK = 'cliworker:fork-history:'
 const PROJECT = 'cliworker:project-admitted-run:'
 const marker = (message: UserMessage) =>
   message.content[0]?.type === 'text' ? message.content[0].text : undefined
@@ -51,11 +57,7 @@ export const harnessBatchSubmissionId = (messages: readonly UserMessage[]): stri
     .digest('hex')
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`
 }
-const text = (message: UserMessage) => {
-  if (message.content.some((block) => block.type !== 'text'))
-    throw new Error('CLI 原生会话暂不支持附件或非文本输入')
-  return message.content.map((block) => (block.type === 'text' ? block.text : '')).join('')
-}
+const text = harnessInputText
 const promptHash = (prompt: string) => createHash('sha256').update(prompt).digest('hex')
 const unknownSteering = (error: unknown) =>
   typeof error === 'object' &&
@@ -70,7 +72,17 @@ const unknownSteering = (error: unknown) =>
 export function harnessConversationBinding(
   record: HarnessConversationRecord,
   nativeSteering = false,
+  attachments = false,
+  bridged: Record<BridgedConversationFeature, BridgedFeatureSupport> = {
+    goal: { supported: false },
+    plan: { supported: true },
+    feedback: { supported: false },
+    fork: { supported: false, reason: '原生分支不会复制 CLI 会话，暂不可用' },
+    forkEarlier: { supported: false },
+  },
 ): HarnessConversationBinding {
+  const reason = (feature: BridgedConversationFeature) =>
+    bridged[feature].supported ? {} : { [feature]: bridged[feature].reason ?? '当前 CLI 不支持此功能' }
   return {
     sessionId: record.sessionId,
     parentSessionId: record.parentSessionId,
@@ -82,9 +94,12 @@ export function harnessConversationBinding(
       stop: true,
       model: true,
       permission: true,
-      plan: true,
-      attachments: false,
-      fork: false,
+      plan: bridged.plan.supported,
+      attachments,
+      fork: bridged.fork.supported,
+      forkEarlier: bridged.forkEarlier.supported,
+      goal: bridged.goal.supported,
+      feedback: bridged.feedback.supported,
       skills: false,
       tools: false,
     },
@@ -93,7 +108,11 @@ export function harnessConversationBinding(
         ? '通过当前 CLI 的原生引导通道发送，以原生接收回执为准'
         : '该 CLI 当前协议不支持运行中引导；消息在当前运行清理结束后的下一执行步骤接收',
       attachments: '附件尚未接入该 CLI 的原生会话',
-      fork: '原生分支不会复制 CLI 会话，暂不可用',
+      ...reason('plan'),
+      ...reason('fork'),
+      ...reason('forkEarlier'),
+      ...reason('goal'),
+      ...reason('feedback'),
       skills: '技能桥尚未完成验证',
       tools: '工具桥尚未完成验证；已执行 CLI 工具仍可查看',
     },
@@ -117,7 +136,7 @@ class CliConversationAdapter extends LlmAdapter {
   override async resolveModel(provider: string, model: string) {
     const found = this.models().find((item) => item.provider === provider && item.id === model)
     if (!found) throw new Error('CLI 会话选型缺失或已失效')
-    return { ...found, inputModalities: ['text'] as const }
+    return { ...found, inputModalities: found.inputModalities ?? ['text'] as const }
   }
   async *stream(): AsyncGenerator<StreamChunk> {
     throw new Error('CLI 原生流桥未接管请求，已禁止模型回退')
@@ -196,6 +215,7 @@ export class HarnessConversationBridge implements HarnessConversationApi {
   private readonly lifecycleIssues: unknown[] = []
   private readonly disposers: Array<() => unknown> = []
   private readonly lifetime = new AbortController()
+  private readonly forkSeeds = new Map<string, ForkHistory>()
   private readonly commandGuard: HarnessConversationCommandGuard
   private disposed = false
 
@@ -218,6 +238,32 @@ export class HarnessConversationBridge implements HarnessConversationApi {
         this.assertLive(record, agent)
         return deps.permission(record, mode, AbortSignal.any([signal, this.lifetime.signal]))
       },
+      {
+        fork: async (agent, _input, signal) => {
+          const record = this.records.get(agent.id)
+          if (!record) throw new Error('CLI 子会话绑定缺失')
+          this.assertLive(record, agent)
+          const support = bridgedFeatureSupport(deps.getWorker(record.parentSessionId, record.workerId)).fork
+          if (!support.supported) return support.reason ?? '当前 CLI 不支持会话分支'
+          if (!deps.fork) return '当前 CLI 会话分支入口不可用'
+          return deps.fork(record, AbortSignal.any([signal, this.lifetime.signal]))
+        },
+        goal: async (agent, input, signal) => {
+          const record = this.records.get(agent.id)
+          if (!record || !deps.goal) throw new Error('CLI 目标设置入口不可用')
+          this.assertLive(record, agent)
+          return deps.goal(record, input, AbortSignal.any([signal, this.lifetime.signal]))
+        },
+        plan: async (agent, _input, signal) => {
+          const record = this.records.get(agent.id)
+          if (!record) throw new Error('CLI 子会话绑定缺失')
+          this.assertLive(record, agent)
+          if (!bridgedFeatureSupport(deps.getWorker(record.parentSessionId, record.workerId)).plan.supported)
+            return '当前 CLI 不支持规划模式'
+          if (!deps.permission) throw new Error('CLI 真实权限设置入口不可用')
+          return deps.permission(record, 'plan', AbortSignal.any([signal, this.lifetime.signal]))
+        },
+      },
     )
     for (const record of this.records.values()) {
       const agent = ctx.agents?.get(record.sessionId as Agent['id'])
@@ -232,7 +278,10 @@ export class HarnessConversationBridge implements HarnessConversationApi {
               provider: HARNESS_CLI_PROVIDER,
               id: this.model(record),
               name: `${cliOf(worker.preference)} · ${worker.preference.model}`,
-              inputModalities: ['text'] as const,
+              // This private route accepts attachment input for conversion; it
+              // does not claim that the downstream CLI model has vision.
+              inputModalities: worker.transport === transportFor(cliOf(worker.preference)) && nativeAttachmentCapability(cliOf(worker.preference))
+                ? ['text', 'image'] as const : ['text'] as const,
             },
           ]
         } catch {
@@ -260,10 +309,10 @@ export class HarnessConversationBridge implements HarnessConversationApi {
           if (!this.deps.replaceBinding) throw new Error('原生会话安全恢复入口不可用')
           await this.deps.replaceBinding(previous, record)
           this.records.delete(previous.sessionId)
-        } else await this.deps.bind(record)
+        } else if (!this.forkSeeds.has(sessionId)) await this.deps.bind(record)
         this.remember(record)
         signal.throwIfAborted()
-        return {}
+        return this.forkSeeds.has(sessionId) ? { seed: this.forkSeeds.get(sessionId)!.seed } : {}
       },
     }
     this.disposers.push(activationSubagents(ctx.subagents)
@@ -354,6 +403,8 @@ export class HarnessConversationBridge implements HarnessConversationApi {
             if (!this.streams.has(record.sessionId)) return { kind: 'reject' }
             return { ...decision, messages: payload.messages.filter(notice) }
           }
+          if (messages.length === 1 && marker(messages[0]!) === `${FORK}${record.workerId}` && this.forkSeeds.has(record.sessionId))
+            return this.noop(record, { ...decision, messages: [] })
           const current = this.streams.get(record.sessionId)
           if (current && !current.finished) {
             // A displayed row is not a CLI execution boundary. Keep next-step
@@ -410,13 +461,14 @@ export class HarnessConversationBridge implements HarnessConversationApi {
               messages = messages.filter((item) => {
                 const id = harnessSubmissionId(item),
                   body = text(item)
-                if (this.acceptedInput(record, id, body)) return false
+                if (this.acceptedInput(record, id, body, harnessInputHash(item))) return false
+                const identity = harnessInputHash(item)
                 const prior = seen.get(id)
                 if (prior !== undefined) {
-                  if (prior !== body) throw new Error('重复原生提交身份对应的消息不同')
+                  if (prior !== identity) throw new Error('重复原生提交身份对应的消息不同')
                   return false
                 }
-                seen.set(id, body)
+                seen.set(id, identity)
                 return true
               })
             } catch (error) {
@@ -507,9 +559,13 @@ export class HarnessConversationBridge implements HarnessConversationApi {
   }
 
   private binding(record: HarnessConversationRecord) {
+    const worker = this.deps.getWorker(record.parentSessionId, record.workerId)
+    const cli = cliOf(worker.preference)
     return harnessConversationBinding(
       record,
       !!this.deps.steer && !!this.deps.steering && this.deps.steering(record) !== 'unsupported',
+      nativeAttachmentCapability(cli) && worker.transport === transportFor(cli),
+      bridgedFeatureSupport(worker),
     )
   }
 
@@ -660,7 +716,9 @@ export class HarnessConversationBridge implements HarnessConversationApi {
     const message = position.agent.inbox.nextStep.find(
       (item) => !notice(item) && !marker(item)?.startsWith(SENTINEL) && !this.projection(record, item),
     )
-    if (!message) return
+    // Native steering is text-only. Keep the first attachment and all later
+    // arrivals in the authoritative Inbox until the current run has settled.
+    if (!message || hasHarnessAttachments(message)) return
     const requestId = harnessSubmissionId(message),
       key = `${record.sessionId}:${requestId}`
     if (this.heldSteering.has(key)) {
@@ -767,7 +825,7 @@ export class HarnessConversationBridge implements HarnessConversationApi {
     }
   }
 
-  private acceptedInput(record: HarnessConversationRecord, requestId: string, prompt: string): boolean {
+  private acceptedInput(record: HarnessConversationRecord, requestId: string, prompt: string, inputHash = promptHash(prompt)): boolean {
     const prior = this.records
       .get(record.sessionId)
       ?.nativeInputs?.find((item) => item.requestId === requestId)
@@ -776,7 +834,7 @@ export class HarnessConversationBridge implements HarnessConversationApi {
         throw new Error('该引导的本地登记未完成，已禁止自动重发')
       return false
     }
-    if (prior.promptHash !== promptHash(prompt)) throw new Error('重复原生提交身份对应的消息不同')
+    if (prior.promptHash !== inputHash) throw new Error('重复原生提交身份对应的消息或附件不同')
     if (prior.accepted) return true
     if (prior.delivery === 'steer') {
       if (this.deps.admitted?.(record, requestId)) return true
@@ -795,7 +853,7 @@ export class HarnessConversationBridge implements HarnessConversationApi {
       const inputs = new Map(current.nativeInputs?.map((item) => [item.requestId, item]))
       for (const message of pending.messages) {
         const requestId = harnessSubmissionId(message),
-          hash = promptHash(text(message))
+          hash = harnessInputHash(message)
         const prior = inputs.get(requestId)
         if (prior && (prior.promptHash !== hash || (accepted && prior.batchId !== pending.requestId)))
           throw new Error('原生输入回执身份已变化')
@@ -1018,6 +1076,44 @@ export class HarnessConversationBridge implements HarnessConversationApi {
     }
   }
 
+  private recordsForFork(worker: Worker, history: ForkHistory) {
+    // Inherited display history has no pending executions; preserve proven turn/run lookup.
+    const source = [...this.records.values()].find((record) =>
+      record.parentSessionId === worker.parentSessionId && record.turnRuns?.some((entry) => entry.runId === history.runId))
+    return structuredClone(source?.turnRuns?.filter((entry) => entry.turn <= history.turn) ?? [])
+  }
+
+  async forkHistory(worker: Worker, atMessageId: string, signal: AbortSignal): Promise<ForkHistory> {
+    const record = worker.harnessConversation && this.records.get(worker.harnessConversation.sessionId)
+    if (!record || record.workerId !== worker.id || record.parentSessionId !== worker.parentSessionId)
+      throw new Error('CLI 子会话绑定不匹配，无法分支')
+    const query = this.ctx.get('sessionQuery') as {
+      observeSession(id: Agent['id'], options: { signal: AbortSignal; projectionMode: 'none' }): Promise<Disposable & { events: readonly SessionEvent[] }>
+    } | undefined
+    if (!query) throw new Error('Harness 会话历史服务未就绪')
+    const observation = await query.observeSession(SessionId(record.sessionId), { signal, projectionMode: 'none' })
+    try { return selectForkHistory(observation.events, record, atMessageId) }
+    finally { observation[Symbol.dispose]() }
+  }
+
+  async createFork(parent: Agent, worker: Worker, history: ForkHistory, signal: AbortSignal): Promise<ForkChild> {
+    const binding = await this.create(parent, worker, { signal }, undefined, history)
+    const record = this.records.get(binding.sessionId)!
+    return {
+      binding,
+      commit: async () => { await this.deps.bind(record) },
+      rollback: async () => {
+        await this.drainChildren(parent, [SessionId(record.sessionId)])
+        await this.deps.unbind(record)
+        this.records.delete(record.sessionId)
+        // The public child lifecycle drains its Agent. Durable logs are archived when available.
+        const workspaces = this.ctx.get('workspaces') as { archiveSession?(id: ReturnType<typeof SessionId>): Promise<unknown> } | undefined
+        if (workspaces?.archiveSession) await workspaces.archiveSession(SessionId(record.sessionId))
+        else this.ctx.logger?.warn(`分支子会话 ${record.sessionId} 已解除绑定并释放；宿主未提供归档接口，持久化历史日志保留待清理`)
+      },
+    }
+  }
+
   async ensure(
     parent: Agent,
     worker: Worker,
@@ -1127,6 +1223,7 @@ export class HarnessConversationBridge implements HarnessConversationApi {
     worker: Worker,
     options: HarnessConversationEnsureOptions,
     previous?: HarnessConversationRecord,
+    forkHistory?: ForkHistory,
   ) {
     const retired = previous ? [...(previous.retiredSessionIds ?? []), previous.sessionId] : undefined
     if (retired && retired.length > 64) throw new Error('原生会话历史引用已达上限，未重新发送 CLI 任务')
@@ -1135,7 +1232,8 @@ export class HarnessConversationBridge implements HarnessConversationApi {
       parentSessionId: parent.id,
       sessionId: randomUUID(),
       initialRunId: options.initialRunId ?? worker.runId,
-      initialPending: true,
+      initialPending: !forkHistory,
+      ...(forkHistory ? { turnRuns: this.recordsForFork(worker, forkHistory) } : {}),
       ...(previous?.nativeInputs ? { nativeInputs: structuredClone(previous.nativeInputs) } : {}),
       ...(retired ? { retiredSessionIds: retired } : {}),
     }
@@ -1144,6 +1242,7 @@ export class HarnessConversationBridge implements HarnessConversationApi {
       : this.lifetime.signal
     signal.throwIfAborted()
     this.provisioning.set(record.sessionId, record)
+    if (forkHistory) this.forkSeeds.set(record.sessionId, forkHistory)
     if (previous) this.replacements.set(record.sessionId, previous)
     try {
       const spec: NativeChildSpec = {
@@ -1152,7 +1251,7 @@ export class HarnessConversationBridge implements HarnessConversationApi {
         childId: SessionId(record.sessionId),
         request: {
           parent,
-          prompt: [{ type: 'text', text: `${SENTINEL}${record.initialRunId}` }],
+          prompt: [{ type: 'text', text: forkHistory ? `${FORK}${record.workerId}` : `${SENTINEL}${record.initialRunId}` }],
           agentOptions: { provider: HARNESS_CLI_PROVIDER, model: this.model(record) },
           // Preserve the child scope's real tool policy for the controlled MCP
           // bridge. This stream never asks AgentLoop to execute native CLI tools.
@@ -1169,6 +1268,21 @@ export class HarnessConversationBridge implements HarnessConversationApi {
       } else if (legacySubagents(this.ctx.subagents)) result = await this.ctx.subagents.startContinuable(spec)
       else throw new Error('Harness CLI 子会话生命周期接口已失效')
       if (result.childId !== record.sessionId) throw new Error('Harness 返回了不同的 CLI 子会话身份')
+      if (forkHistory && activationSubagents(this.ctx.subagents)) {
+        const outcome = await this.activations.get(record.sessionId)!.result as { stopReason?: string }
+        if (outcome.stopReason !== 'completed') throw new Error('Harness 分支历史初始化未完成')
+      }
+      if (forkHistory && !activationSubagents(this.ctx.subagents)) {
+        // Legacy continuable startup returns before its first Inbox item settles.
+        // Retain the bootstrap marker until the real loop consumed it as a noop.
+        const child = this.ctx.agents.get(SessionId(record.sessionId))
+        if (!child) throw new Error('Harness 分支子会话未进入可用状态')
+        await child.whenIdle()
+        const end = child.session.snapshotEvents().slice(forkHistory.seed.length)
+          .filter((event) => event.type === 'turn/end').at(-1)
+        if (!end || end.type !== 'turn/end' || end.data.reason.kind !== 'completed')
+          throw new Error('Harness 分支历史初始化未完成')
+      }
       return this.binding(record)
     } catch (error) {
       try {
@@ -1190,6 +1304,7 @@ export class HarnessConversationBridge implements HarnessConversationApi {
       }
       throw error
     } finally {
+      this.forkSeeds.delete(record.sessionId)
       this.provisioning.delete(record.sessionId)
       this.replacements.delete(record.sessionId)
     }
@@ -1240,7 +1355,9 @@ export class HarnessConversationBridge implements HarnessConversationApi {
         const signal = AbortSignal.any([position.signal, this.lifetime.signal])
         const launching = Promise.resolve().then(() => {
           signal.throwIfAborted()
-          return this.deps.run(record, pending.prompt, pending.requestId, signal)
+          return pending.messages.some(hasHarnessAttachments)
+            ? this.deps.run(record, pending.prompt, pending.requestId, signal, pending.messages)
+            : this.deps.run(record, pending.prompt, pending.requestId, signal)
         })
         this.launches.add(launching)
         try {

@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import type { PropsRuntime, PropsRenderSlots, SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
 import { Button, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
@@ -16,9 +16,13 @@ import { HarnessBindingRegistry } from './harness-binding-registry.ts'
 import { HarnessNativeSessionSupports } from './harness-native-session-support.tsx'
 import { installHarnessControlGuards } from './harness-control-guards.tsx'
 import { installHarnessNativeContent } from './harness-native-content.tsx'
+import { installHarnessNativeCommandMenu } from './harness-native-command-menu.tsx'
 import { installHarnessReasoningRecords, reasoningRecordsStyles } from './harness-reasoning-records.tsx'
 import { installHarnessNativeTelemetry } from './harness-native-telemetry.tsx'
-import { HARNESS_COMMAND_SOURCE, installHarnessNativeCommands } from './harness-native-commands.ts'
+import { HARNESS_COMMAND_SOURCE, installHarnessNativeCommands, type HarnessCommandFeatures } from './harness-native-commands.ts'
+import { installHarnessWorkerGoal, workerGoalStyles } from './harness-worker-goal.tsx'
+import { HarnessWorkerFork, HarnessForkNotice, installHarnessForkMenu, installHarnessForkRouting } from './harness-worker-fork.tsx'
+import { installHarnessNativeAttachments } from './harness-native-attachments.ts'
 import { useWorkers, type API } from './workers.ts'
 import {
   styles,
@@ -62,11 +66,51 @@ export function apply(ctx: Context): void {
     const bindings = new HarnessBindingRegistry()
     scope.effect(() => () => bindings.clear())
     scope.effect(() => installHarnessControlGuards(scope, bindings, api))
+    scope.effect(() => installHarnessWorkerGoal(scope, bindings, api))
+    const features: HarnessCommandFeatures = {}
+    let forks: HarnessWorkerFork | undefined
+    const forkListeners = new Set<() => void>()
+    const subscribeForks = (listener: () => void) => { forkListeners.add(listener); return () => { forkListeners.delete(listener) } }
+    const getForks = () => forks
+    // feedbackUi is provided by Harness ui-message-feedback. Read it only in
+    // its injected Cordis scope; the command source keeps the live callback.
+    scope.inject(['feedbackUi' as never], (feedback) => {
+      const ui = (feedback as unknown as { feedbackUi: { openSession(sessionId: string): void } }).feedbackUi
+      feedback.effect(() => {
+        const open = (sessionId: string) => ui.openSession(sessionId)
+        features.openFeedback = open
+        return () => { if (features.openFeedback === open) delete features.openFeedback }
+      })
+    })
+    scope.inject(['uiWorkspace'], (navigation) => {
+      navigation.effect(() => {
+        const services = { sessions: navigation.sessions, uiConversation: navigation.uiConversation, uiWorkspace: navigation.uiWorkspace }
+        const controller = new HarnessWorkerFork(services, bindings, api)
+        forks = controller
+        forkListeners.forEach((listener) => listener())
+        features.fork = (sessionId) => { void controller.fork(sessionId) }
+        features.forkReason = (sessionId) => controller.reason(sessionId)
+        const releaseRouting = installHarnessForkRouting(services, controller)
+        const releaseMenu = installHarnessForkMenu(navigation, bindings, controller)
+        return () => {
+          releaseMenu(); releaseRouting(); controller.dispose()
+          if (forks === controller) {
+            forks = undefined; delete features.fork; delete features.forkReason
+            forkListeners.forEach((listener) => listener())
+          }
+        }
+      })
+    })
     scope.effect(() => installHarnessReasoningRecords(scope, bindings))
     const nativeTelemetry = installHarnessNativeTelemetry(scope, bindings, api)
     scope.effect(() => () => nativeTelemetry.dispose())
     scope.inject(['inputTriggers', 'commandUi'], (commands) => {
-      commands.effect(() => installHarnessNativeCommands(commands, bindings, api))
+      commands.effect(() => {
+        const attachments = installHarnessNativeAttachments({ sessions: scope.sessions, conversation: scope.conversation, inputTriggers: commands.inputTriggers }, bindings)
+        const dispose = installHarnessNativeCommands(commands, bindings, api, attachments, features)
+        const disposeMenu = installHarnessNativeCommandMenu(commands, bindings)
+        return () => { disposeMenu(); dispose(); attachments.dispose() }
+      })
     })
     function WorkerPanel(
       props: PropsRuntime<'sidebar.right.pane.tab'> & PropsRenderSlots<'cliworker.native.sidebar'> & {
@@ -93,7 +137,8 @@ export function apply(ctx: Context): void {
                 worker={worker}
                 renderConversation={(reference) => (
                   <props.SessionProvider session={reference}>
-                    {props.renderSlot('cliworker.native.sidebar', { composerPresentation: 'main', commandSource: HARNESS_COMMAND_SOURCE })}
+                    {props.renderSlot('cliworker.native.sidebar', { composerPresentation: 'main', commandSource: HARNESS_COMMAND_SOURCE,
+                      childImageUploads: worker.harnessConversation?.capabilities.attachments === true })}
                   </props.SessionProvider>
                 )}
               />
@@ -163,7 +208,7 @@ export function apply(ctx: Context): void {
         renameCopyStyles +
         processStyles +
         contextInspectionStyles +
-        reasoningRecordsStyles
+        reasoningRecordsStyles + workerGoalStyles
       document.head.append(style)
       return () => style.remove()
     })
@@ -205,6 +250,7 @@ export function apply(ctx: Context): void {
     )
     scope.effect(() => installHarnessNativeContent(scope))
     function Header({ sessionId, useSession }: PropsRuntime<'conversation.session.header.utilities'>) {
+      const workerForks = useSyncExternalStore(subscribeForks, getForks)
       const address = useSession((session) => session.subagent?.address)
       const parentSessionId = address?.parentSessionId ?? sessionId
       const { snapshot, connecting } = useWorkers(api, parentSessionId)
@@ -240,7 +286,8 @@ export function apply(ctx: Context): void {
       }, [snapshot, address])
       return (
         <>
-          <HarnessNativeSessionSupports bindings={bindings} conversation={scope.conversation} />
+          <HarnessNativeSessionSupports bindings={bindings} conversation={scope.conversation} forks={workerForks} api={api} />
+          {workerForks && <HarnessForkNotice forks={workerForks} />}
           <Tooltip label="打开 CLI Worker" side="bottom" portal>
             <Button
               variant="ghost"

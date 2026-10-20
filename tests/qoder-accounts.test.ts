@@ -622,6 +622,7 @@ describe('synthetic Qoder operation-scoped settings performance', () => {
 
 async function timedStatusFixture(metadataMs: number) {
   const f = await fixture(); await f.set()
+  const executable = join(f.directory, 'synthetic-qoder.exe')
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
   const stdout = new PassThrough(), stderr = new PassThrough(), calls: string[] = []
   let complete!: (value: SubprocessOutcome) => void, spawned!: () => void
@@ -650,8 +651,9 @@ async function timedStatusFixture(metadataMs: number) {
       complete({ exitCode: null, signal: 'SIGKILL' })
     }, 5_000)
   })
-  const backend: ProcessBackend = { resolveExecutable: async () => '/synthetic/qoder.exe',
+  const backend: ProcessBackend = { resolveExecutable: async () => executable,
     spawn: (spec) => {
+      expect(spec.argv[0]).toBe(executable)
       childSignal = spec.signal
       spawned()
       return { stdin, stdout, stderr, done, terminate,
@@ -659,12 +661,13 @@ async function timedStatusFixture(metadataMs: number) {
       } as unknown as SubprocessHandle
     },
   }
-  const manager = new AccountManager(backend, DEFAULT_CONFIG)
+  // Pin this simulated entry so Windows never discovers a real user installation.
+  const manager = new AccountManager(backend, { ...DEFAULT_CONFIG, qoderExecutable: executable })
   const controller = new AbortController()
   let settled = false
   const result = manager.status('qoder', f.directory, controller.signal)
   void result.then(() => { settled = true }, () => { settled = true })
-  await ready
+  await Promise.race([ready, result.then(() => { throw new Error('Synthetic account query did not reach metadata spawn') })])
   return { ...f, manager, controller, result, terminate, calls,
     settled: () => settled, exited: () => exited, aborted: () => childSignal!.aborted }
 }

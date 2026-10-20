@@ -755,6 +755,12 @@ describe('native CLI model and lifetime isolation', () => {
       inputModalities: ['text'],
     })
     expect(await adapter.resolveModel(HARNESS_CLI_PROVIDER, model)).not.toHaveProperty('context')
+    // The hidden router accepts images for protocol/path conversion. This is
+    // its input contract, not a vision claim for the user's selected CLI model.
+    f.worker.transport = 'opencode-http-v1'
+    expect(await adapter.resolveModel(HARNESS_CLI_PROVIDER, model)).toHaveProperty('inputModalities', ['text', 'image'])
+    f.worker.transport = 'legacy'
+    expect(await adapter.resolveModel(HARNESS_CLI_PROVIDER, model)).toHaveProperty('inputModalities', ['text'])
     await expect(adapter.resolveModel(HARNESS_CLI_PROVIDER, 'other')).rejects.toThrow('选型缺失')
     await expect(adapter.resolveModel('ordinary-provider', model)).rejects.toThrow('选型缺失')
     const config = await f.hooks.get('agent/request')!(

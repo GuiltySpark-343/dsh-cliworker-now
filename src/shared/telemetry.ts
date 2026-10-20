@@ -55,6 +55,8 @@ export interface ContextBreakdown {
   source?: string
 }
 export interface Telemetry {
+  /** Exact Qoder request credits for this invocation; independent from hidden token counters. */
+  providerCredits?: number
   /** Source invocation for the shown receipt, including a prior confirmed run snapshot. */
   usageRunId?: string
   /** Upstream AGY conversation duration, not the duration of the current invocation. */

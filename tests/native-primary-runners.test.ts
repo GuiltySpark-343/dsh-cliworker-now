@@ -454,3 +454,27 @@ describe('native primary runners (synthetic protocol processes, no real accounts
     expect(result.response).toContain('运行中')
   })
 })
+
+// 模拟 Claude 延迟分支：只发送首轮新输入，不重新投递原任务。
+it.each([false, true])('模拟 Claude deferred fork requires a new native identity (source receipt=%s)', async reuseSource => {
+  const { config, log } = setup('claude', 'success', true)
+  const source = reuseSource ? 'synthetic-session' : 'synthetic-original-source'
+  config.argv[config.argv.indexOf('--resume') + 1] = source
+  config.conversationId = undefined
+  config.forkSource = { conversationId: source, messageId: 'synthetic-pinned-message-uuid' }
+  const before = JSON.stringify(config)
+  const frames: any[] = []
+  const io = createNativeIO(config, line => frames.push(JSON.parse(line)), new AbortController().signal)
+  let error
+  try { await runNativeClaude(config, io) } catch (caught) { error = caught }
+  await io.close(error)
+  expect(JSON.stringify(config)).toBe(before)
+  expect(frames.at(-1).status).toBe(reuseSource ? 'ERROR' : 'SUCCESS')
+  const messages = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  const users = messages.filter(message => message.type === 'user')
+  expect(users).toHaveLength(1)
+  expect(users[0].session_id).toBeUndefined()
+  expect(users[0].message.content).toBe(`任务：\n${config.prompt}`)
+  if (!reuseSource) expect(frames.find(frame => frame.type === 'session')?.id).toBe('synthetic-session')
+  else expect(frames.some(frame => frame.type === 'session')).toBe(false)
+})

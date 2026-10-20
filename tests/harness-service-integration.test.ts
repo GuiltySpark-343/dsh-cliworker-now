@@ -226,7 +226,7 @@ it('runs real native child submissions through CLI once and preserves owned clea
     provider: HARNESS_CLI_PROVIDER,
     id: `worker/${activeWorker.id}`,
     name: 'opencode · saved-model',
-    inputModalities: ['text'],
+    inputModalities: ['text', 'image'],
   })
   expect(child.session.header).toMatchObject({ origin: 'subagent', parentSession: parent.agent.id })
   expect(child.status).toBe('running')

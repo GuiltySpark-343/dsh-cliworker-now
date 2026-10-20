@@ -1,3 +1,4 @@
+import { GOAL_OBJECTIVE_LIMIT } from '../shared/conversation-features.ts'
 import {
   appendFileSync,
   closeSync,
@@ -5,6 +6,8 @@ import {
   chmodSync,
   existsSync,
   fstatSync,
+  fsyncSync,
+  ftruncateSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -130,10 +133,21 @@ const workerSchema = z.object({
       send: z.boolean(), queue: z.boolean(), steer: z.boolean(), stop: z.boolean(),
       model: z.boolean(), permission: z.boolean(), plan: z.boolean(), attachments: z.boolean(),
       fork: z.boolean(), skills: z.boolean(), tools: z.boolean(),
+      // Bindings persisted before the feature bridge lack these keys.
+      forkEarlier: z.boolean().default(false), goal: z.boolean().default(false), feedback: z.boolean().default(false),
     }),
     reasons: z.record(z.string(), z.string()).optional(),
   }).optional(),
   transport: z.string().min(1).max(128).optional(),
+  goal: z
+    .object({
+      objective: z.string().min(1).max(GOAL_OBJECTIVE_LIMIT),
+      status: z.enum(['active', 'paused']),
+      revision: z.number().int().nonnegative(),
+      updatedAt: z.string(),
+    })
+    .optional(),
+  goalRevision: z.number().int().nonnegative().optional(),
   status: z.enum(['queued', 'running', 'stopping', 'completed', 'failed', 'interrupted', 'uncertain']),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -200,12 +214,39 @@ export function atomicJSON(path: string, value: unknown): void {
   }
 }
 
+const LOCK_CLAIM = /^host\.lock\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+function readLockOwner(path: string): { pid: number; token?: string } | 'missing' | 'invalid' {
+  let raw: string
+  try {
+    raw = readFileSync(path, 'utf8')
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'invalid'
+  }
+  try {
+    const owner = JSON.parse(raw) as { pid?: unknown; token?: unknown }
+    if (!Number.isSafeInteger(owner?.pid) || (owner.pid as number) <= 0) return 'invalid'
+    return { pid: owner.pid as number, ...(typeof owner.token === 'string' ? { token: owner.token } : {}) }
+  } catch {
+    return 'invalid'
+  }
+}
+/** EPERM still proves that a process with this PID exists. */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH'
+  }
+}
+
 /** One host owns a private store; a live second host cannot resume the same CLI session. */
 export class WorkerStorage {
   readonly workers = new Map<string, Worker>()
   private events = new Map<string, WorkerEvent[]>()
   private token = randomUUID()
   private lock: string
+  private candidate: string
   private enabled = enabledByDefault()
   private presets: RolePreset[] = []
   /** Account epochs live outside public Worker records and event/history responses. */
@@ -223,8 +264,8 @@ export class WorkerStorage {
     atomicJSON(join(this.directory, `${id}.account-binding.json`), { policy: 1, binding })
   }
   /** Private quarantine survives Host restart; absence alone means no recorded quarantine. */
-  cleanupBlockState(): 'none' | 'blocked' | 'invalid' {
-    const path = join(this.directory, 'cleanup-blocked.json')
+  cleanupBlockState(cli?: CliId): 'none' | 'blocked' | 'invalid' {
+    const path = this.cleanupBlockPath(cli)
     let handle: number | undefined
     let buffer: Buffer | undefined
     try {
@@ -277,31 +318,22 @@ export class WorkerStorage {
     }
   }
   /** No automatic clearing: only trustworthy process-exit recovery can release a quarantine. */
-  blockCleanup(): void {
-    atomicJSON(join(this.directory, 'cleanup-blocked.json'), { policy: 1, state: 'cleanup-unconfirmed' })
+  blockCleanup(cli?: CliId): void {
+    atomicJSON(this.cleanupBlockPath(cli), { policy: 1, state: 'cleanup-unconfirmed' })
+  }
+  private cleanupBlockPath(cli?: CliId): string {
+    // Only a known read-only query boundary may choose this narrower scope.
+    // Old unattributed/task markers retain their original global meaning.
+    return join(this.directory, cli === undefined
+      ? 'cleanup-blocked.json'
+      : `cleanup-blocked-${z.enum(CLI_IDS).parse(cli)}.json`)
   }
   constructor(readonly directory: string) {
     mkdirSync(directory, { recursive: true, mode: 0o700 })
     chmodSync(directory, 0o700)
     this.lock = join(directory, 'host.lock')
-    if (existsSync(this.lock)) {
-      const owner = JSON.parse(readFileSync(this.lock, 'utf8')) as { pid: number }
-      if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0)
-        throw new Error('Invalid store lock; inspect host.lock before recovery')
-      let alive = true
-      try {
-        process.kill(owner.pid, 0)
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ESRCH') alive = false
-        else throw error
-      }
-      if (alive) throw new Error('CLI Worker store is already owned by another Harness host')
-      rmSync(this.lock)
-    }
-    writeFileSync(this.lock, JSON.stringify({ pid: process.pid, token: this.token }), {
-      mode: 0o600,
-      flag: 'wx',
-    })
+    this.candidate = join(directory, `host.lock.${this.token}`)
+    this.acquireLock()
     try {
       const rolesPath = join(directory, 'role-presets.json')
       if (existsSync(rolesPath)) {
@@ -608,17 +640,25 @@ export class WorkerStorage {
     const path = join(this.directory, `${id}.events.jsonl`)
     const rows: WorkerEvent[] = []
     if (existsSync(path)) {
-      const raw = readFileSync(path, 'utf8')
-      const lines = raw.split('\n')
+      const raw = readFileSync(path)
       // Only a torn final append is discarded. Earlier corruption is never silently skipped.
-      const complete = lines.slice(0, -1)
+      const end = raw.lastIndexOf(0x0a) + 1
+      const complete = raw.subarray(0, end).toString('utf8').split('\n').slice(0, -1)
       for (const line of complete) {
         const event = eventSchema.parse(JSON.parse(line))
         if (event.seq !== rows.length + 1) throw new Error('Event sequence corruption')
         rows.push(event)
       }
-      if (!raw.endsWith('\n')) {
-        writeFileSync(path, complete.join('\n') + (complete.length ? '\n' : ''), { mode: 0o600 })
+      if (end !== raw.length) {
+        // Shrink in place to the last complete newline. Rewriting would first
+        // truncate the whole file, so a failed write could lose complete events.
+        const handle = openSync(path, 'r+')
+        try {
+          ftruncateSync(handle, end)
+          fsyncSync(handle)
+        } finally {
+          closeSync(handle)
+        }
       }
     }
     this.events.set(id, rows)
@@ -635,8 +675,68 @@ export class WorkerStorage {
   rawPath(worker: Worker): string {
     return join(this.directory, `${worker.id}.${worker.runId}.raw.jsonl`)
   }
+  /**
+   * Cross-process exclusion without a native flock: every Host atomically
+   * publishes a uniquely named claim, then looks for any other live claim.
+   * Two concurrent Hosts each write before they read, so at least one sees the
+   * other and withdraws. Stale claims are removed only by their unique name,
+   * so a live Host's claim is never deleted by a racing reclaimer.
+   */
+  private acquireLock(): void {
+    const body = JSON.stringify({ pid: process.pid, token: this.token })
+    for (let attempt = 0; ; attempt++) {
+      const temp = join(this.directory, `.host.lock.${this.token}.tmp`)
+      try {
+        writeFileSync(temp, body, { mode: 0o600, flag: 'wx' })
+        renameSync(temp, this.candidate)
+      } finally {
+        rmSync(temp, { force: true })
+      }
+      const stale: string[] = []
+      let conflict: 'live' | { invalid: string } | undefined
+      for (const name of readdirSync(this.directory)) {
+        const path = join(this.directory, name)
+        if (path === this.candidate || (name !== 'host.lock' && !LOCK_CLAIM.test(name))) continue
+        const owner = readLockOwner(path)
+        if (owner === 'missing') continue
+        if (owner === 'invalid') conflict = { invalid: name }
+        else if (processAlive(owner.pid)) conflict ??= 'live'
+        else if (name !== 'host.lock') stale.push(path)
+        if (conflict && conflict !== 'live') break
+      }
+      if (!conflict) {
+        for (const path of stale) rmSync(path, { force: true })
+        break
+      }
+      rmSync(this.candidate, { force: true })
+      if (conflict !== 'live') throw new Error(`Invalid store lock; inspect ${conflict.invalid} before recovery`)
+      if (attempt >= 2) throw new Error('CLI Worker store is already owned by another Harness host')
+      // Simultaneous claimants may both withdraw; a random pause breaks the tie.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20 + Math.floor(Math.random() * 80))
+    }
+    // Keep the established name for older plugin builds and existing checks.
+    // Only an older build that does not publish claims can still race here.
+    try {
+      try {
+        writeFileSync(this.lock, body, { mode: 0o600, flag: 'wx' })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+        const owner = readLockOwner(this.lock)
+        if (owner === 'invalid') throw new Error('Invalid store lock; inspect host.lock before recovery')
+        if (owner !== 'missing' && processAlive(owner.pid))
+          throw new Error('CLI Worker store is already owned by another Harness host')
+        rmSync(this.lock, { force: true })
+        writeFileSync(this.lock, body, { mode: 0o600, flag: 'wx' })
+      }
+    } catch (error) {
+      rmSync(this.candidate, { force: true })
+      throw error
+    }
+  }
   close(): void {
-    if (existsSync(this.lock) && JSON.parse(readFileSync(this.lock, 'utf8')).token === this.token)
-      rmSync(this.lock)
+    for (const path of [this.lock, this.candidate]) {
+      const owner = readLockOwner(path)
+      if (typeof owner === 'object' && owner.token === this.token) rmSync(path, { force: true })
+    }
   }
 }

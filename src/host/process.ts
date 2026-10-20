@@ -1,3 +1,4 @@
+import { StringDecoder } from 'node:string_decoder'
 import type {
   SubprocessHandle,
   SubprocessSpawnSpec,
@@ -11,6 +12,7 @@ import type { ModelChoice, Preference, TaskMode } from '../shared/types.ts'
 import type { CliExecutablePathStore } from './cli-executable-paths.ts'
 import { agyBackgroundEnvironment } from './agy-background-environment.ts'
 import type { NativeHarnessConnection } from './native-harness-tools.ts'
+import type { NativeAttachment } from './native-attachments.mjs'
 
 export interface ProcessBackend {
   resolveExecutable(name: string): Promise<string>
@@ -25,6 +27,8 @@ export class ProcessCleanupUnconfirmedError extends Error {
   }
 }
 export interface RuntimeConfig {
+  /** Host-resolved upload references for one task, never deployment settings. */
+  attachments?: readonly NativeAttachment[]
   /** Per-run Host-private tool connection; never persisted as deployment settings. */
   harnessTools?: NativeHarnessConnection
   /** Host-private machine-local CLI path preferences, shared by all entry points. */
@@ -42,6 +46,7 @@ export interface RuntimeConfig {
   hermesHome?: string
   opencodeExecutable?: string
   qoderExecutable?: string
+  qodercnExecutable?: string
   zcodeAuthDirectory?: string
   zcodeBuiltinConfig?: string
   stateDirectory?: string
@@ -89,6 +94,7 @@ export function projectDirectory(input: string): string {
     '.hermes',
     '.zcode',
     '.qoder',
+    '.qoder-cn',
     '.local/share/opencode',
     '.gemini',
     '.config',
@@ -162,7 +168,12 @@ export async function discoverModels(
   let stdout = ''
   let stderr = ''
   const read = async (stream: typeof process.stdout, out: (s: string) => void) => {
-    if (stream) for await (const chunk of stream) out(String(chunk))
+    if (!stream) return
+    // A multi-byte UTF-8 character may be split across chunks.
+    const decoder = new StringDecoder('utf8')
+    for await (const chunk of stream) out(decoder.write(chunk))
+    const rest = decoder.end()
+    if (rest) out(rest)
   }
   try {
     await Promise.all([

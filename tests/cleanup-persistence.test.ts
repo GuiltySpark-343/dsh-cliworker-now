@@ -46,7 +46,8 @@ vi.mock('../src/host/authorized-catalog.ts', async () => {
     authorizeSelection: async (preference) => ({ binding: 'synthetic-own-account', preference }),
     authorizedCatalog: vi.fn(async (cli) => {
       if (faults.catalog) throw new ProcessCleanupUnconfirmedError()
-      return { binding: 'synthetic-own-account', catalog: { cli, notice: 'Synthetic', models: [] } }
+      return { binding: 'synthetic-own-account', catalog: { cli, notice: 'Synthetic',
+        models: [{ id: 'synthetic', label: 'Synthetic model', efforts: ['low'] }] } }
     }),
   }
 })
@@ -208,17 +209,19 @@ describe('durable Host cleanup quarantine', () => {
     expect(JSON.parse(readFileSync(marker, 'utf8'))).toEqual({ policy: 1, state: 'cleanup-unconfirmed' })
   })
 
-  it('a catalog cleanup failure without any Worker remains blocked after Host reconstruction', async () => {
+  it('a catalog cleanup failure without any Worker preserves only its CLI block after reconstruction', async () => {
     const f = fixture()
     faults.catalog = true
     await expect(f.service.catalogForCli('parent', 'antigravity', f.signal)).rejects.toThrow('cleanup')
     expect(f.storage.workers.size).toBe(0)
     const { rebuilt, reopened, service } = await f.reopen()
-    expect(reopened.cleanupBlockState()).toBe('blocked')
+    expect(reopened.cleanupBlockState()).toBe('none')
+    expect(reopened.cleanupBlockState('antigravity')).toBe('blocked')
     faults.catalog = false
-    await expect(service.catalogForCli('parent', 'codex', f.signal)).rejects.toThrow('清理')
-    expect(authorizedCatalog).toHaveBeenCalledTimes(1)
-    expect(() => rebuilt.assertAccountIdle('codex')).toThrow('清理')
+    await expect(service.catalogForCli('parent', 'antigravity', f.signal)).rejects.toThrow('此 CLI')
+    await expect(service.catalogForCli('parent', 'codex', f.signal)).resolves.toContain('codex')
+    expect(authorizedCatalog).toHaveBeenCalledTimes(2)
+    expect(() => rebuilt.assertAccountIdle('codex')).not.toThrow()
     expect(f.backend.spawn).not.toHaveBeenCalled()
   })
 
@@ -243,7 +246,8 @@ describe('durable Host cleanup quarantine', () => {
         'accept-edits',
       )
       expect((await task.done).status).toBe('failed')
-      expect(f.storage.cleanupBlockState()).toBe('blocked')
+      expect(f.storage.cleanupBlockState()).toBe(source === 'admission' ? 'none' : 'blocked')
+      if (source === 'admission') expect(f.storage.cleanupBlockState('antigravity')).toBe('blocked')
       const { rebuilt } = await f.reopen()
       expect(() => rebuilt.assertAccountIdle('antigravity')).toThrow('清理')
       expect(() => rebuilt.deleteWorker('parent', task.worker.id)).toThrow('清理')

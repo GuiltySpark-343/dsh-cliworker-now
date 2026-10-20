@@ -11,7 +11,10 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
+import { qoderVariant, type QoderCliId } from './qoder-variant.ts'
 import { resolveNativeEntry } from './native-launch.mjs'
+import { windowsCommonBinDirectories, windowsCommandCandidates, type WindowsPathOptions } from './windows-cli-path.ts'
+import type { CliId } from '../shared/types.ts'
 
 export class WindowsCliInstallationError extends Error {
   readonly code = 'CLI_INSTALLATION_UNAVAILABLE'
@@ -26,13 +29,18 @@ export class WindowsCliInstallationError extends Error {
 
 /** A completed desktop/PATH search found no CLI; absence is not a broken installation. */
 export class WindowsCliNotFoundError extends WindowsCliInstallationError {
-  constructor(cli: 'zcode' | 'opencode' | 'qoder') {
-    super(`${cli === 'zcode' ? 'ZCode' : cli === 'qoder' ? 'Qoder' : 'OpenCode'} CLI 未找到，请配置 ${cli}Executable`)
+  constructor(cli: 'zcode' | 'opencode' | QoderCliId) {
+    super(`${cli === 'zcode' ? 'ZCode' : cli === 'qoder' ? 'Qoder' : cli === 'qodercn' ? 'Qoder CN' : 'OpenCode'} CLI 未找到，请配置 ${cli}Executable`)
     this.name = 'WindowsCliNotFoundError'
   }
 }
 
-type WindowsEnvironment = { home?: string; env?: NodeJS.ProcessEnv }
+type WindowsEnvironment = WindowsPathOptions
+export type WindowsDiscoverableCli = Exclude<CliId, 'harness'>
+
+export function windowsCliCommands(cli: WindowsDiscoverableCli): string[] {
+  return cli === 'qoder' || cli === 'qodercn' ? [qoderVariant(cli).executable, cli] : [cli === 'antigravity' ? 'agy' : cli]
+}
 const unavailableCodex = () =>
   new WindowsCliInstallationError('Codex Windows 应用包入口无法确认，请检查安装', true)
 
@@ -42,24 +50,32 @@ function directory(env: NodeJS.ProcessEnv, name: string, fallback: string): stri
   return value
 }
 
-/** Fixed installer locations only; never scan arbitrary drives or select a venv by recency. */
-export function windowsCliCandidates(cli: 'codex' | 'hermes' | 'qoder', options: WindowsEnvironment = {}): string[] {
-  const env = options.env ?? process.env,
-    home = options.home ?? homedir()
-  if (cli === 'codex' || cli === 'qoder') {
-    const npm = join(directory(env, 'APPDATA', join(home, 'AppData', 'Roaming')), 'npm')
-    return cli === 'codex' ? [join(npm, 'codex.cmd')] : [
-      join(home, '.qoder', 'bin', 'qodercli', 'qodercli.exe'),
-      join(npm, 'qodercli.cmd'),
-      join(npm, 'qoder.cmd'),
-    ]
+/** Declarative installer hints precede shared user bins; no directory enumeration or version guessing. */
+export function windowsCliCandidates(cli: WindowsDiscoverableCli, options: WindowsEnvironment = {}): string[] {
+  const env = options.env ?? process.env, home = options.home ?? homedir()
+  const local = directory(env, 'LOCALAPPDATA', join(home, 'AppData', 'Local'))
+  const npm = join(directory(env, 'APPDATA', join(home, 'AppData', 'Roaming')), 'npm')
+  const specialized: string[] = []
+  if (cli === 'qoder' || cli === 'qodercn') {
+    const variant = qoderVariant(cli)
+    specialized.push(join(home, variant.directory, 'bin', variant.executable, variant.executable + '.exe'),
+      join(npm, variant.executable + '.cmd'), join(npm, cli + '.cmd'))
+  } else if (cli === 'hermes') {
+    const root = join(local, 'hermes')
+    specialized.push(join(root, 'bin', 'hermes.exe'), join(root, 'bin', 'hermes.cmd'),
+      join(root, 'hermes-agent', 'venv', 'Scripts', 'hermes.exe'))
+  } else if (cli === 'codex') specialized.push(join(npm, 'codex.cmd'))
+  else if (cli === 'zcode') {
+    for (const root of [join(local, 'Programs'), env.ProgramFiles].filter((value): value is string => !!value))
+      specialized.push(join(root, 'ZCode', 'resources', 'glm', 'zcode.cjs'))
   }
-  const root = join(directory(env, 'LOCALAPPDATA', join(home, 'AppData', 'Local')), 'hermes')
-  return [
-    join(root, 'bin', 'hermes.exe'),
-    join(root, 'bin', 'hermes.cmd'),
-    join(root, 'hermes-agent', 'venv', 'Scripts', 'hermes.exe'),
-  ]
+  const installerBins: Partial<Record<WindowsDiscoverableCli, string>> = {
+    pi: '.pi/agent/bin', grok: '.grok/bin', kimi: '.kimi-code/bin', mimo: '.mimocode/bin',
+  }
+  const directories = [...windowsCommonBinDirectories(options), ...(installerBins[cli] ? [join(home, installerBins[cli]!)] : [])]
+  // Qoder's alias may be an IDE. Only qodercli/qoderclicn belong in generic bins.
+  const commands = windowsCliCommands(cli).slice(0, 1)
+  return [...new Set([...specialized, ...windowsCommandCandidates(commands, directories, env)])]
 }
 
 /** A residue is not a runnable installation and is not evidence of an account. */
@@ -98,26 +114,28 @@ export function validateWindowsCodexNpmEntry(path: string): string {
 }
 
 /** Qoder's qoder alias is a dispatcher; prefer the package's actual qodercli bin. */
-export function validateWindowsQoderNpmEntry(path: string): string {
+export function validateWindowsQoderNpmEntry(path: string, cli: QoderCliId = 'qoder'): string {
   try {
+    const variant = qoderVariant(cli)
     const command = basename(path).toLowerCase().replace(/\.cmd$/, '')
-    if (!['qodercli', 'qoder'].includes(command)) throw new Error('Unexpected command')
-    validateWindowsNpmEntry(path, '@qoder-ai/qodercli', command, 'Qoder')
-    return windowsQoderPackageCli(resolveNativeEntry(path, 'win32'))
+    if (![variant.executable, cli].includes(command)) throw new Error('Unexpected command')
+    validateWindowsNpmEntry(path, variant.package, command, variant.label)
+    return windowsQoderPackageCli(resolveNativeEntry(path, 'win32'), cli)
   } catch {
-    throw new WindowsCliInstallationError('Qoder npm 安装入口无法确认，请检查安装', true)
+    throw new WindowsCliInstallationError(`${qoderVariant(cli).label} npm 安装入口无法确认，请检查安装`, true)
   }
 }
 
-function windowsQoderPackageCli(executable: string): string {
+function windowsQoderPackageCli(executable: string, cli: QoderCliId): string {
+  const variant = qoderVariant(cli)
   const entry = realpathSync(executable)
   for (let root = dirname(entry), depth = 0; depth < 5; depth++, root = dirname(root)) {
     const manifest = join(root, 'package.json')
     if (!existsSync(manifest)) continue
     if (statSync(manifest).size > 128 * 1024) throw new Error('Oversized package metadata')
     const data = JSON.parse(readFileSync(manifest, 'utf8'))
-    if (data.name !== '@qoder-ai/qodercli') throw new Error('Foreign package')
-    const bins = typeof data.bin === 'string' ? { qodercli: data.bin } : data.bin
+    if (data.name !== variant.package) throw new Error('Foreign package')
+    const bins = typeof data.bin === 'string' ? { [variant.executable]: data.bin } : data.bin
     const binEntry = (bin: unknown) => {
       if (typeof bin !== 'string' || isAbsolute(bin) || win32.isAbsolute(bin) || bin.split(/[\\/]/).includes('..'))
         throw new Error('Invalid package bin')
@@ -126,32 +144,52 @@ function windowsQoderPackageCli(executable: string): string {
         throw new Error('Redirected package bin')
       return path
     }
-    if (![bins?.qodercli, bins?.qoder].filter(value => value !== undefined).some(bin => binEntry(bin) === entry))
+    if (![bins?.[variant.executable], bins?.[cli]].filter(value => value !== undefined).some(bin => binEntry(bin) === entry))
       throw new Error('Undeclared package entry')
-    const cli = binEntry(bins?.qodercli ?? bins?.qoder)
-    if (!/\.[cm]?js$/i.test(cli) || basename(cli).toLowerCase() === 'qoder-npm-dispatcher.cjs')
+    const cliEntry = binEntry(bins?.[variant.executable] ?? bins?.[cli])
+    if (!/\.[cm]?js$/i.test(cliEntry) || basename(cliEntry).toLowerCase().endsWith('-npm-dispatcher.cjs'))
       throw new Error('No standalone package CLI')
-    return cli
+    return cliEntry
   }
   throw new Error('No package identity')
 }
 
+/** Manual wrappers remain supported, but known opposite-brand entries cannot borrow another account. */
+export function rejectWindowsQoderCrossVariant(executable: string, cli: QoderCliId): void {
+  const other = qoderVariant(cli === 'qoder' ? 'qodercn' : 'qoder')
+  const rejected = () => { throw new WindowsCliInstallationError(`${qoderVariant(cli).label} 执行路径指向另一版本，请配置 ${cli}Executable`, true) }
+  const foreignName = (entry: string) => new RegExp('^(?:' + other.executable + '(?:-\\d+\\.\\d+\\.\\d+(?:-[a-z0-9.-]+)?)?|' + other.cli + ')\\.(?:exe|cmd|bat)$', 'i').test(basename(entry.replace(/\\/g, '/')))
+  if (foreignName(executable)) rejected()
+  let entry: string
+  try { entry = realpathSync(resolveNativeEntry(executable, 'win32')) } catch { return }
+  if (foreignName(entry)) rejected()
+  for (let root = dirname(entry), depth = 0; depth < 5; depth++, root = dirname(root)) {
+    const manifest = join(root, 'package.json')
+    if (!existsSync(manifest)) continue
+    let name: unknown
+    try { if (statSync(manifest).size <= 128 * 1024) name = JSON.parse(readFileSync(manifest, 'utf8')).name } catch { return }
+    if (name === other.package) rejected()
+    return
+  }
+}
+
 /** Automatic hints must identify the standalone CLI, never an IDE or dispatcher. */
-export function windowsQoderCliEntry(executable: string): string {
+export function windowsQoderCliEntry(executable: string, cli: QoderCliId = 'qoder'): string {
   try {
     // The official entry symlink resolves to qodercli-<installed version>.exe.
     // Accept only that observed target; never enumerate or choose a version.
-    const nativeName = (path: string) => /^qodercli(?:-\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?)?\.exe$/i.test(basename(path))
+    const variant = qoderVariant(cli)
+    const nativeName = (path: string) => new RegExp('^' + variant.executable + '(?:-\\d+\\.\\d+\\.\\d+(?:-[a-z0-9.-]+)?)?\\.exe$', 'i').test(basename(path))
     if (nativeName(executable)) {
       const entry = nativePe(executable)
       if (!nativeName(entry)) throw new Error('Redirected native entry')
       return entry
     }
-    if (/\.cmd$/i.test(executable)) return validateWindowsQoderNpmEntry(executable)
-    if (/\.[cm]?js$/i.test(executable)) return windowsQoderPackageCli(executable)
+    if (/\.cmd$/i.test(executable)) return validateWindowsQoderNpmEntry(executable, cli)
+    if (/\.[cm]?js$/i.test(executable)) return windowsQoderPackageCli(executable, cli)
     throw new Error('Not a standalone Qoder CLI')
   } catch {
-    throw new WindowsCliInstallationError('Qoder Windows 安装入口无法确认，请配置 qoderExecutable', true)
+    throw new WindowsCliInstallationError(`${qoderVariant(cli).label} Windows 安装入口无法确认，请配置 ${cli}Executable`, true)
   }
 }
 
@@ -178,7 +216,7 @@ function validateWindowsNpmEntry(path: string, packageName: string, command: str
 }
 
 export function presentWindowsCliCandidate(
-  cli: 'codex' | 'hermes' | 'qoder',
+  cli: WindowsDiscoverableCli,
   options: WindowsEnvironment = {},
 ): string | undefined {
   for (const path of windowsCliCandidates(cli, options)) {
@@ -188,25 +226,34 @@ export function presentWindowsCliCandidate(
       if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) continue
       throw new WindowsCliInstallationError('Windows CLI 安装入口无法读取，请检查安装', true)
     }
-    if (cli === 'codex') return validateWindowsCodexNpmEntry(path)
-    if (cli === 'qoder') {
-      if (/\.cmd$/i.test(path)) return validateWindowsQoderNpmEntry(path)
-      try { nativePe(path); return path } catch {
-        throw new WindowsCliInstallationError('Qoder Windows 安装入口无法确认，请检查安装', true)
-      }
-    }
-    try {
-      const entry = resolveNativeEntry(path, 'win32')
-      if (/\.exe$/i.test(entry)) nativePe(entry)
-      else if (entry !== path || !/\.cmd$/i.test(entry)) throw new Error('Unsupported Hermes entry')
-      // Fixed Python cmd launchers are statically checked by resolveNativeEntry;
-      // the existing Hermes verifier preserves the installer's own interpreter.
-      return path
-    } catch {
-      throw new WindowsCliInstallationError('Hermes Windows 安装入口无法确认，请检查安装', true)
-    }
+    return validateWindowsCliCandidate(cli, path)
   }
   return undefined
+}
+
+/** Validate the same entry rules for fixed bins and freshly read PATH. */
+export function validateWindowsCliCandidate(cli: WindowsDiscoverableCli, path: string): string {
+  if (cli === 'codex' && /\.cmd$/i.test(path)) return validateWindowsCodexNpmEntry(path)
+  if (cli === 'qoder' || cli === 'qodercn') {
+    if (/\.cmd$/i.test(path)) return validateWindowsQoderNpmEntry(path, cli)
+    try { windowsQoderCliEntry(path, cli); return path } catch {
+      throw new WindowsCliInstallationError(`${qoderVariant(cli).label} Windows 安装入口无法确认，请检查安装`, true)
+    }
+  }
+  if (cli !== 'hermes') {
+    if (/\.(?:cmd|bat)$/i.test(path)) resolveNativeEntry(path, 'win32')
+    return path
+  }
+  try {
+    const entry = resolveNativeEntry(path, 'win32')
+    if (/\.exe$/i.test(entry)) nativePe(entry)
+    else if (entry !== path || !/\.cmd$/i.test(entry)) throw new Error('Unsupported Hermes entry')
+    // Fixed Python cmd launchers are statically checked by resolveNativeEntry;
+    // the existing Hermes verifier preserves the installer's own interpreter.
+    return path
+  } catch {
+    throw new WindowsCliInstallationError('Hermes Windows 安装入口无法确认，请检查安装', true)
+  }
 }
 
 const codexFamily = 'OpenAI.Codex_2p2nqsd0c76g0'

@@ -279,16 +279,20 @@ function metricRecords(v: Record<string, any>): unknown[] {
     usage: metricCounts(v.usage, ['total', 'input', 'output', 'cacheRead', 'cacheWrite', 'reasoning']),
   })
   else if (v.type === 'thread.started') entries.push({ type: v.type, thread_id: textId(v.thread_id) ?? null })
-  else if (v.type === 'cliworker.qoder_prompt_usage') entries.push({
+  else if (['cliworker.qoder_prompt_usage', 'cliworker.qodercn_prompt_usage'].includes(v.type)) entries.push({
     type: v.type, sessionId: textId(v.sessionId) ?? null, model: textId(v.model),
     usage: metricCounts(v.usage, ['inputTokens', 'outputTokens', 'totalTokens']),
   })
-  else if (v.type === 'cliworker.qoder_context') entries.push({
-    type: v.type, source: v.source === 'qoder.native-transcript' ? v.source : undefined,
+  else if (['cliworker.qoder_context', 'cliworker.qodercn_context'].includes(v.type)) entries.push({
+    type: v.type, source: v.source === (v.type === 'cliworker.qodercn_context' ? 'qodercn.native-transcript' : 'qoder.native-transcript') ? v.source : undefined,
     basis: v.basis === 'native-ratio' ? v.basis : undefined, sessionId: textId(v.sessionId) ?? null,
     model: textId(v.model), userMessageId: textId(v.userMessageId),
     contextRatio: typeof v.contextRatio === 'number' && Number.isFinite(v.contextRatio) && v.contextRatio >= 0 && v.contextRatio <= 1
       ? v.contextRatio : null,
+    providerCredits: duration(v.providerCredits) ?? null,
+    contextCapacity: count(v.contextCapacity) ?? null, contextUsed: count(v.contextUsed) ?? null,
+    contextCapacitySource: ['qoder.native-runtime-config', 'qoder.native-session-log', 'qodercn.native-runtime-config', 'qodercn.native-session-log'].includes(v.contextCapacitySource)
+      ? v.contextCapacitySource : undefined,
   })
   else if (v.type === 'cliworker.grok_prompt_usage') entries.push({
     type: v.type, sessionId: textId(v.sessionId) ?? null,
@@ -763,7 +767,7 @@ export function extractTelemetry(
       result.runUsage = receipt && receipt.total > 0 ? receipt : undefined
       if (receipt?.total === 0) result.unsettledRunUsage = true
       else if (receipt) delete result.unsettledRunUsage
-    } else if (cli === 'qoder' && v.type === 'cliworker.qoder_prompt_usage' && textId(v.sessionId) && ownSession(v.sessionId) &&
+    } else if ((cli === 'qoder' || cli === 'qodercn') && v.type === `cliworker.${cli}_prompt_usage` && textId(v.sessionId) && ownSession(v.sessionId) &&
       (!model || v.model === model)) {
       const u = obj(v.usage)
       delete result.runUsage
@@ -771,13 +775,24 @@ export function extractTelemetry(
       if (['inputTokens', 'outputTokens', 'totalTokens'].every(key => count(u[key]) !== undefined) && u.totalTokens > 0 &&
         u.totalTokens === u.inputTokens + u.outputTokens)
         result.runUsage = result.usage = { input: u.inputTokens, output: u.outputTokens, total: u.totalTokens, scope: 'run' }
-    } else if (cli === 'qoder' && v.type === 'cliworker.qoder_context' && v.source === 'qoder.native-transcript' &&
+    } else if ((cli === 'qoder' || cli === 'qodercn') && v.type === `cliworker.${cli}_context` && v.source === `${cli}.native-transcript` &&
       v.basis === 'native-ratio' && textId(v.sessionId) && ownSession(v.sessionId) && textId(v.userMessageId) &&
-      textId(v.model) && (!model || v.model === model) && typeof v.contextRatio === 'number' &&
-      Number.isFinite(v.contextRatio) && v.contextRatio >= 0 && v.contextRatio <= 1) {
-      result.contextRatio = v.contextRatio
-      result.contextSource = 'Qoder 原生会话上下文比例'
-      result.contextEstimated = true
+      textId(v.model) && (!model || v.model === model)) {
+      if (typeof v.contextRatio === 'number' && Number.isFinite(v.contextRatio) && v.contextRatio >= 0 && v.contextRatio <= 1) {
+        result.contextRatio = v.contextRatio
+        result.contextSource = `${cli === 'qodercn' ? 'Qoder CN' : 'Qoder'} 原生会话上下文比例`
+        result.contextEstimated = true
+        if (count(v.contextCapacity) !== undefined && v.contextCapacity > 0 && count(v.contextUsed) !== undefined &&
+          v.contextUsed === Math.round(v.contextRatio * v.contextCapacity) &&
+          [`${cli}.native-runtime-config`, `${cli}.native-session-log`].includes(v.contextCapacitySource)) {
+          result.contextCapacity = v.contextCapacity
+          result.contextUsed = v.contextUsed
+          result.contextCapacitySource = v.contextCapacitySource === `${cli}.native-runtime-config`
+            ? `${cli === 'qodercn' ? 'Qoder CN' : 'Qoder'} 同轮原生运行配置` : `${cli === 'qodercn' ? 'Qoder CN' : 'Qoder'} 同会话同轮原生日志`
+          result.contextSource = `${cli === 'qodercn' ? 'Qoder CN' : 'Qoder'} 原生比例 × 已核实窗口（估算）`
+        }
+      }
+      if (duration(v.providerCredits) !== undefined) result.providerCredits = v.providerCredits
     } else if (cli === 'grok' && v.type === 'cliworker.grok_prompt_usage' && textId(v.sessionId) && ownSession(v.sessionId)) {
       const raw = grokPromptUsage({ ...obj(v.usage), usageIsIncomplete: v.usageIsIncomplete })
       delete result.runUsage
@@ -1281,4 +1296,5 @@ export function attachTelemetry(rows: TimelineItem[], runId: string, telemetry: 
   }
   const last = replies.at(-1)
   if (last && !last.usage) last.usage = telemetry.finalReply
+  if (last && telemetry.providerCredits !== undefined) last.providerCredits = telemetry.providerCredits
 }

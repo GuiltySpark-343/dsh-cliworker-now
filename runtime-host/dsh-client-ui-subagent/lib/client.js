@@ -783,7 +783,7 @@ window.__ModuleLoader__.load({
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(react_jsx_runtime.Fragment, { children: props.renderSlot("conversation.session", { view: "chat" }) });
 		}
 		/** Render the shared Conversation content for one explicitly provided child Session. */
-		function ConversationSlotPanel({ sessionId, useSession, useConversation, useSessions, renderFactorySlot, composerPresentation, commandSource }) {
+		function ConversationSlotPanel({ sessionId, useSession, useConversation, useSessions, renderFactorySlot, composerPresentation, commandSource, childImageUploads }) {
 			const session = useSession((value) => value);
 			const shellPhase = useConversation((value) => value).activeTargets.size > 0 || !session.blank && !session.awaitingFirstTurn || session.running ? "active" : session.promptAttempted ? "engaging" : "blank";
 			const summaryBlank = useSessions((state) => state.byId[sessionId]?.blank);
@@ -795,7 +795,8 @@ window.__ModuleLoader__.load({
 				phase: settling ? "settling" : hero ? "hero" : "active",
 				hero,
 				...composerPresentation === void 0 ? {} : { composerPresentation },
-				...commandSource === void 0 ? {} : { commandSource }
+				...commandSource === void 0 ? {} : { commandSource },
+				...childImageUploads === void 0 ? {} : { childImageUploads }
 			}, { slots: { views: FixedChatConversationView } });
 		}
 		/** Bind a chat resource's child reference around its Conversation slot. */

@@ -47,10 +47,10 @@ pnpm --config.verifyDepsBeforeRun=false test:windows:remote --help
 这个入口按以下阶段执行：
 
 1. 校验连接配置及允许列表源码，构建 Mac 隔离 preview 并打包；不会运行覆盖当前 Desktop `lib` 的正式构建。
-2. 传送源码快照、清单和 Mac 包，核对接收文件哈希。快照包含允许的包配置、锁文件、`pnpm-workspace.yaml`、整个 `src` 和 `tests` 目录及构建/测试配置；测试源码随快照传送，执行限定为下列七个文件。不包含 Mac `node_modules`、凭据和用户运行数据，不跟随目录链接。
+2. 传送源码快照、清单和 Mac 包，核对接收文件哈希。快照包含允许的包配置、锁文件、`pnpm-workspace.yaml`、整个 `src` 和 `tests` 目录、构建脚本（`build.mjs`、`build-preview.mjs`、`build-dependencies.mjs`、`host-runtime.mjs`、`host-extension-guard.mjs`）、`runtime-host/` 及构建/测试配置；`runtime-host/` 必须与其 `manifest.json` 清单逐项一致（文件集合、字节数与 SHA-256）。测试源码随快照传送，执行限定为下列七个文件。不包含 Mac `node_modules`、凭据和用户运行数据，不跟随目录链接。
 3. 在 Windows 专用根目录准备工具。`tools` 中安装项目固定的 pnpm（当前为 `11.25.0`），各次运行放入不同编号的 `runs` 目录；不做全局 pnpm 或 Harness 安装。
 4. 在该次 Windows 源码目录使用 `--frozen-lockfile` 安装依赖，继承 `pnpm-workspace.yaml` 的 native 构建许可。Windows native 库必须在 Windows 本机安装，不能复用 Mac 依赖，也不能省略必要的 native 安装来凑出通过结果。
-5. 校验并解包 Mac 包，将其生成的 lib/协议声明复制到本次源码测试目录，执行类型检查和下列现有 Windows CI 七个测试文件；Host 入口加载仍指向原 Mac 包，并使用 Windows 本机依赖。
+5. 按源码快照中的 `runtime-host/manifest.json` 校验包条目：`package/runtime-host/` 只能含清单文件及其上级目录，缺项或多项均拒绝；解包后再逐文件核对摘要。随后将其生成的 lib/协议声明复制到本次源码测试目录，执行类型检查和下列现有 Windows CI 七个测试文件；Host 入口加载仍指向原 Mac 包，并使用 Windows 本机依赖。
 6. 取回报告、Vitest JSON 及阶段日志，核对测试结果、阶段退出码和包哈希。工具保留证据目录，只清理自身锁及进程。
 
 定向测试文件与 [Windows CI](../.github/workflows/windows.yml) 一致：

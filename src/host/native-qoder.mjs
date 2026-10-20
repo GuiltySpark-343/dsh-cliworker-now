@@ -11,7 +11,8 @@ export const qoderAcpArgv = (config) => {
 
 export const runNativeQoder = (config, io) =>
   runNativeAcp(config, io, {
-    name: 'Qoder',
+    name: config.cli === 'qodercn' ? 'Qoder CN' : 'Qoder',
+    agentName: config.cli === 'qodercn' ? 'qoder-cli-cn' : 'qoder-cli',
     argv: qoderAcpArgv,
     effortId: 'reasoning_effort',
     off: 'none',
@@ -20,16 +21,16 @@ export const runNativeQoder = (config, io) =>
     encode: (value) => value,
     toolName: (update) => update._meta?.qoder?.toolName ?? update.title,
     onResult: async (result, sessionId, nativeIo) => {
-      const usage = qoderPromptUsage(result?.usage)
+      const usage = qoderPromptUsage(result?.usage) ?? qoderPromptUsage(result?._meta?.quota?.token_count)
       if (result?.stopReason === 'end_turn' && usage)
         nativeIo.native({
-          type: 'cliworker.qoder_prompt_usage',
+          type: `cliworker.${config.cli === 'qodercn' ? 'qodercn' : 'qoder'}_prompt_usage`,
           sessionId,
           model: config.preference.model,
           usage,
         })
       if (result?.stopReason === 'end_turn') {
-        const context = await readQoderDurableContextAsync({ home: config.env?.QODER_CONFIG_DIR, project: config.project,
+        const context = await readQoderDurableContextAsync({ cli: config.cli === 'qodercn' ? 'qodercn' : 'qoder', home: config.cli === 'qodercn' ? (config.env ?? process.env).QODERCN_CONFIG_DIR : (config.env ?? process.env).QODER_CONFIG_DIR, project: config.project,
           sessionId, model: config.preference.model, userMessageId: result.userMessageId }, { signal: nativeIo.signal })
         if (context) nativeIo.native(context)
       }
@@ -38,6 +39,11 @@ export const runNativeQoder = (config, io) =>
 
 /** Aggregate prompt accounting only; Qoder supplies no response/cache/context breakdown here. */
 export function qoderPromptUsage(value) {
+  if (value && !Object.hasOwn(value, 'inputTokens') && !Object.hasOwn(value, 'outputTokens')) {
+    const input = value.input_tokens, output = value.output_tokens
+    value = { inputTokens: input, outputTokens: output,
+      totalTokens: value.total_tokens ?? (Number.isSafeInteger(input) && Number.isSafeInteger(output) ? input + output : undefined) }
+  }
   if (
     !value ||
     !['inputTokens', 'outputTokens', 'totalTokens'].every(
@@ -50,4 +56,9 @@ export function qoderPromptUsage(value) {
   )
     return
   return { inputTokens: value.inputTokens, outputTokens: value.outputTokens, totalTokens: value.totalTokens }
+}
+
+export async function forkNativeQoder(config, io) {
+  const { forkNativeAcp } = await import('./native-acp.mjs')
+  return forkNativeAcp(config, io, qoderAcpArgv(config))
 }

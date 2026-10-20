@@ -77,7 +77,12 @@ function textParts(parts) {
 /** Shared wire subset verified separately against OpenCode OpenAPI and MiMo 0.1.15 SDK. */
 export async function runNativeSessionHttp(original, io, cli) {
   if (!['plan', 'accept-edits'].includes(original.mode)) throw new Error('原生 HTTP 权限模式无效')
-  const userID = `msg_${randomBytes(18).toString('hex')}`
+  // MiMo 0.1.15 Identifier.create uses g + 8-byte (milliseconds * 4096 +
+  // counter) + 9 base62 characters. Its prompt loop compares message IDs to
+  // detect an already answered user; random hex IDs sort before old replies.
+  const userID = cli === 'mimo'
+    ? `msg_g${(BigInt(Date.now()) * 4096n).toString(16).padStart(16, '0')}${Array.from(randomBytes(9), (byte) => '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'[byte % 62]).join('')}`
+    : `msg_${randomBytes(18).toString('hex')}`
   let contextRelay
   let config, selected, limit, server
   try {
@@ -424,7 +429,8 @@ export async function runNativeSessionHttp(original, io, cli) {
       sessionID = session.id
     }
     io.session(sessionID, config.preference.model)
-    contextRelay?.bind(sessionID, userID, config.prompt)
+    const inputParts = await nativeAttachmentInput('http', config.prompt, config.attachments, io.signal)
+    contextRelay?.bind(sessionID, userID, inputParts[0].text)
     if (initialSession) emitSessionUsage(initialSession)
     else await readSessionUsage()
     stream = await openSse(server.base, `/event${query}`, {
@@ -444,7 +450,7 @@ export async function runNativeSessionHttp(original, io, cli) {
       model: selected,
       agent: config.mode === 'plan' ? 'plan' : 'build',
       ...(config.preference.effort === 'default' ? {} : { variant: config.preference.effort }),
-      parts: [{ type: 'text', text: config.prompt }],
+      parts: inputParts,
     })
     if (accepted !== undefined) throw new Error('原生 HTTP 没有返回预期的任务受理回执')
     await Promise.race([
@@ -520,4 +526,29 @@ export async function runNativeSessionHttp(original, io, cli) {
       finally { await contextRelay?.close() }
     }
   }
+}
+import { nativeAttachmentInput } from './native-attachments.mjs'
+
+/** OpenCode and MiMo SDK SessionForkData, independently verified on this machine. */
+export async function forkNativeSessionHttp(config, io, cli) {
+  const server = await startSessionServer(config, io, cli)
+  const signal = io.signal
+  const request = (path, method, body) => httpJson(server.base, path, {
+    method, body, headers: server.headers, signal, limit: httpLimits(config),
+  })
+  const query = `?directory=${encodeURIComponent(config.project)}`
+  try {
+    const path = `/session/${encodeURIComponent(config.conversationId)}`
+    if (config.forkOperation === 'delete') {
+      await request(path + query, 'DELETE')
+      io.result('SUCCESS', '')
+      return
+    }
+    const result = await request(path + '/fork' + query, 'POST',
+      config.forkAt?.messageId ? { messageID: config.forkAt.messageId } : {})
+    if (!string(result?.id) || result.id === config.conversationId)
+      throw new Error('原生 HTTP 分支回执没有新的会话 ID')
+    io.native({ type: 'cliworker.fork_created', id: result.id })
+    io.result('SUCCESS', '')
+  } finally { await closeServer(server.managed) }
 }

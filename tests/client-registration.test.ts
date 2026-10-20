@@ -130,18 +130,27 @@ function fixture(hasOpenSection = true) {
 
 it('registers and releases native commands only when their optional services are available', () => {
   const f = fixture()
-  const unregister = vi.fn()
+  const unregisterAttachments = vi.fn()
+  const unregisterCommands = vi.fn()
   f.ctx.sessions = {}
-  f.ctx.inputTriggers = { registerSource: vi.fn(() => unregister) }
+  f.ctx.inputTriggers = { registerSource: vi.fn()
+    .mockReturnValueOnce(unregisterAttachments)
+    .mockReturnValueOnce(unregisterCommands) }
   f.ctx.commandUi = {}
   apply(f.ctx)
-  expect(f.ctx.inputTriggers.registerSource).toHaveBeenCalledOnce()
+  expect(f.ctx.inputTriggers.registerSource).toHaveBeenCalledTimes(2)
   expect(f.ctx.inputTriggers.registerSource.mock.calls[0][0]).toMatchObject({
+    trigger: '@',
+    name: 'cliworker-selected-files',
+    codec: { serialize: expect.any(Function) },
+  })
+  expect(f.ctx.inputTriggers.registerSource.mock.calls[1][0]).toMatchObject({
     trigger: '/',
     name: 'cliworker-settings',
   })
   f.dispose()
-  expect(unregister).toHaveBeenCalledOnce()
+  expect(unregisterAttachments).toHaveBeenCalledOnce()
+  expect(unregisterCommands).toHaveBeenCalledOnce()
 })
 
 it('declares the session projection service needed by the native child data attachment', () => {

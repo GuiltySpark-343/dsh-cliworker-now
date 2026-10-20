@@ -1,4 +1,5 @@
 import { PassThrough } from 'node:stream'
+import { StringDecoder } from 'node:string_decoder'
 import { fileURLToPath } from 'node:url'
 import type { SubprocessHandle, SubprocessOutcome, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import type { ProcessBackend } from './process.ts'
@@ -61,9 +62,10 @@ export async function spawnManagedAgent(
   spec.signal?.addEventListener('abort', abort, { once: true })
   if (spec.signal?.aborted) terminate()
   void (async () => {
+    const decoder = new StringDecoder('utf8')
     try {
       for await (const chunk of terminal.output) {
-        pending += String(chunk)
+        pending += decoder.write(chunk)
         let end: number
         while ((end = pending.indexOf('\n')) >= 0) {
           const text = pending.slice(0, end).trim()
@@ -83,6 +85,7 @@ export async function spawnManagedAgent(
         }
         if (pending.length > 2_097_152) throw new Error('CLI bridge frame too large')
       }
+      pending += decoder.end()
       if (!exited) {
         stdout.end()
         stderr.end()

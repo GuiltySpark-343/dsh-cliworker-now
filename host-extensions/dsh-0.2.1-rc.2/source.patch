@@ -218,7 +218,7 @@ index fd145b6324df5e5804fa675ee3e2616f90381723..cf86e894eb0e38f30e6a3d51f0943baf
        <span className={css.runningDivider} aria-hidden="true" />
        <span className={css.runningContent}>
 diff --git a/packages/client/ui-chat/src/client/chat/StatsPills.tsx b/packages/client/ui-chat/src/client/chat/StatsPills.tsx
-index 838effb768a02f6230c8bcbe6593a5bd0d1870c3..10bfa18c1d96ed4203b8901e3fb2e2b0239033d6 100644
+index 838effb768a02f6230c8bcbe6593a5bd0d1870c3..64c8e03bd75fa7120149611ee6c5a984c55d6401 100644
 --- a/packages/client/ui-chat/src/client/chat/StatsPills.tsx
 +++ b/packages/client/ui-chat/src/client/chat/StatsPills.tsx
 @@ -4,6 +4,8 @@
@@ -239,28 +239,38 @@ index 838effb768a02f6230c8bcbe6593a5bd0d1870c3..10bfa18c1d96ed4203b8901e3fb2e2b0
  import { formatCacheHitPercent, formatExactTokens, formatTokens } from './token-format.ts'
  import { MEASURE_STYLE, useStatDialog } from './stat-dialog.ts'
  import css from './StatsPills.module.css'
-@@ -230,6 +234,20 @@ function DialogPill({ stat, icon, label, ariaLabel, title, titleValue, children
+@@ -189,7 +193,7 @@ function PlainPill({ stat, icon, label }: PillContent) {
+ function DialogPill({ stat, icon, label, ariaLabel, title, titleValue, children }: PillContent & {
+   ariaLabel: string
+   title: string
+-  titleValue?: string
++  titleValue?: string | undefined
+   children: ReactNode
+ }) {
+   const { open, setOpen, rootRef, panelRef, pos } = useStatDialog()
+@@ -230,6 +234,21 @@ function DialogPill({ stat, icon, label, ariaLabel, title, titleValue, children
    )
  }
  
 +
 +type UsageWithAccounting = TokenUsageProjection & {
++  externalCredits?: number
 +  externalUsage?: ExternalUsageReport
 +  externalScope?: 'run' | 'reported' | 'session'
 +  externalRunId?: string
 +  externalIsPrevious?: boolean
 +}
-+function UnknownPill({ kind, availability, t }: { kind: 'statistics' | 'tokenUsage'; availability: TelemetryUnavailable; t: Translate }) {
++function UnknownPill({ kind, t }: { kind: 'statistics' | 'tokenUsage'; availability: TelemetryUnavailable; t: Translate }) {
 +  const title = t(kind === 'statistics' ? 'stats.dialog.title' : 'stats.dialog.usageTitle')
-+  return <DialogPill stat={kind === 'statistics' ? 'activity' : 'usage'} icon={kind === 'statistics' ? <IconGaugeOutlineRegular /> : <IconDatabaseOutlineRegular />} label={t(`stats.unknown.${kind}`)} ariaLabel={t(`stats.unknown.${kind}`)} title={title}>
-+    <p>{t(`stats.availability.${availability.state}`)}</p><p>{t(`stats.availability.${availability.reason}`)}</p>
++  return <DialogPill stat={kind === 'statistics' ? 'activity' : 'usage'} icon={kind === 'statistics' ? <IconGaugeOutlineRegular /> : <IconDatabaseOutlineRegular />} label={t(`stats.unknown.${kind}`)} ariaLabel={t(`stats.unknown.${kind}`)} title={title} titleValue="—">
++    {null}
 +  </DialogPill>
 +}
 +
  /**
   * Turn and step counts with whole-session speed, opening the time and speed
   * dialog; Compact keeps only the speed reading.
-@@ -237,6 +255,9 @@ function DialogPill({ stat, icon, label, ariaLabel, title, titleValue, children
+@@ -237,6 +256,9 @@ function DialogPill({ stat, icon, label, ariaLabel, title, titleValue, children
  export const ActivityPill = memo(function ActivityPill({ useChat, useProjection, usePerformanceUsage, t }: StatPillProps) {
    const mode = usePerformanceUsage(value => value)
    const stats = useSessionStats(useChat, useProjection)
@@ -270,15 +280,7 @@ index 838effb768a02f6230c8bcbe6593a5bd0d1870c3..10bfa18c1d96ed4203b8901e3fb2e2b0
    const speed = stats.decodeMs > 0 ? decodeSpeed(stats, t) : null
    const icon = <IconGaugeOutlineRegular />
    if (mode === 'compact') return speed === null ? null : <PlainPill stat="activity" icon={icon} label={speed} />
-@@ -248,6 +269,7 @@ export const ActivityPill = memo(function ActivityPill({ useChat, useProjection,
-   if (stats.llmMs <= 0 && stats.toolMs <= 0 && stats.ttftSteps <= 0 && speed === null) return <PlainPill {...content} />
-   return (
-     <DialogPill {...content} ariaLabel={speed === null ? counts : `${counts} · ${speed}`} title={t('stats.dialog.title')}>
-+      {availability?.statisticsBasis === 'harness-cli-adapter' && <p>{t('stats.dialog.cliCallBasis')}</p>}
-       <dl className={dialogCss.details} data-session-stats-details>
-         {stats.llmMs > 0 && (
-           <>
-@@ -281,25 +303,39 @@ export const ActivityPill = memo(function ActivityPill({ useChat, useProjection,
+@@ -281,25 +303,54 @@ export const ActivityPill = memo(function ActivityPill({ useChat, useProjection,
  /** Whole-log token total and cache hit; Compact keeps only the cache hit. */
  export const UsagePill = memo(function UsagePill({ useProjection, usePerformanceUsage, t }: StatPillProps) {
    const mode = usePerformanceUsage(value => value)
@@ -288,6 +290,21 @@ index 838effb768a02f6230c8bcbe6593a5bd0d1870c3..10bfa18c1d96ed4203b8901e3fb2e2b0
 +  const unknown = telemetryUnavailable(availability?.tokenUsage)
 +  const hasExternal = usage !== undefined && Object.hasOwn(usage, 'externalUsage')
 +  const external = hasExternal ? externalUsageReport(usage.externalUsage) : undefined
++  const credits = typeof usage?.externalCredits === 'number' && Number.isFinite(usage.externalCredits) && usage.externalCredits >= 0
++    ? usage.externalCredits : undefined
++  const creditsText = credits === undefined ? undefined : t('stats.providerCredits', {
++    credits: credits > 0 && credits < 0.0001 ? '<0.0001' : credits.toLocaleString(undefined, { maximumFractionDigits: 4 }),
++  })
++  if (credits !== undefined || availability?.usageUnit === 'credits') {
++    const title = t('stats.dialog.creditUsageTitle')
++    const label = creditsText ?? t('stats.unknown.creditUsage')
++    return <DialogPill stat="usage" icon={<IconDatabaseOutlineRegular />} label={label} ariaLabel={label} title={title} titleValue={creditsText}>
++      {credits !== undefined ? <dl className={dialogCss.details} data-session-stats-usage>
++        <dt>{t('stats.dialog.creditsSource')}</dt><dd>{t('stats.dialog.qoderRunCredits')}</dd>
++        <dt>{t('stats.dialog.credits')}</dt><dd>{credits.toLocaleString(undefined, { maximumFractionDigits: 12 })}</dd>
++      </dl> : <dl className={dialogCss.details}><dt>{t('stats.dialog.credits')}</dt><dd>—</dd></dl>}
++    </DialogPill>
++  }
    // Gated on actual token activity: a session whose steps all settled without
    // billing (e.g. every request failed) shows no usage pill.
 -  if (usage === undefined || (billedInputTokens(usage) === 0 && usage.outputTokens === 0)) return null
@@ -326,7 +343,7 @@ index 838effb768a02f6230c8bcbe6593a5bd0d1870c3..10bfa18c1d96ed4203b8901e3fb2e2b0
        title={t('stats.dialog.usageTitle')}
        titleValue={exactCount(total, t)}
      >
-@@ -309,12 +345,14 @@ export const UsagePill = memo(function UsagePill({ useProjection, usePerformance
+@@ -309,12 +360,14 @@ export const UsagePill = memo(function UsagePill({ useProjection, usePerformance
            session that never wrote cache drops the row, as the per-turn panel
            drops its absent fields. */}
        <dl className={dialogCss.details} data-session-stats-usage>
@@ -343,16 +360,14 @@ index 838effb768a02f6230c8bcbe6593a5bd0d1870c3..10bfa18c1d96ed4203b8901e3fb2e2b0
          <dt>{t('message.turnUsage.input')}</dt>
          <dd>{exactCount(usage.uncachedInputTokens, t)}</dd>
          <dt>{t('message.turnUsage.cacheRead')}</dt>
-@@ -327,7 +365,9 @@ export const UsagePill = memo(function UsagePill({ useProjection, usePerformance
+@@ -327,6 +380,7 @@ export const UsagePill = memo(function UsagePill({ useProjection, usePerformance
          )}
          <dt>{t('message.turnUsage.output')}</dt>
          <dd>{exactCount(usage.outputTokens, t)}</dd>
 +        </>}
        </dl>
-+      {cacheUnknown && <p>{t('stats.cacheHitUnavailable')}</p>}
        {/* jscpd:ignore-end */}
      </DialogPill>
-   )
 diff --git a/packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx b/packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx
 index 9dedb81cee057484bd6a0c28c7b7840bfad91c78..9f8c453d6e8e0eee7e8010a70309c8934f59b481 100644
 --- a/packages/client/ui-chat/src/client/chat/TurnProcessNodeView.tsx
@@ -373,7 +388,7 @@ index 9dedb81cee057484bd6a0c28c7b7840bfad91c78..9f8c453d6e8e0eee7e8010a70309c893
          aria-expanded={turnProcess.hasContent ? open : undefined}
          onClick={(event) => {
 diff --git a/packages/client/ui-chat/src/client/chat/TurnTailNodeView.tsx b/packages/client/ui-chat/src/client/chat/TurnTailNodeView.tsx
-index c29b831ce8153b4470afe33c2b40df0efae5a3be..cd6876cc22dc86c3db507e11bb398e53216c2025 100644
+index c29b831ce8153b4470afe33c2b40df0efae5a3be..4270975b1ab985701cb530c82e5f40d589b51576 100644
 --- a/packages/client/ui-chat/src/client/chat/TurnTailNodeView.tsx
 +++ b/packages/client/ui-chat/src/client/chat/TurnTailNodeView.tsx
 @@ -1,4 +1,5 @@
@@ -394,7 +409,7 @@ index c29b831ce8153b4470afe33c2b40df0efae5a3be..cd6876cc22dc86c3db507e11bb398e53
    & PropsRenderSlots<'conversation.chat.turnTail' | 'conversation.chat.assistant-actions'>
    & InjectFace<PerformanceUsageInjected>
  
-@@ -26,11 +29,13 @@ function lastContent(snapshot: ChatSnapshot, turn: number, skipWarning: boolean)
+@@ -26,11 +29,14 @@ function lastContent(snapshot: ChatSnapshot, turn: number, skipWarning: boolean)
  
  /** Turn-local actions and feature tail over the Location index, independent of Assistant placement. */
  export const TurnTailNodeView = memo(function TurnTailNodeView({
@@ -405,28 +420,30 @@ index c29b831ce8153b4470afe33c2b40df0efae5a3be..cd6876cc22dc86c3db507e11bb398e53
    const forkAllowed = useAccess('session/fork')
    const data = node.data
 +  const externalUsage = useProjection('externalTurnUsage')
++  const creditUsage = useProjection('telemetryAvailability')?.usageUnit === 'credits'
 +  const accounting = resolveExternalTurnUsage(data.turn, data.tokenUsage, externalUsage)
    const hasLaterChatNode = useChat(snapshot =>
      (lastContent(snapshot, data.turn, true)?.anchorSeq ?? -1) > (data.closing?.finalNode.seq ?? data.seq))
    const endsWithResponse = useChat((snapshot) => {
-@@ -71,8 +76,10 @@ export const TurnTailNodeView = memo(function TurnTailNodeView({
+@@ -71,8 +77,11 @@ export const TurnTailNodeView = memo(function TurnTailNodeView({
          branchUnavailable={data.branchUnavailable || hasLaterChatNode}
          className={css.actions}
          extraActions={assistantActions}
 -        usageAction={detailed && data.tokenUsage !== undefined
 -          ? <TurnUsagePanel usage={data.tokenUsage} t={t} />
-+        usageAction={detailed && (accounting.externalUnknown || accounting.usage !== undefined || accounting.externalUsage !== undefined)
-+          ? <TurnUsagePanel {...accounting.externalUnknown ? { unavailable: true }
++        usageAction={detailed && (accounting.externalUnknown || accounting.usageUnit === 'credits' || accounting.usage !== undefined || accounting.externalUsage !== undefined)
++          ? <TurnUsagePanel {...accounting.externalUnknown || accounting.usageUnit === 'credits' ? { unavailable: true }
 +              : accounting.externalUsage !== undefined ? { externalUsage: accounting.externalUsage } : { usage: accounting.usage! }}
++              creditsBased={creditUsage || accounting.usageUnit === 'credits'} credits={accounting.credits} displayRoutes={accounting.displayRoutes}
 +              {...accounting.external ? { sourceLabel: accounting.label ?? t('message.turnUsage.externalRun') } : {}} t={t} />
            : null}
          t={t}
        />
 diff --git a/packages/client/ui-chat/src/client/chat/TurnUsagePanel.tsx b/packages/client/ui-chat/src/client/chat/TurnUsagePanel.tsx
-index 460d1092a2f64f0869ff81a649b6401bfd5a6572..0b46042da9a0614e1b4ba1a57de6c6e800f41c1b 100644
+index 460d1092a2f64f0869ff81a649b6401bfd5a6572..de27c3db51b17ca5bbf0a305e8d249c53d3a5b53 100644
 --- a/packages/client/ui-chat/src/client/chat/TurnUsagePanel.tsx
 +++ b/packages/client/ui-chat/src/client/chat/TurnUsagePanel.tsx
-@@ -4,16 +4,24 @@ import { createPortal } from 'react-dom'
+@@ -4,16 +4,27 @@ import { createPortal } from 'react-dom'
  import { IconDatabaseOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
  import type { TurnTokenUsage } from '../contract/chat-nodes.ts'
  import type { ChatViewSlotProps } from '../contract/slots.ts'
@@ -442,6 +459,9 @@ index 460d1092a2f64f0869ff81a649b6401bfd5a6572..0b46042da9a0614e1b4ba1a57de6c6e8
 +interface TurnUsagePanelBase {
 +  /** Exact external execution accounting; never a model-provider identity. */
 +  sourceLabel?: string
++  creditsBased?: boolean
++  credits?: number | undefined
++  displayRoutes?: readonly string[] | undefined
    /** The owning view's locale seat, passed down as a plain prop. */
    t: ChatViewSlotProps['t']
  }
@@ -453,7 +473,7 @@ index 460d1092a2f64f0869ff81a649b6401bfd5a6572..0b46042da9a0614e1b4ba1a57de6c6e8
  
  function formatCompactCount(value: number, t: ChatViewSlotProps['t']): string {
    return t('message.turnUsage.count', { count: formatTokens(value, t) })
-@@ -28,14 +36,25 @@ function formatExactCount(value: number, t: ChatViewSlotProps['t']): string {
+@@ -28,14 +39,31 @@ function formatExactCount(value: number, t: ChatViewSlotProps['t']): string {
   * @param props - Turn usage buckets and locale seat.
   * @returns The trigger and, while open, its portaled dialog anchored above the trigger.
   */
@@ -480,28 +500,45 @@ index 460d1092a2f64f0869ff81a649b6401bfd5a6572..0b46042da9a0614e1b4ba1a57de6c6e8
 +  const cacheUnknown = report !== undefined ? ratio === undefined
 +    : sourceLabel !== undefined && usage !== undefined && usage.cacheReadTokens === undefined
 +  const total = totalTokens === undefined ? undefined : formatCompactCount(totalTokens, t)
-+  const routes = hasReport ? '' : usage?.routes?.map(route => `${route.provider}/${route.model}`).join(', ') ?? ''
++  const credits = typeof props.credits === 'number' && Number.isFinite(props.credits) && props.credits >= 0 ? props.credits : undefined
++  const creditUsage = props.creditsBased === true
++  const creditText = t('stats.providerCredits', { credits: credits === undefined ? '—'
++    : credits > 0 && credits < 0.0001 ? '<0.0001' : credits.toLocaleString(undefined, { maximumFractionDigits: 4 }) })
++  const title = t(creditUsage ? 'stats.dialog.creditUsageTitle' : 'message.turnUsage.title')
++  const routes = props.displayRoutes?.join(', ') ?? (hasReport ? '' : usage?.routes?.filter(route =>
++    route.provider !== 'cliworker-native').map(route => `${route.provider}/${route.model}`).join(', ') ?? '')
  
    return (
      <span ref={rootRef} className={css.root}>
-@@ -47,7 +66,7 @@ export function TurnUsagePanel({ usage, t }: TurnUsagePanelProps) {
+@@ -47,37 +75,48 @@ export function TurnUsagePanel({ usage, t }: TurnUsagePanelProps) {
          onClick={() => { setOpen(!open) }}
        >
          <IconDatabaseOutlineRegular />
 -        <span className={css.label}>{t('message.turnUsage.consumed', { total })}</span>
-+        <span className={css.label}>{unavailable ? t('message.turnUsage.unknown') : t('message.turnUsage.consumed', { total: total! })}</span>
++        <span className={css.label}>{creditUsage ? `${t('stats.dialog.creditUsageTitle')} ${creditText}`
++          : unavailable ? t('message.turnUsage.unknown') : t('message.turnUsage.consumed', { total: total! })}</span>
        </button>
        {open && createPortal(
          <div
-@@ -62,22 +81,30 @@ export function TurnUsagePanel({ usage, t }: TurnUsagePanelProps) {
+           ref={panelRef}
+           className={dialogCss.panel}
+           role="dialog"
+-          aria-label={t('message.turnUsage.title')}
++          aria-label={title}
+           style={pos ?? MEASURE_STYLE}
+         >
+           <div className={dialogCss.title}>
+             <span className={dialogCss.titleLabel}>
                <IconDatabaseOutlineRegular />
-               {t('message.turnUsage.title')}
+-              {t('message.turnUsage.title')}
++              {title}
              </span>
 -            <span className={dialogCss.titleValue}>{formatExactCount(usage.totalTokens, t)}</span>
-+            {totalTokens !== undefined && <span className={dialogCss.titleValue}>{formatExactCount(totalTokens, t)}</span>}
++            <span className={dialogCss.titleValue}>{creditUsage
++              ? t('stats.providerCredits', { credits: credits?.toLocaleString(undefined, { maximumFractionDigits: 12 }) ?? '—' })
++              : totalTokens === undefined ? '—' : formatExactCount(totalTokens, t)}</span>
            </div>
            <div className={dialogCss.titleRule} aria-hidden />
-+          {unavailable ? <p>{t('message.turnUsage.unavailable')}</p> : <>
            <dl className={dialogCss.details} data-turn-usage-details>
 +            {sourceLabel !== undefined && (
 +              <>
@@ -516,6 +553,7 @@ index 460d1092a2f64f0869ff81a649b6401bfd5a6572..0b46042da9a0614e1b4ba1a57de6c6e8
                </>
              )}
 -            {cacheHit !== null && (
++            {creditUsage ? <><dt>{t('stats.dialog.credits')}</dt><dd>{credits?.toLocaleString(undefined, { maximumFractionDigits: 12 }) ?? '—'}</dd></> : <>
 +            {(cacheHit !== null || cacheUnknown) && (
                <>
                  <dt>{t('message.turnUsage.cacheHit')}</dt>
@@ -527,17 +565,28 @@ index 460d1092a2f64f0869ff81a649b6401bfd5a6572..0b46042da9a0614e1b4ba1a57de6c6e8
              <dt>{t('message.turnUsage.input')}</dt>
              <dd>{formatExactCount(usage.uncachedInputTokens, t)}</dd>
              {usage.cacheReadTokens !== undefined && (
-@@ -101,7 +128,10 @@ export function TurnUsagePanel({ usage, t }: TurnUsagePanelProps) {
+@@ -101,6 +140,8 @@ export function TurnUsagePanel({ usage, t }: TurnUsagePanelProps) {
                  </span>
                )}
              </dd>
 +            </>}
++            </>}
            </dl>
-+          {cacheUnknown && <p>{t('stats.cacheHitUnavailable')}</p>}
-+          </>}
          </div>,
          document.body,
-       )}
+diff --git a/packages/client/ui-chat/src/client/chat/stat-dialog.module.css b/packages/client/ui-chat/src/client/chat/stat-dialog.module.css
+index 4c5de52c51153962cf3b627498f424f5526dec3b..0f3fc47363e6fbb578ef5a0844bf98cb43000d48 100644
+--- a/packages/client/ui-chat/src/client/chat/stat-dialog.module.css
++++ b/packages/client/ui-chat/src/client/chat/stat-dialog.module.css
+@@ -17,7 +17,7 @@
+   width: max-content;
+   min-width: min(300px, calc(100vw - 24px));
+   max-width: min(440px, calc(100vw - 24px));
+-  padding: 16px;
++  padding: 12px;
+   border: 0;
+   border-radius: var(--dsw-radius-lg);
+   background: var(--dsw-specific-menu);
 diff --git a/packages/client/ui-chat/src/client/contract/external-status.ts b/packages/client/ui-chat/src/client/contract/external-status.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..a8cadb9bc0b0e9ba140b254b537e6440149ffb88
@@ -753,10 +802,10 @@ index 0000000000000000000000000000000000000000..9673e2681db9024c666e95d5de34e616
 +}
 diff --git a/packages/client/ui-chat/src/client/contract/external-turn-usage.ts b/packages/client/ui-chat/src/client/contract/external-turn-usage.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..57730f00dfb984697a31f8f3aa7af738d3b3b875
+index 0000000000000000000000000000000000000000..8c19ad314dd930ad904a15f1c031215f71260e45
 --- /dev/null
 +++ b/packages/client/ui-chat/src/client/contract/external-turn-usage.ts
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,88 @@
 +import type { TurnTokenUsage } from './chat-nodes.ts'
 +import { externalUsageReport, type ExternalUsageReport } from './external-usage.ts'
 +
@@ -768,10 +817,13 @@ index 0000000000000000000000000000000000000000..57730f00dfb984697a31f8f3aa7af738
 +  readonly runIds: readonly string[]
 +  /** Public accounting source, independent of model-provider attribution. */
 +  readonly label?: string
++  readonly displayRoutes?: readonly string[]
 +}
 +export type ExternalTurnUsage = ExternalTurnUsageIdentity & (
 +  { readonly usage: Omit<TurnTokenUsage, 'routes'>; readonly externalUsage?: never }
 +  | { readonly usage?: never; readonly externalUsage: ExternalUsageReport }
++  | { readonly usage?: never; readonly externalUsage?: never; readonly usageUnit: 'credits'; readonly credits?: number }
++  | { readonly usage?: never; readonly externalUsage?: never; readonly nativeUsage: true }
 +)
 +
 +/** Missing keys retain normal native accounting; null explicitly means unknown. */
@@ -791,7 +843,8 @@ index 0000000000000000000000000000000000000000..57730f00dfb984697a31f8f3aa7af738
 +  turn: number,
 +  native: TurnTokenUsage | undefined,
 +  projection: ExternalTurnUsageProjection | undefined,
-+): { usage: TurnTokenUsage | undefined; externalUsage?: ExternalUsageReport; label?: string; external?: true; externalUnknown?: true } {
++): { usage: TurnTokenUsage | undefined; externalUsage?: ExternalUsageReport; label?: string; external?: true; externalUnknown?: true;
++  usageUnit?: 'credits'; credits?: number; displayRoutes?: readonly string[] } {
 +  if (projection === undefined || !Object.hasOwn(projection, String(turn))) return { usage: native }
 +  const supplied = projection[String(turn)]
 +  // Only an exact, explicit null is a bound unknown bill. Missing keys still
@@ -801,13 +854,25 @@ index 0000000000000000000000000000000000000000..57730f00dfb984697a31f8f3aa7af738
 +    !Array.isArray(supplied.runIds) || supplied.runIds.length === 0 ||
 +    supplied.runIds.some(id => typeof id !== 'string' || id.length === 0 || id.length > 512) ||
 +    new Set(supplied.runIds).size !== supplied.runIds.length) return { usage: undefined }
++  const displayRoutes = Array.isArray(supplied.displayRoutes) && supplied.displayRoutes.length > 0 && supplied.displayRoutes.length <= 64 &&
++    supplied.displayRoutes.every(route => typeof route === 'string' && route.length > 0 && route.length <= 1200 &&
++      !/[\x00-\x1f\x7f]/.test(route) && !route.startsWith('cliworker-native/')) ? { displayRoutes: supplied.displayRoutes } : {}
 +  const hasUsage = Object.hasOwn(supplied, 'usage'), hasReport = Object.hasOwn(supplied, 'externalUsage')
++  if ('usageUnit' in supplied && supplied.usageUnit === 'credits') {
++    if (hasUsage || hasReport || ('nativeUsage' in supplied) || (supplied.credits !== undefined &&
++      (typeof supplied.credits !== 'number' || !Number.isFinite(supplied.credits) || supplied.credits < 0))) return { usage: undefined }
++    return { usage: undefined, external: true, usageUnit: 'credits', ...displayRoutes,
++      ...(supplied.credits === undefined ? {} : { credits: supplied.credits }) }
++  }
++  if ('nativeUsage' in supplied && supplied.nativeUsage === true) {
++    return hasUsage || hasReport || !displayRoutes.displayRoutes ? { usage: undefined } : { usage: native, ...displayRoutes }
++  }
 +  if (hasUsage === hasReport) return { usage: undefined }
 +  const label = typeof supplied.label === 'string' && supplied.label.length > 0 && supplied.label.length <= 120
 +    ? { label: supplied.label } : {}
 +  if (hasReport) {
 +    const report = externalUsageReport(supplied.externalUsage)
-+    return report === undefined ? { usage: undefined } : { usage: undefined, external: true, externalUsage: report, ...label }
++    return report === undefined ? { usage: undefined } : { usage: undefined, external: true, externalUsage: report, ...label, ...displayRoutes }
 +  }
 +  const usage = supplied.usage
 +  if (!usage || !count(usage.uncachedInputTokens) || !count(usage.outputTokens) || !count(usage.totalTokens))
@@ -827,7 +892,7 @@ index 0000000000000000000000000000000000000000..57730f00dfb984697a31f8f3aa7af738
 +    ...(usage.cacheReadTokens === undefined ? {} : { cacheReadTokens: usage.cacheReadTokens }),
 +    ...(usage.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: usage.cacheWriteTokens }),
 +    ...(usage.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
-+  }, ...label }
++  }, ...label, ...displayRoutes }
 +}
 diff --git a/packages/client/ui-chat/src/client/contract/external-usage.ts b/packages/client/ui-chat/src/client/contract/external-usage.ts
 new file mode 100644
@@ -926,15 +991,21 @@ index 275d76b96b6cc5caa8034ace334e517ac1e824dd..e2748817f140e97e09a51ed62b157ce1
 +
 +export type { ExternalTurnAnswer, ExternalTurnAnswerProjection } from './contract/external-turn-answer.ts'
 diff --git a/packages/client/ui-chat/src/client/locale.ts b/packages/client/ui-chat/src/client/locale.ts
-index 48cfcc8e132c319199cf0fb95c456ab4e32a5211..ecf95f550ed63ccd8498b3bd3c222429cf887fd4 100644
+index 48cfcc8e132c319199cf0fb95c456ab4e32a5211..c99676c91bbc6e4e8cb315d055aeaabd0e561383 100644
 --- a/packages/client/ui-chat/src/client/locale.ts
 +++ b/packages/client/ui-chat/src/client/locale.ts
-@@ -74,9 +74,28 @@ export const zh = {
+@@ -74,9 +74,34 @@ export const zh = {
    'duration.compactSeconds': '{seconds}秒',
    'duration.compactMinutes': '{minutes}分{seconds}秒',
    'duration.milliseconds': '{milliseconds}毫秒',
 +  'stats.unknown.statistics': '会话统计 —',
 +  'stats.unknown.tokenUsage': 'Token 用量 —',
++  'stats.providerCredits': '{credits} 积分',
++  'stats.unknown.creditUsage': '积分用量 —',
++  'stats.dialog.creditUsageTitle': '积分用量',
++  'stats.dialog.credits': '积分',
++  'stats.dialog.creditsSource': '积分来源',
++  'stats.dialog.qoderRunCredits': 'Qoder 本轮原生请求',
 +  'stats.availability.pending': '等待数据',
 +  'stats.availability.unavailable': '数据不可用',
 +  'stats.availability.awaiting-data': '等待首个已确认的数据回执。',
@@ -958,7 +1029,7 @@ index 48cfcc8e132c319199cf0fb95c456ab4e32a5211..ecf95f550ed63ccd8498b3bd3c222429
    'stats.dialog.usageTitle': 'Token 用量',
    'stats.dialog.llmTime': '模型用时',
    'stats.dialog.toolTime': '工具调用用时',
-@@ -176,9 +195,22 @@ export const zh = {
+@@ -176,9 +201,22 @@ export const zh = {
    'message.tokensPerSecond': '{tps} tok/s',
    'message.turnUsage.title': '本轮用量',
    'message.turnUsage.consumed': '用量 {total}',
@@ -981,12 +1052,18 @@ index 48cfcc8e132c319199cf0fb95c456ab4e32a5211..ecf95f550ed63ccd8498b3bd3c222429
    'message.turnUsage.cacheRead': '缓存读取',
    'message.turnUsage.cacheWrite': '缓存写入',
    'message.turnUsage.output': '输出',
-@@ -272,9 +304,28 @@ export const en = {
+@@ -272,9 +310,34 @@ export const en = {
    'duration.compactSeconds': '{seconds}s',
    'duration.compactMinutes': '{minutes}m{seconds}s',
    'duration.milliseconds': '{milliseconds}ms',
 +  'stats.unknown.statistics': 'Session statistics —',
 +  'stats.unknown.tokenUsage': 'Token usage —',
++  'stats.providerCredits': '{credits} credits',
++  'stats.unknown.creditUsage': 'Credits usage —',
++  'stats.dialog.creditUsageTitle': 'Credits usage',
++  'stats.dialog.credits': 'Credits',
++  'stats.dialog.creditsSource': 'Credits source',
++  'stats.dialog.qoderRunCredits': 'Qoder native requests in this run',
 +  'stats.availability.pending': 'Awaiting data',
 +  'stats.availability.unavailable': 'Data unavailable',
 +  'stats.availability.awaiting-data': 'Waiting for the first confirmed data receipt.',
@@ -1010,7 +1087,7 @@ index 48cfcc8e132c319199cf0fb95c456ab4e32a5211..ecf95f550ed63ccd8498b3bd3c222429
    'stats.dialog.usageTitle': 'Token usage',
    'stats.dialog.llmTime': 'LLM time',
    'stats.dialog.toolTime': 'Tool time',
-@@ -374,9 +425,22 @@ export const en = {
+@@ -374,9 +437,22 @@ export const en = {
    'message.tokensPerSecond': '{tps} tok/s',
    'message.turnUsage.title': 'Turn usage',
    'message.turnUsage.consumed': 'Usage {total}',
@@ -1175,10 +1252,10 @@ index 241a0a204863e2d77b24715642fc6f57c8b10d36..ac543c33c868eee619ff5d5b080482f0
  })
 diff --git a/packages/client/ui-chat/tests/external-status.client.spec.tsx b/packages/client/ui-chat/tests/external-status.client.spec.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..4d3de4ca357990095537952e1767b9a6a98e09e6
+index 0000000000000000000000000000000000000000..e7e9f3a2855a7e0861f1c5fb422a7a6d4a0b5d25
 --- /dev/null
 +++ b/packages/client/ui-chat/tests/external-status.client.spec.tsx
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,109 @@
 +// @vitest-environment jsdom
 +// Synthetic projection fixtures; no provider or model is started.
 +import { afterEach, expect, it } from 'vitest'
@@ -1198,12 +1275,21 @@ index 0000000000000000000000000000000000000000..4d3de4ca357990095537952e1767b9a6
 +  const view = stats({ telemetryAvailability: { statisticsBasis: 'harness-cli-adapter' },
 +    sessionStats: { turns: 1, steps: 1, llmMs: 19500, toolMs: 0, ttftMs: 17900, ttftSteps: 1, decodeMs: 0, decodeTokens: 0 } })
 +  fireEvent.click(view.getByRole('button', { name: '1 轮 1 步' }))
-+  expect(view.getByRole('dialog').textContent).toContain('Harness 调用 CLI')
-+  expect(view.getByRole('dialog').textContent).toContain('CLI 启动和会话准备时间')
++  expect(view.getByRole('dialog').textContent).not.toContain('Harness 调用 CLI')
++  expect(view.getByRole('dialog').textContent).not.toContain('CLI 启动和会话准备时间')
 +})
 +const t = makeTranslate(zh, commonZh)
 +const pending = { state: 'pending', reason: 'awaiting-data' }
 +const unavailable = { state: 'unavailable', reason: 'not-reported' }
++it.each(['detailed', 'compact'])('uses the credit title while a credit receipt is unavailable (%s)', mode => {
++  const view = stats({ telemetryAvailability: { usageUnit: 'credits', tokenUsage: unavailable },
++    tokenUsage: { externalUsage: { totalTokens: 63, inputBasis: 'reported', inputTokens: 60, outputTokens: 3 } } }, mode)
++  const button = view.getByRole('button', { name: '积分用量 —' })
++  expect(button.textContent).not.toMatch(/token|tok/i)
++  fireEvent.click(button)
++  expect(view.getByRole('dialog', { name: '积分用量' }).textContent).not.toMatch(/token|tok/i)
++  expect(view.getByRole('dialog').textContent).not.toContain('当前 CLI 尚未公开')
++})
 +function stats(values: Record<string, unknown> = {}, mode = 'detailed') {
 +  const props: any = { t, usePerformanceUsage: (s: (x: string) => unknown) => s(mode),
 +    useChat: (s: (x: unknown) => unknown) => s({ legacy: { nodes: [] } }),
@@ -1213,11 +1299,11 @@ index 0000000000000000000000000000000000000000..4d3de4ca357990095537952e1767b9a6
 +it.each(['detailed', 'compact'])('keeps two unknown modules only on explicit opt-in (%s)', mode => {
 +  const view = stats({ telemetryAvailability: { statistics: pending, tokenUsage: unavailable } }, mode)
 +  fireEvent.click(view.getByRole('button', { name: '会话统计 —' }))
-+  expect(view.getByRole('dialog').textContent).toContain('等待首个已确认的数据回执')
++  expect(view.getByRole('dialog').textContent).not.toContain('等待首个已确认的数据回执')
 +  expect(view.getByRole('dialog').textContent).not.toContain('0 轮')
 +  fireEvent.click(view.getByRole('button', { name: 'Token 用量 —' }))
 +  expect(view.getAllByRole('dialog')).toHaveLength(1)
-+  expect(view.getByRole('dialog').textContent).toContain('当前 CLI 尚未公开')
++  expect(view.getByRole('dialog').textContent).not.toContain('当前 CLI 尚未公开')
 +  fireEvent.keyDown(document, { key: 'Escape' })
 +  expect(view.queryByRole('dialog')).toBeNull()
 +})
@@ -1451,10 +1537,10 @@ index 0000000000000000000000000000000000000000..e050af76d7343ba336ec4736ca4266dd
 +})
 diff --git a/packages/client/ui-chat/tests/external-turn-usage.client.spec.tsx b/packages/client/ui-chat/tests/external-turn-usage.client.spec.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..873fb7d23816ab356fbbdf984e0a6533da11df3b
+index 0000000000000000000000000000000000000000..ea0de0e0a4ee327813cf635691c733cb8193a160
 --- /dev/null
 +++ b/packages/client/ui-chat/tests/external-turn-usage.client.spec.tsx
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,133 @@
 +// @vitest-environment jsdom
 +import { afterEach, describe, expect, it } from 'vitest'
 +import { act, cleanup, fireEvent, render } from '@testing-library/react'
@@ -1476,8 +1562,8 @@ index 0000000000000000000000000000000000000000..873fb7d23816ab356fbbdf984e0a6533
 +  const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }
 +  const snapshot = () => value
 +  const useProjection = (key: string) => {
-+    expect(key).toBe('externalTurnUsage')
-+    return useSyncExternalStore(subscribe, snapshot)
++    const current = useSyncExternalStore(subscribe, snapshot)
++    return key === 'externalTurnUsage' ? current : undefined
 +  }
 +  const node = { kind: 'turn-tail', location: { kind: 'turn', turn: { turn: 4 } }, data: {
 +    turn: 4, seq: 7, tokenUsage: nativeUsage, closing: { finalNode: { seq: 6 }, blocks: [], time: 1_000 },
@@ -1495,6 +1581,28 @@ index 0000000000000000000000000000000000000000..873fb7d23816ab356fbbdf984e0a6533
 +}
 +
 +describe('optional exact external Turn accounting', () => {
++  it('shows exact turn credits and a credit unknown without copying native tokens', () => {
++    const f = fixture({ 4: { basis: 'external-run', runIds: ['synthetic-run'], usageUnit: 'credits', credits: 0.252595,
++      displayRoutes: ['qoder/未公开/qfmodel'] } }, usage)
++    fireEvent.click(f.view.getByRole('button', { name: /积分用量.*0.2526/ }))
++    const dialog = f.view.getByRole('dialog', { name: '积分用量' })
++    expect(dialog.textContent).toContain('0.252595')
++    expect(dialog.textContent).toContain('qoder/未公开/qfmodel')
++    expect(dialog.textContent).not.toMatch(/Token|tok|43/)
++    f.update({ 4: { basis: 'external-run', runIds: ['synthetic-run'], usageUnit: 'credits' } })
++    expect(dialog.textContent).not.toContain('0.252595')
++    expect(dialog.textContent).toContain('—')
++  })
++  it('keeps exact native counts but replaces the internal route using independent run metadata', () => {
++    const f = fixture({ 4: { basis: 'external-run', runIds: ['synthetic-run'], nativeUsage: true,
++      displayRoutes: ['omp/zhipu-coding-plan/glm-5.3-flash'] } },
++      { ...usage, routes: [{ provider: 'cliworker-native', model: 'worker/SYNTHETIC' }] } as typeof usage)
++    fireEvent.click(f.view.getByRole('button', { name: /43/ }))
++    const dialog = f.view.getByRole('dialog')
++    expect(dialog.textContent).toContain('omp/zhipu-coding-plan/glm-5.3-flash')
++    expect(dialog.textContent).not.toContain('cliworker-native')
++  })
++
 +  it('keeps ordinary native Turn accounting unchanged without a matching external source', () => {
 +    expect(resolveExternalTurnUsage(4, usage, undefined).usage).toBe(usage)
 +    expect(resolveExternalTurnUsage(4, usage, { 5: external }).usage).toBe(usage)
@@ -1519,7 +1627,8 @@ index 0000000000000000000000000000000000000000..873fb7d23816ab356fbbdf984e0a6533
 +    fireEvent.click(trigger)
 +    expect(trigger.getAttribute('aria-expanded')).toBe('true')
 +    const dialog = f.view.getByRole('dialog', { name: '本轮用量' })
-+    expect(dialog.textContent).toContain('本轮尚无可核验的 CLI Token 用量')
++    expect(dialog.textContent).not.toContain('本轮尚无可核验')
++    expect(dialog.querySelector('p')).toBeNull()
 +    expect(dialog.textContent).not.toContain('43')
 +    expect(dialog.textContent).not.toContain('0 tok')
 +    expect(dialog.parentElement).toBe(document.body)
@@ -1567,10 +1676,10 @@ index 0000000000000000000000000000000000000000..873fb7d23816ab356fbbdf984e0a6533
 +})
 diff --git a/packages/client/ui-chat/tests/external-usage-report.client.spec.tsx b/packages/client/ui-chat/tests/external-usage-report.client.spec.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..fdf52be695af2cdf666bc5bde139dba036c97f3e
+index 0000000000000000000000000000000000000000..b80bae47448c16daadd0607d3d45eee579c2da2a
 --- /dev/null
 +++ b/packages/client/ui-chat/tests/external-usage-report.client.spec.tsx
-@@ -0,0 +1,192 @@
+@@ -0,0 +1,211 @@
 +// @vitest-environment jsdom
 +// Explicit simulated external CLI receipts rendered by the real native components.
 +import { afterEach, describe, expect, it } from 'vitest'
@@ -1599,6 +1708,25 @@ index 0000000000000000000000000000000000000000..fdf52be695af2cdf666bc5bde139dba0
 +}
 +
 +describe('optional external partial accounting in native components', () => {
++  it.each([0, 0.28339357142857147])('shows native Qoder credit billing without a token unit (synthetic %s)', credits => {
++    const view = stats(undefined, { externalCredits: credits })
++    expect(view.getByRole('button').textContent).toContain('积分')
++    expect(view.getByRole('button').textContent).not.toMatch(/token|tok/i)
++    fireEvent.click(view.getByRole('button'))
++    const text = view.getByRole('dialog', { name: '积分用量' }).textContent
++    expect(text).toContain('Qoder 本轮原生请求')
++    expect(text).not.toMatch(/token|tok/i)
++    expect(text).not.toContain('0 tok')
++    expect(text).not.toContain('NaN')
++  })
++  it('uses credits as the billing display even when a token receipt also exists (synthetic)', () => {
++    const view = stats({ totalTokens: 63, inputBasis: 'reported', inputTokens: 60, outputTokens: 3 }, { externalCredits: 0.28 })
++    expect(view.getByRole('button').textContent).not.toContain('63 tok')
++    expect(view.getByRole('button').textContent).toContain('0.28 积分')
++    fireEvent.click(view.getByRole('button'))
++    expect(view.getByRole('dialog').textContent).toContain('积分0.28')
++    expect(view.getByRole('dialog', { name: '积分用量' }).textContent).not.toMatch(/token|tok/i)
++  })
 +  it('calculates Hermes cache hits from observed inclusive input without inventing cache writes (synthetic)', () => {
 +    const report: ExternalUsageReport = { totalTokens: 4089, inputBasis: 'inclusive', inputTokens: 4054, outputTokens: 35, cacheReadTokens: 192 }
 +    expect(externalUsageReport(report)).toEqual(report)
@@ -1867,10 +1995,10 @@ index 4ee330436ff92cd71a656c03d3d8f91a3b5b259b..9e63c567ef0a694b09bd2e5924697ed6
 +}
 diff --git a/packages/client/ui-conversation/src/client/contract/external-status.ts b/packages/client/ui-conversation/src/client/contract/external-status.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..a3f1cf92c6512c93b021f0c48c183f2aee0ff1e8
+index 0000000000000000000000000000000000000000..faaa0610ff5fa5378df1526f97dfa4c65f6d062b
 --- /dev/null
 +++ b/packages/client/ui-conversation/src/client/contract/external-status.ts
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,38 @@
 +/** Optional Session-generation sources for externally executed requests.
 + * These are presentation facts, never token accounting or synthetic Session events.
 + */
@@ -1880,6 +2008,7 @@ index 0000000000000000000000000000000000000000..a3f1cf92c6512c93b021f0c48c183f2a
 +}
 +export interface TelemetryAvailability {
 +  readonly statisticsBasis?: 'harness-cli-adapter'
++  readonly usageUnit?: 'credits'
 +  readonly statistics?: TelemetryUnavailable
 +  readonly tokenUsage?: TelemetryUnavailable
 +  readonly context?: TelemetryUnavailable
@@ -1909,10 +2038,10 @@ index 0000000000000000000000000000000000000000..a3f1cf92c6512c93b021f0c48c183f2a
 +    ? state as TelemetryUnavailable : undefined
 +}
 diff --git a/packages/client/ui-conversation/src/client/contract/slots.ts b/packages/client/ui-conversation/src/client/contract/slots.ts
-index a02f5aa662e47b9de87f424cc6bf54c41502c7c3..0f112dd31c39a9549b2cd9d1ca9600030282f226 100644
+index a02f5aa662e47b9de87f424cc6bf54c41502c7c3..10e8ed40bef65654ca21db75f7ea70d04a3f5172 100644
 --- a/packages/client/ui-conversation/src/client/contract/slots.ts
 +++ b/packages/client/ui-conversation/src/client/contract/slots.ts
-@@ -436,6 +436,10 @@ export interface ConversationSessionHeaderInjected {
+@@ -436,6 +436,12 @@ export interface ConversationSessionHeaderInjected {
  export interface ComposerBarOwnerProps {
    /** Hero uses centered placement; composer uses the active bottom placement. */
    variant: 'hero' | 'composer'
@@ -1920,10 +2049,12 @@ index a02f5aa662e47b9de87f424cc6bf54c41502c7c3..0f112dd31c39a9549b2cd9d1ca960003
 +  composerPresentation?: 'default' | 'main'
 +  /** Registered slash source opened by the native command launcher; defaults to command. */
 +  commandSource?: string
++  /** Explicitly enable the native image picker for a continuable child. Generic file receipts remain refused. */
++  childImageUploads?: boolean
    /** A feature-owned reason that makes message input inert while leaving model selection live. */
    blocked?: { readonly reason: string }
    /** Lock all message actions while preserving the resident composer surface. */
-@@ -464,7 +468,7 @@ export interface ComposerBarInjected {
+@@ -464,7 +470,7 @@ export interface ComposerBarInjected {
    resolveDraftAttachments: ((ids: readonly DraftAttachmentId[]) => readonly ComposerAttachment[]) | undefined
    /** Restart one failed file upload; absent without a session. */
    retryFileUpload: ((id: DraftAttachmentId) => void) | undefined
@@ -1932,7 +2063,7 @@ index a02f5aa662e47b9de87f424cc6bf54c41502c7c3..0f112dd31c39a9549b2cd9d1ca960003
    stop: (() => void) | undefined
    hooks: {
      /** Readable sequence while the fixed Stop command is registered. */
-@@ -536,6 +540,10 @@ export interface ConversationContentInputProps {
+@@ -536,6 +542,12 @@ export interface ConversationContentInputProps {
    variant: 'main' | 'embedded'
    phase: 'settling' | 'hero' | 'active'
    hero: boolean
@@ -1940,6 +2071,8 @@ index a02f5aa662e47b9de87f424cc6bf54c41502c7c3..0f112dd31c39a9549b2cd9d1ca960003
 +  composerPresentation?: ComposerBarOwnerProps['composerPresentation']
 +  /** Select the registered native launcher source without replacing draft or command behavior. */
 +  commandSource?: ComposerBarOwnerProps['commandSource']
++  /** Forward the explicit child image-intake capability independently of presentation. */
++  childImageUploads?: ComposerBarOwnerProps['childImageUploads']
  }
  
  /** Values passed from shared content to its occurrence-selected width controls. */
@@ -1997,8 +2130,30 @@ index f1f708073b3264abb603aae371a7cf6ca03ae750..0ccec67c33d1868facfa8a4dd21238ec
    'context.system': 'System prompt',
    'context.tools': 'Tool definitions',
    'context.messages': 'Messages',
+diff --git a/packages/client/ui-conversation/src/client/skeleton/ContextMeter.module.css b/packages/client/ui-conversation/src/client/skeleton/ContextMeter.module.css
+index 9d94b96e766424bcfe0e5c2e540101b3eb8b2490..7397d5f2e8003166ad8c0f8014d58ffd8f8485c6 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/ContextMeter.module.css
++++ b/packages/client/ui-conversation/src/client/skeleton/ContextMeter.module.css
+@@ -92,7 +92,7 @@
+ .bar {
+   display: flex;
+   gap: 1px;
+-  margin: 10px 0 12px;
++  margin: 10px 0 8px;
+   height: 4px;
+   border-radius: 999px;
+   corner-shape: round;
+@@ -132,7 +132,7 @@
+ }
+ 
+ .rows {
+-  margin: 6px 0 0;
++  margin: 0;
+ }
+ 
+ .row {
 diff --git a/packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx b/packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx
-index 4af5274b8a10e2645184a8f3cf04ecafc259ab24..ec9588b91b98e1b9981b20fdb91eabd4eae564dd 100644
+index 4af5274b8a10e2645184a8f3cf04ecafc259ab24..82baf11b7f40b8dffac6f4e211e62a10888f74f3 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx
 +++ b/packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx
 @@ -11,7 +11,8 @@ import type { UseProjection } from '@deepseek-ai/dsh-api-session-controller/clie
@@ -2057,7 +2212,7 @@ index 4af5274b8a10e2645184a8f3cf04ecafc259ab24..ec9588b91b98e1b9981b20fdb91eabd4
    const position = useAnchoredPosition({
      open: open && available,
      anchorRef: rootRef,
-@@ -86,9 +112,25 @@ export function ContextMeter({ useProjection, t }: ContextMeterProps) {
+@@ -86,9 +112,23 @@ export function ContextMeter({ useProjection, t }: ContextMeterProps) {
      return () => { document.removeEventListener('keydown', onKeyDown) }
    }, [available, open])
  
@@ -2076,8 +2231,6 @@ index 4af5274b8a10e2645184a8f3cf04ecafc259ab24..ec9588b91b98e1b9981b20fdb91eabd4
 +      {open && createPortal(<div ref={panelRef} className={css.panel} role="dialog"
 +        aria-label={t('context.unknown')} style={position ?? { visibility: 'hidden', left: 0, top: 0 }}>
 +        <div className={css.header}><span className={css.headline}>{t('context.unknown')}</span></div>
-+        <p>{t(`context.availability.${availability.state}`)}</p>
-+        <p>{t(`context.availability.${availability.reason}`)}</p>
 +      </div>, document.body)}
 +    </span>
 +  }
@@ -2086,7 +2239,7 @@ index 4af5274b8a10e2645184a8f3cf04ecafc259ab24..ec9588b91b98e1b9981b20fdb91eabd4
    const [headBefore = '', headAfter = ''] = t('context.aria', { percent: READING_SLOT })
      .split(READING_SLOT)
      .map(part => part.trim())
-@@ -97,12 +139,16 @@ export function ContextMeter({ useProjection, t }: ContextMeterProps) {
+@@ -97,12 +137,16 @@ export function ContextMeter({ useProjection, t }: ContextMeterProps) {
    // breakdown only proportions its colored parts. A zero-width part is dropped
    // instead of rendered: `.segment`'s min-width keeps a hairline part visible,
    // which at 0% occupancy would draw a filled bar over an empty context.
@@ -2108,7 +2261,7 @@ index 4af5274b8a10e2645184a8f3cf04ecafc259ab24..ec9588b91b98e1b9981b20fdb91eabd4
    const segments = parts.filter(part => part.width > 0)
  
    return (
-@@ -118,14 +164,14 @@ export function ContextMeter({ useProjection, t }: ContextMeterProps) {
+@@ -118,14 +162,14 @@ export function ContextMeter({ useProjection, t }: ContextMeterProps) {
          >
            <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden>
              <circle className={css.track} cx="7" cy="7" r={RADIUS} />
@@ -2125,7 +2278,7 @@ index 4af5274b8a10e2645184a8f3cf04ecafc259ab24..ec9588b91b98e1b9981b20fdb91eabd4
            </svg>
            <span>{reading}</span>
          </button>
-@@ -147,7 +193,7 @@ export function ContextMeter({ useProjection, t }: ContextMeterProps) {
+@@ -147,7 +191,7 @@ export function ContextMeter({ useProjection, t }: ContextMeterProps) {
              {/* `~`: usedTokens prefers projectedTokens, whose surface delta is
                  heuristically repriced on top of the provider-anchored sample. */}
              <span className={css.figures}>
@@ -2134,12 +2287,11 @@ index 4af5274b8a10e2645184a8f3cf04ecafc259ab24..ec9588b91b98e1b9981b20fdb91eabd4
              </span>
            </div>
            <div className={css.bar}>
-@@ -159,19 +205,24 @@ export function ContextMeter({ useProjection, t }: ContextMeterProps) {
+@@ -159,15 +203,15 @@ export function ContextMeter({ useProjection, t }: ContextMeterProps) {
                />
              ))}
            </div>
 -          {breakdown !== undefined && (
-+          {context === null && nativeRatio !== undefined && <p>{t('context.ratioOnly')}</p>}
 +          {(breakdown !== undefined || external !== undefined) && (
              <dl className={css.rows}>
 -              {ROWS.map(row => (
@@ -2154,36 +2306,29 @@ index 4af5274b8a10e2645184a8f3cf04ecafc259ab24..ec9588b91b98e1b9981b20fdb91eabd4
                  </div>
                ))}
              </dl>
-           )}
-+          {external !== undefined && !complete && (
-+            <p>{t(knownRows === 0 ? 'context.compositionMissing'
-+              : knownRows === ROWS.length ? 'context.compositionInvalid' : 'context.compositionPartial')}</p>
-+          )}
-         </div>,
-         document.body,
-       )}
 diff --git a/packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx b/packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx
-index 218082ae3155f5f1040c82ca26b17378fbecb175..d4eaa4db5a0fb885b02658cd478387cb60518c9f 100644
+index 218082ae3155f5f1040c82ca26b17378fbecb175..eed9566cf6952a4663a2c7cea8a486212535d175 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx
 +++ b/packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx
-@@ -146,6 +146,8 @@ export function ConversationContent(props: ConversationContentProps) {
+@@ -146,6 +146,9 @@ export function ConversationContent(props: ConversationContentProps) {
    const blocked = !inert && composerBlock !== undefined
    const inputBar = renderSlot('conversation.composer.bar', {
      variant: hero ? 'hero' : 'composer',
 +    ...(props.composerPresentation === undefined ? {} : { composerPresentation: props.composerPresentation }),
 +    ...(props.commandSource === undefined ? {} : { commandSource: props.commandSource }),
++    ...(props.childImageUploads === undefined ? {} : { childImageUploads: props.childImageUploads }),
      ...(inert
        ? {
          disabled: true,
 diff --git a/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx b/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx
-index ef95796577c6f53c0280a3e8c39c4a8eb10ec5eb..624056eac417a4dbc8a28375ebe549ba7bbe2e09 100644
+index ef95796577c6f53c0280a3e8c39c4a8eb10ec5eb..f345fd48233a6d554fb74aaff78ff11caafe2a1e 100644
 --- a/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx
 +++ b/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx
 @@ -49,6 +49,7 @@ export const InputBar = memo(function InputBar({
    toggleCommandMenu, stop, t,
    renderSlot, useBusyEnter, useFileUploads, useNotices, useLexicon, useMenuLauncher, useStopShortcut,
    useProjection, sessionId, variant, disabled: inert = false, blocked,
-+  composerPresentation = 'default', commandSource,
++  composerPresentation = 'default', commandSource, childImageUploads = false,
    workspacePickerOpen = false, onRequestWorkspace,
    placeholder, accessory,
  }: InputBarProps) {
@@ -2233,6 +2378,15 @@ index ef95796577c6f53c0280a3e8c39c4a8eb10ec5eb..624056eac417a4dbc8a28375ebe549ba
    const primarySubmitMode = resolveSubmitMode(busyEnter, running, 'enter', steeringAvailable)
    const plainMessageDraft = !empty && input?.phase === 'plain' && !draft.trimStart().startsWith('/')
    const primaryLabel = primaryStops
+@@ -456,7 +459,7 @@ export const InputBar = memo(function InputBar({
+               ref={fileInputRef}
+               type="file"
+               multiple
+-              disabled={subagent !== null}
++              disabled={subagent !== null && !(continuable && childImageUploads)}
+               hidden
+               onChange={onPickFiles}
+             />
 diff --git a/packages/client/ui-conversation/tests/apply-inject.client.spec.tsx b/packages/client/ui-conversation/tests/apply-inject.client.spec.tsx
 index 83d6db85c9c17c81d3ec4bc9f1246f357da7a4ac..0b81abd3ac4129edd1a001879969413c03b4bdb9 100644
 --- a/packages/client/ui-conversation/tests/apply-inject.client.spec.tsx
@@ -2276,7 +2430,7 @@ index 83d6db85c9c17c81d3ec4bc9f1246f357da7a4ac..0b81abd3ac4129edd1a001879969413c
      const b = await bench()
      const entry = b.entryOf('conversation.composer.bar')
 diff --git a/packages/client/ui-conversation/tests/context-meter.client.spec.tsx b/packages/client/ui-conversation/tests/context-meter.client.spec.tsx
-index 9250c0b48053bae8e407b2429a963cd8da4f7eca..aebb032e7fb6e48a222130204751d417fec4cfff 100644
+index 9250c0b48053bae8e407b2429a963cd8da4f7eca..5899e2e8b089f2a630dcb23951692359507c0f8a 100644
 --- a/packages/client/ui-conversation/tests/context-meter.client.spec.tsx
 +++ b/packages/client/ui-conversation/tests/context-meter.client.spec.tsx
 @@ -5,12 +5,35 @@ import { cleanup, fireEvent, render } from '@testing-library/react'
@@ -2297,7 +2451,7 @@ index 9250c0b48053bae8e407b2429a963cd8da4f7eca..aebb032e7fb6e48a222130204751d417
 +  fireEvent.click(view.getByRole('button', { name: '上下文已用 17.6%' }))
 +  const panel = view.getByRole('dialog')
 +  expect(panel.textContent).toContain('— / —')
-+  expect(panel.textContent).toContain('窗口容量和分类未公开')
++  expect(panel.textContent).not.toContain('窗口容量和分类未公开')
 +  expect(panel.textContent).not.toContain('Qoder 原生会话上下文比例')
 +  expect(panel.textContent).not.toContain('数据来源')
 +  expect(panel.textContent).not.toContain('分类来源')
@@ -2333,7 +2487,7 @@ index 9250c0b48053bae8e407b2429a963cd8da4f7eca..aebb032e7fb6e48a222130204751d417
      expect(panel.textContent).toContain('~0 / 128K')
    })
  
-@@ -163,4 +187,159 @@ describe('ContextMeter', () => {
+@@ -163,4 +187,158 @@ describe('ContextMeter', () => {
      fireEvent.keyDown(document, { key: 'Escape' })
      expect(view.queryByRole('dialog')).toBeNull()
    })
@@ -2372,7 +2526,7 @@ index 9250c0b48053bae8e407b2429a963cd8da4f7eca..aebb032e7fb6e48a222130204751d417
 +    { state: 'pending', reason: 'awaiting-data' },
 +    { state: 'unavailable', reason: 'not-reported' },
 +    { state: 'unavailable', reason: 'disconnected' },
-+  ])('keeps unknown-state explanations without showing external source metadata: %o', availability => {
++  ])('keeps unknown-state values without explanatory paragraphs: %o', availability => {
 +    const view = meter({ contextPressure: { contextWindow: 1000, externalContext: {
 +      source: 'synthetic provider source',
 +      breakdown: { source: 'synthetic composition source' },
@@ -2380,8 +2534,7 @@ index 9250c0b48053bae8e407b2429a963cd8da4f7eca..aebb032e7fb6e48a222130204751d417
 +    } }, telemetryAvailability: { context: availability } })
 +    fireEvent.click(view.getByRole('button'))
 +    const panel = view.getByRole('dialog')
-+    expect(panel.textContent).toContain(t(`context.availability.${availability.state}`))
-+    expect(panel.textContent).toContain(t(`context.availability.${availability.reason}`))
++    expect(panel.querySelector('p')).toBeNull()
 +    for (const hidden of ['数据来源', '分类来源', 'synthetic provider source', 'synthetic composition source', 'Synthetic extra category'])
 +      expect(panel.textContent).not.toContain(hidden)
 +  })
@@ -2433,7 +2586,7 @@ index 9250c0b48053bae8e407b2429a963cd8da4f7eca..aebb032e7fb6e48a222130204751d417
 +    fireEvent.click(view.getByRole('button', { name: '上下文已用 0.39%' }))
 +    const panel = view.getByRole('dialog')
 +    expect(panel.textContent).toContain('系统提示词—工具定义—对话消息—')
-+    expect(panel.textContent).toContain('当前记录未提供分类统计。')
++    expect(panel.textContent).not.toContain('当前记录未提供分类统计。')
 +    expect(panel.textContent).not.toContain('数据来源')
 +    expect(panel.textContent).not.toContain('Hermes official request')
 +    expect(panel.textContent).not.toContain('~')
@@ -2450,7 +2603,7 @@ index 9250c0b48053bae8e407b2429a963cd8da4f7eca..aebb032e7fb6e48a222130204751d417
 +    const panel = view.getByRole('dialog')
 +    expect(panel.textContent).toContain('320 / 1K')
 +    expect(panel.textContent).toContain('系统提示词~120工具定义—对话消息~155')
-+    expect(panel.textContent).toContain('当前记录缺少部分分类统计。')
++    expect(panel.textContent).not.toContain('当前记录缺少部分分类统计。')
 +    expect(panel.querySelectorAll('dt')).toHaveLength(3)
 +    for (const hidden of ['分类来源', '数据来源', 'CLI context estimate', 'provider prompt', 'Free', 'Buffer'])
 +      expect(panel.textContent).not.toContain(hidden)
@@ -2468,7 +2621,7 @@ index 9250c0b48053bae8e407b2429a963cd8da4f7eca..aebb032e7fb6e48a222130204751d417
 +    const panel = view.getByRole('dialog')
 +    expect(panel.textContent).not.toContain('NaN')
 +    expect(panel.textContent).not.toContain('invalid')
-+    expect(panel.textContent).toContain('当前记录的分类统计无法形成有效占比。')
++    expect(panel.textContent).not.toContain('当前记录的分类统计无法形成有效占比。')
 +    const segments = panel.getElementsByClassName(segmentClass)
 +    expect(segments).toHaveLength(1)
 +    expect((segments[0] as HTMLElement).style.width).toBe('100%')
@@ -2494,19 +2647,20 @@ index 9250c0b48053bae8e407b2429a963cd8da4f7eca..aebb032e7fb6e48a222130204751d417
 +
  })
 diff --git a/packages/client/ui-conversation/tests/input-bar.client.spec.tsx b/packages/client/ui-conversation/tests/input-bar.client.spec.tsx
-index 4ee04fe8a7d55faf0d278b4954f789704a06e747..fd5057ce410828b2ea885eb4756fc3829e5c03f4 100644
+index 4ee04fe8a7d55faf0d278b4954f789704a06e747..ec5343747ec495af16ebb5c9e2878f5c527273aa 100644
 --- a/packages/client/ui-conversation/tests/input-bar.client.spec.tsx
 +++ b/packages/client/ui-conversation/tests/input-bar.client.spec.tsx
-@@ -93,6 +93,8 @@ interface BenchOptions {
+@@ -93,6 +93,9 @@ interface BenchOptions {
    /** The hub's steer-all face (empty-draft accelerated Enter). */
    steerQueue?: () => void
    variant?: 'hero' | 'composer'
 +  composerPresentation?: 'default' | 'main'
 +  commandSource?: string
++  childImageUploads?: boolean
    placeholder?: string
    t?: InputBarProps['t']
    accessory?: React.ReactNode
-@@ -108,7 +110,7 @@ interface BenchOptions {
+@@ -108,7 +111,7 @@ interface BenchOptions {
    addFiles?: (files: readonly File[], directories?: ReadonlySet<File>) => string | null
    commandMenuOpen?: boolean
    busyEnter?: 'queue' | 'steer'
@@ -2515,16 +2669,17 @@ index 4ee04fe8a7d55faf0d278b4954f789704a06e747..fd5057ce410828b2ea885eb4756fc382
  }
  
  /** One pending queue row (the runtime snapshot shape, as the dock tests build it). */
-@@ -220,6 +222,8 @@ function bench(over?: BenchOptions) {
+@@ -220,6 +223,9 @@ function bench(over?: BenchOptions) {
      t: over?.t ?? makeTranslate(zh, commonZh),
      renderSlot,
      variant: over?.variant ?? 'composer',
 +    ...(over?.composerPresentation === undefined ? {} : { composerPresentation: over.composerPresentation }),
 +    ...(over?.commandSource === undefined ? {} : { commandSource: over.commandSource }),
++    ...(over?.childImageUploads === undefined ? {} : { childImageUploads: over.childImageUploads }),
      ...(over?.inert === true ? { disabled: true } : {}),
      ...(over?.blocked !== undefined ? { blocked: over.blocked } : {}),
      ...(over?.workspacePickerOpen !== undefined ? { workspacePickerOpen: over.workspacePickerOpen } : {}),
-@@ -230,8 +234,8 @@ function bench(over?: BenchOptions) {
+@@ -230,8 +236,8 @@ function bench(over?: BenchOptions) {
    const view = render(<InputBar {...props} />)
    const textarea = view.container.querySelector<HTMLDivElement>('[data-composer-input]')!
    const sendableDraft = (over?.draft?.trim() ?? '') !== '' || (over?.attachments?.length ?? 0) > 0
@@ -2535,7 +2690,7 @@ index 4ee04fe8a7d55faf0d278b4954f789704a06e747..fd5057ce410828b2ea885eb4756fc382
    // A running steer-capable composer (ordinary session or continuable child
    // with its parent online) labels Send by the delivery mode it performs over
    // a plain message draft; idle sessions, one-shot children, locked
-@@ -1204,6 +1208,56 @@ describe('running and lock semantics', () => {
+@@ -1204,6 +1210,75 @@ describe('running and lock semantics', () => {
      expect(empty.button.disabled).toBe(true)
    })
  
@@ -2589,10 +2744,29 @@ index 4ee04fe8a7d55faf0d278b4954f789704a06e747..fd5057ce410828b2ea885eb4756fc382
 +    expect(b.session.getSnapshot().subagent).toEqual(subagent)
 +  })
 +
++  it('explicit child image capability opens the native picker and retains generic-file rejection', () => {
++    const added = vi.fn(() => null)
++    const { view, shell } = bench({ childImageUploads: true, addFiles: added, subagent: {
++      address: { parentSessionId: 'parent' as SessionId, childSessionId: SID, mode: 'continuable' }, parentAvailable: true,
++    } })
++    const input = view.container.querySelector<HTMLInputElement>('input[type="file"]')!
++    const click = vi.spyOn(input, 'click')
++    expect(input.disabled).toBe(false)
++    expect(shell.pickFiles()).toBe(true)
++    expect(click).toHaveBeenCalledOnce()
++    const image = new File(['synthetic image'], 'image.png', { type: 'image/png' })
++    fireEvent.change(input, { target: { files: [image] } })
++    expect(added).toHaveBeenCalledWith([image], undefined)
++    added.mockClear()
++    fireEvent.change(input, { target: { files: [new File(['text'], 'file.txt', { type: 'text/plain' })] } })
++    expect(added).not.toHaveBeenCalled()
++    click.mockRestore()
++  })
++
    it.each([
      ['active plan', { plan: { active: true, pending: false } }],
      ['active goal', { goal: { phase: 'active' as const, objective: 'inspect files' } }],
-@@ -1818,6 +1872,21 @@ describe('command launcher chrome and control seats', () => {
+@@ -1818,6 +1893,21 @@ describe('command launcher chrome and control seats', () => {
      expect(view.queryByLabelText('Model')).toBeNull()
    })
  
@@ -3024,7 +3198,7 @@ index ae105e7b8efac63027c17bde468b0277ca776975..2b038a12541877c795fdde4c6ada0ac3
    await Promise.all(roots.splice(0).map(ctx => ctx.fiber.dispose()))
    vi.restoreAllMocks()
 diff --git a/packages/client/ui-subagent/src/client/sidebar-chat/index.tsx b/packages/client/ui-subagent/src/client/sidebar-chat/index.tsx
-index ddc5bed7f925142a6744e0852d4161731beaba14..88438b239672f565865f42c1920c2dd75a3486ea 100644
+index ddc5bed7f925142a6744e0852d4161731beaba14..49eaca8d42355bb5701c0ac4c3392405e5be75bf 100644
 --- a/packages/client/ui-subagent/src/client/sidebar-chat/index.tsx
 +++ b/packages/client/ui-subagent/src/client/sidebar-chat/index.tsx
 @@ -4,7 +4,7 @@ import type {
@@ -3044,7 +3218,7 @@ index ddc5bed7f925142a6744e0852d4161731beaba14..88438b239672f565865f42c1920c2dd7
 +    'sidebar.chat.conversation': {
 +      kind: 'single'
 +      scope: 'session'
-+      owner: Pick<ConversationContentInputProps, 'composerPresentation' | 'commandSource'>
++      owner: Pick<ConversationContentInputProps, 'composerPresentation' | 'commandSource' | 'childImageUploads'>
 +    }
    }
  }
@@ -3054,11 +3228,11 @@ index ddc5bed7f925142a6744e0852d4161731beaba14..88438b239672f565865f42c1920c2dd7
  /** Render the shared Conversation content for one explicitly provided child Session. */
  export function ConversationSlotPanel({
 -  sessionId, useSession, useConversation, useSessions, renderFactorySlot,
-+  sessionId, useSession, useConversation, useSessions, renderFactorySlot, composerPresentation, commandSource,
++  sessionId, useSession, useConversation, useSessions, renderFactorySlot, composerPresentation, commandSource, childImageUploads,
  }: ConversationSlotPanelProps) {
    const session = useSession(value => value)
    const conversation = useConversation(value => value)
-@@ -142,7 +146,11 @@ export function ConversationSlotPanel({
+@@ -142,7 +146,12 @@ export function ConversationSlotPanel({
      || parentAvailabilityPending
    const hero = shellPhase === 'blank' && (session.openState === 'open' || summaryBlank === true)
    const phase = settling ? 'settling' : hero ? 'hero' : 'active'
@@ -3067,6 +3241,7 @@ index ddc5bed7f925142a6744e0852d4161731beaba14..88438b239672f565865f42c1920c2dd7
 +    variant: 'embedded', phase, hero,
 +    ...(composerPresentation === undefined ? {} : { composerPresentation }),
 +    ...(commandSource === undefined ? {} : { commandSource }),
++    ...(childImageUploads === undefined ? {} : { childImageUploads }),
 +  }, {
      slots: { views: FixedChatConversationView },
    })

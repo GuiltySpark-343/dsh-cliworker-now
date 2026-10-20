@@ -6,7 +6,7 @@ import { extractTelemetry, type RunTelemetry } from './telemetry.ts'
 import { grokContextStatus } from './grok-response.mjs'
 import { readGrokDurableContext, readGrokDurableContextAsync } from './grok-durable-context.mjs'
 import { readZcodeContextInspections, zcodeContextBinding, zcodeContextBindings } from './zcode-context-observation.mjs'
-import { readQoderDurableContext, readQoderDurableContextAsync, qoderContextPaths } from './qoder-durable-context.mjs'
+import { readQoderDurableContext, readQoderDurableContextAsync, qoderMeteringPaths } from './qoder-durable-context.mjs'
 import { qoderConfigDirectory } from './qoder-accounts.ts'
 
 const object = (v: any): any => v && typeof v === 'object' && !Array.isArray(v) ? v : {}
@@ -96,7 +96,7 @@ export class NativeSupplementalContextReader {
   }
   read(input: NativeSupplementalContextInput): Partial<RunTelemetry> {
     const { worker, runId } = input
-    if (!['zcode', 'grok', 'qoder'].includes(worker.preference.cli ?? '') || !id(worker.id) || !id(runId)) return {}
+    if (!['zcode', 'grok', 'qoder', 'qodercn'].includes(worker.preference.cli ?? '') || !id(worker.id) || !id(runId)) return {}
     try {
       const root = realpathSync(input.storageDirectory)
       if (resolve(input.storageDirectory) !== root || resolve(input.rawPath) !== join(root, `${worker.id}.${runId}.raw.jsonl`)) return {}
@@ -105,10 +105,11 @@ export class NativeSupplementalContextReader {
       const constrained = Object.hasOwn(input, 'currentIdentity')
       const current = input.currentIdentity
       const unknownCurrent: Partial<RunTelemetry> = { contextUsed: undefined, contextCapacity: undefined, contextRatio: undefined,
-        contextBreakdown: undefined, contextSource: undefined, contextCapacitySource: undefined, contextEstimated: undefined }
+        contextBreakdown: undefined, contextSource: undefined, contextCapacitySource: undefined, contextEstimated: undefined,
+        ...((worker.preference.cli === 'qoder' || worker.preference.cli === 'qodercn') ? { providerCredits: undefined } : {}) }
       const matchesCurrent = (session: unknown, model: unknown) => !constrained ||
         (text(current?.conversationId) && text(current?.model) && session === current.conversationId && model === current.model)
-      const qoderHome = worker.preference.cli === 'qoder' ? qoderConfigDirectory() : ''
+      const qoderHome = (worker.preference.cli === 'qoder' || worker.preference.cli === 'qodercn') ? qoderConfigDirectory(process.env, worker.preference.cli) : ''
       const key = `${worker.id}:${runId}:${root}:${worker.project}:${worker.preference.cli}:${worker.conversationId ?? ''}:${qoderHome}:${constrained ? JSON.stringify(current ?? null) : 'historical'}`
       // Short-lived negative results also cache. File fingerprints below invalidate a
       // successful native supplement immediately when its exact source changes.
@@ -127,7 +128,7 @@ export class NativeSupplementalContextReader {
       const declared = records.filter(r => r.type === 'session' && text(r.id)).at(-1)
       const sessionId = declared?.id
       let result: Partial<RunTelemetry> = {}, paths: string[] = []
-      if (worker.preference.cli === 'qoder') {
+      if ((worker.preference.cli === 'qoder' || worker.preference.cli === 'qodercn')) {
         // ACP returns the native user UUID. This avoids prompt-text matching,
         // current-session guesses, and taking a later turn's context ratio.
         const end = records.findLast(r => r.result?.stopReason === 'end_turn' && id(r.result.userMessageId))?.result
@@ -136,19 +137,22 @@ export class NativeSupplementalContextReader {
           (!worker.conversationId || sessionId === worker.conversationId)) {
           if (!matchesCurrent(sessionId, model)) result = { ...unknownCurrent }
           else {
-            const binding = { home: qoderHome, project: worker.project, sessionId, model, userMessageId: end.userMessageId }
-            paths = qoderContextPaths(binding)
-            const rawObservation = records.findLast(r => r.type === 'cliworker.qoder_context' &&
-              r.source === 'qoder.native-transcript' && r.basis === 'native-ratio' && r.sessionId === sessionId &&
+            const binding = { cli: worker.preference.cli, home: qoderHome, project: worker.project, sessionId, model, userMessageId: end.userMessageId }
+            paths = qoderMeteringPaths(binding)
+            const rawObservation = records.findLast(r => r.type === `cliworker.${worker.preference.cli}_context` &&
+              r.source === `${worker.preference.cli}.native-transcript` && r.basis === 'native-ratio' && r.sessionId === sessionId &&
               r.model === model && r.userMessageId === end.userMessageId)
             const signature = () => `${stamp(input.rawPath)}|${sourceStamp(paths)}`
-            const observation = rawObservation ?? (process.platform === 'win32'
+            const observation = (process.platform === 'win32'
               ? this.windowsObservation(key, signature(), signature, signal => readQoderDurableContextAsync(binding, { signal }))
-              : readQoderDurableContext(binding))
+              : readQoderDurableContext(binding)) ?? rawObservation
             if (observation) {
-              const t = extractTelemetry('qoder', [observation], { conversationId: sessionId, model, project: worker.project })
+              const t = extractTelemetry(worker.preference.cli, [observation], { conversationId: sessionId, model, project: worker.project })
               if (t.contextRatio !== undefined) result = { contextRatio: t.contextRatio,
-                contextSource: t.contextSource, contextEstimated: t.contextEstimated }
+                contextSource: t.contextSource, contextEstimated: t.contextEstimated,
+                ...(t.contextCapacity === undefined ? {} : { contextCapacity: t.contextCapacity,
+                  contextUsed: t.contextUsed, contextCapacitySource: t.contextCapacitySource }) }
+              if (t.providerCredits !== undefined) result.providerCredits = t.providerCredits
             }
           }
         }

@@ -539,7 +539,7 @@ Hermes 与角色功能共享同一 WorkerRuntime；名称、角色快照与原�
 - Windows 官方 Pi/OpenCode 固定入口采用静态解析和安装身份验证；Pi 1.1.0 仅在原生 SDK/RPC 与登录菜单契约核验后加入支持。未知启动器不通过任意 shell 兜底。
 - 账号终端统一主动关闭、外层关闭及切换清理，失败保留终端身份和重试入口。Windows 使用只管理生命周期的 Job 回收实际子进程/控制台，不增加权限、文件或网络限制；退出确认以进程范围为空为准。光标采用高对比块状，终端就绪后聚焦，显示焦点提示。
 - Antigravity Windows 从当前交互式用户 Credential Manager 的固定原生目标读取状态；固定 helper 只返回状态、主体哈希与安全标签，不回传凭据。SSH 会话不可访问该存储不能代替 Desktop 的登录结论。
-- Claude 在每个操作开始前选择来源：自身本地代理可连接时使用代理，代理离线时使用原生官方登录；代理 401/403 不触发换号。以私有临时设置固定该次来源，保留用户原配置；来源快照与授权绑定核对，拒绝配置 A→B→A 竞态，执行中不切换。官方目录需同时具有原生身份、模型能力及可确认剩余额度；`initialize` 的能力清单本身不证明已登录。原生实验 `get_usage` 可能使用自身短期账号快照，插件不再缓存额度，拒绝缺原始 limits 的失败 fallback。
+- Claude 在每个操作开始前选择来源：自身本地代理可连接时使用代理，代理离线时使用原生官方登录；代理 401/403 不触发换号。以私有临时设置固定该次来源，保留用户原配置；来源快照与授权绑定核对，拒绝配置 A→B→A 竞态，执行中不切换。官方目录需同时具有原生身份（`tokenSource: claude.ai`，或 2.1.287 无该字段但有 `subscriptionType`）与模型能力；`initialize` 的能力清单本身不证明已登录。剩余额度可确认时正常显示；`get_usage` 未返回原始 limits（含 2.1.287 的 `rate_limits: null` 与失败 fallback）时仍列出模型并提示“剩余额度暂无法确认，以实际调用为准”，只有确认已用尽的窗口才阻止。插件不缓存额度。同 ID 且解析模型相同的重复条目合并，冲突重复仍拒绝；保留 `[1m]` 等原生上下文后缀。（2026-10-20 调整，避免未知额度过度门禁。）
 - Kimi managed OAuth 读取自身固定 provider/令牌，将原生别名与同源认证目录取交集，要求同源额度明确剩余。原生 CLI 负责续期；额度为空、未知或耗尽时准确提示，不能推断为空即无限额。
 - MiMo 仅缓存已解析的非秘密本地能力，默认 30 秒、最多 16 项。键覆盖项目、环境、自身配置/账号摘要及真实启动计划中的入口、运行时与脚本身份；凭据逐次从当前自身配置读取，远端授权及执行前后绑定仍重新核对。失败不缓存，取消释放本次资源。性能报告区分首次冷读、重复元数据与完整模型请求时间。
 - 明确派遣解析排除 CLI Worker 与工具参数说明；同一 CLI 的括号别名和重复指令归一，未知或不同目标继续拒绝猜测。只处理本步已接受的人类输入，不扫描历史或工具内容。
@@ -963,3 +963,91 @@ Windows 按已核验的官方原生位置 `~/.qoder/bin/qodercli/qodercli.exe` �
 Qoder 元数据查询必须先取得原生成功回执并确认 `end_session`。官方 Windows SDK 使用 `TerminateJobObject(1)` 收尾，因此仅在该请求由插件正常主动终止、没有取消或协议错误、进程范围已确认退出时接纳对应的 `1/null` 退出；自然非零、提前退出和未确认清理仍拒绝。该分类不执行登录、续期或模型请求，不改变账号文件与派遣前授权核验。
 
 正式 Desktop 的 ConPTY 二进制与清单可能分别在 `app.asar.unpacked` 和 `app.asar`。新增受当前 Host 安装位置、随机 nonce、归档只读锁与固定版本约束的清单证明；Electron 的逻辑读取和 `original-fs` 的物理无链接检查分离。继续按同一实际 helper 校验固定 exe/DLL 摘要、对应源码副本、父 PID、创建时间和控制台身份，并以 Job 范围为空及终端释放作为停止成功条件。普通 npm 物理清单路径保持。来源及完整边界见 `windows-conpty-source.md`；真实账号、模拟终端和实际 UI 的验收证据分别记入 `tasks.md`。
+
+
+## 2026-10-18：Qoder 上下文与本轮积分（v0.8.1）
+
+任务继续走 ACP。主计数与扩展 quota 各自校验，不将不同来源的桶混算；隐藏全零 token 仍未知。本轮积分与上下文共用精确 userMessageId/parent 链的原生记录补读，积分按原生请求 ID 去重，缺失请求不补零。只在同轮原生配置或有时间、会话及模型约束的日志确认容量后估算占用数量，否则独立显示原生比例。数字缓存不保留正文，历史与原始回执保持只读。原生用量组件增加可选积分元数据，积分不进入 token 统计；原生 ContextMeter 与兼容组件均支持只有比例的状态。
+
+Windows 实机暴露 Qoder 默认原生文件由 Administrators 拥有，当前用户拥有完全控制、其他主体仅有继承只读权限。仅 Qoder 数字采集显式接受此布局，所有路径仍需要当前用户所有权，或 Administrators 所有权加当前用户完全控制，并拒绝任何不可信写权限；前后 ACL、稳定身份、无链接和取消校验保持。默认通用读取规则及 POSIX 私有权限不变，不修改用户 ACL。实际来源、预算、精度与本次 Windows 验证边界见 `qoder-protocol.md` 第 6.2 节及 `tasks.md`。
+
+## 2026-10-18：积分计费文案与 Hermes Windows 网关就绪
+
+Qoder 的可选遥测来源增加积分计费单位，原生与备用用量组件只显示积分，标题为“积分用量”；有效零、等待、缺失与断连各自保留实际语义。当前归属断连时保留单位并清空数字，释放或换代时清除单位。后台有效 token 桶继续校验，不作为积分模块的显示替代，也不影响独立上下文的 token 单位。
+
+Windows Hermes 的 venv python.exe 派生实际 Python 解释器，原生状态 PID 与启动器不同；文件日志中已经就绪，但没有 stdout 监听行，旧门禁因此超时。本次仅向精确自有 Python 入口传入每次随机 nonce，经本次管道取得当前解释器 PID，再核对新鲜状态的 pid/writer_pid、精确本机地址和鉴权能力。该进程回执不含 API 秘密，进入原生 CLI 前移除 nonce；不从磁盘 PID 单独扩大信任。完整停止范围、原始账号及会话保留，实机网关能力检查不提交模型请求。来源与边界见 `hermes-probe.md` 和 `tasks.md`。
+
+## 2026-10-18：逐轮积分、模型展示与简洁统计弹层（v0.8.1）
+
+逐轮投影增加独立积分分支和已确认模型展示元数据。积分只汇总对应 turn 的已结算、去重 run；任一成员缺失时显示未知，明确零有效。Windows 异步补读复用已有只读采集与来源检查；当前轮和历史轮分开缓存。断连保留积分单位和已绑定轮次，清空数字。兼容时间线仅在对应 run 的最后回复显示已取得积分。
+
+提供方／模型显示来自对应 run 的 observedModel 事件，Hermes 解析原生 provider/model 对，OMP 等保留原生 provider/model ID；未公开提供方显示“未公开”。没有完整外部账单时，展示元数据可覆盖名称，但原生精确回复用量保持原口径，不使用内部 cliworker-native/worker UUID 充当实际模型。原始事件和执行路由不改写。
+
+所有 CLI 的活动、用量与上下文弹层去掉重复解释段落；缺失项用 —，估算标记和实际统计范围保留。上下文菜单不再附加缺少分类提示，缩减分段条与分项间距，统计弹层统一正常内边距。实际 Windows 检查及未验证边界见 tasks.md。
+
+## 2026-10-18：统一设置预加载与展示缓存（v0.8.1）
+
+Mac 已安装包和 Windows 原实现共用 OpenSettingsDialog：账号状态只在弹窗挂载期间保留，模型按选中页加载。现有 Host 模型持久缓存保留，但并不能省去重复打开时的账号查询。此次新增两端共用的 Client 内存展示池，按 API、Host 随机代际和项目隔离，最多保留八个项目；只保存完成的安全摘要和目录，没有凭据、授权或进程句柄。
+
+cliSettings 的可选元数据包含宿主代际、项目摘要、CLI 来源版本、当前默认值及 Host 是否保留本次目录的账号绑定，读取不启动 CLI。账号/路径/开关操作更新相应版本，Host 重启换代；没有元数据的旧 Host 保持原读法。跨父会话复用同项目目录时，Host 仍为保存选型保留原账号绑定；证明缺失时清除对应有效目录并重新查询，不恢复磁盘上的旧账号身份。无有效项目时只返回原有全局开关状态，不阻止用户管理开关。
+
+首次打开有界预加载全部已启用 CLI，一个任务按账号、目录顺序执行，并发上限两项、当前页优先。关闭只取消未完成任务，完成部分可供重开补读；跨 CLI、取消、来源换代及迟到结果不回填。显式账号刷新再强制刷新其模型，模型刷新不重复查询账号；错误结果保留供刷新，不以旧成功值掩盖失败。最新项目默认值来自轻量快照，只有人明确选择才保存，保存结果在切换及重开后保留。
+
+该缓存是最后确认的展示结果；外部原生账号/权限变化通过手动刷新及保存、启动、出队、续聊的既有实时核验确认，展示缓存不替代授权。布局与主题不变，Windows 实际验收、Mac 静态核对及未执行范围见 tasks.md。
+
+补充交互：模型和思考强度先本地更新，离开 CLI 页或关闭时由共用的 SettingsPreferenceSaves 后台提交最终组合，每 CLI 串行。导航不等待原生账号核验，关闭取消展示探测但让已提交写入完成；快速重开恢复草稿，旧回执不覆盖新草稿，新草稿未离页前不会因旧写入结束而提前提交。失败保留选择和错误，后续离页可重试；账号、目录、路径、开关来源失效会取消旧草稿和写入。成功后更新相同范围展示缓存，重开时轻量宿主快照拥有已完成的最新默认值；旧 Host 使用同 Gateway/父会话的临时队列，不扩大其账号展示缓存范围。
+
+快速重开的响应顺序保护：设置读取在发送前捕获 Client 保存回执代次，晚到的旧快照不能覆盖随后成功的保存回执。完成保存后新发起的读取仍同步外部最新默认值；该代次只排序展示响应，不缓存授权或替代 Host 实时核验。
+
+
+## 2026-10-18：CLI 原生附件和工具桥补齐（v0.8.1）
+
+附件输入继续由真实子 Agent 的 Inbox 管理。私有运行配置接收当前消息中已准入的 image/file 引用，Host 使用 attachments 服务和子作用域 fs 路径映射解析，不接收消息自带的任意 path；回执去重包含附件身份，运行中附件不转为纯文本引导。共用转换模块按 CLI 的真实协议提供图片块、资源链接或文件路径，临时请求与进程范围沿现有清理链回收。
+
+macOS / Windows Desktop 普通文件沿用原生本地引用语义，通过公开 SessionInput.insertReference/source codec 进入草稿；图片通过原生 File action 上传。随包四包扩展新增默认关闭的 childImageUploads，在精确 CLI 绑定且附件能力可用时开启，仍拒绝子会话普通文件回执。私有 CLI 生成路由声明图片输入表示其能转换附件，不代表下游模型拥有视觉；ACP initialize 未明确公布 image prompt 能力时使用经过校验的图片路径。Web 普通文件上传回执仍未接通，不能借根会话身份绕过。
+
+Skill 与 MCP 复用既有 run 专属工具桥，从实际子 Agent 目录按需查询与调用。Kimi/Grok/Qoder 的 ACP 权限回调仅对结构化精确工具名、当前实时授权目录及 allow_once 准入，随后仍进入 Host tools.execute 与审批。当前四个未具备已验证安全临时入口的 CLI 保留限制，十二 CLI 状态与真实证据见 cli-harness-capabilities.md、tasks.md；不复制全局 Skill/MCP 配置或凭据。
+
+## v0.8.1 元数据刷新故障按 CLI 隔离
+
+账号、路径、模型与选型元数据在 Host 的已知 CLI 边界归属；清理未确认时，Runtime 与私有存储只封锁该 CLI 的进一步查询、账号变更、任务准入及尚未执行的队列。同 CLI 保护跨 Host 重启保留；损坏的按 CLI 记录同样只拒绝其 CLI。其他 CLI 的现有任务、查询、缓存和偏好不因该失败变化。
+
+全局 `cleanup-blocked.json` 继续表示真实任务清理或无法归属的旧故障；新元数据标记使用固定 CLI 枚举文件名和原严格格式，不保存底层日志、账号、路径或凭据，不通过忽略 waitForExit 消除异常。旧全局记录不能自动猜为 Grok 或因关闭设置而清除。实机恢复先正常退出完整范围并留存原标记，实际查询、Grok 原生续期提示与未验证边界见 tasks.md。
+
+## 2026-10-19：Qoder CN 独立接入与公共 Windows 路径发现（v0.8.1）
+
+- 注册 qodercn / Qoder CN CLI，项目偏好、账号绑定、路径、缓存、清理保护和 qodercn-acp-v1 均独立。国际版 qoder 历史保持原协议。泛称 Qoder 按安装分流：单装进入该版、双装原生询问；显式品牌不回退。检测不读取账号或发送 prompt，安装错误不冒充缺失。
+- 官方 CN 1.1.74 的品牌环境是 QODERCN_、用户根 .qoder-cn，默认项目目录仍是 .qoder。SDK 控制变量与 qodercli 认证载荷、ACP 的 _meta.qoder 工具字段及 qodercli.log 日志名保留共享原生定义，不作字符串猜测。账号/目录操作显式传递品牌，快照与来源包含品牌，子进程清除对侧品牌控制变量；当前未支持的认证或 VPC 路由明确拒绝。
+- 会话前核对 agentInfo.name 为 qoder-cli-cn；配置、模型及权限仍由原生回执确认。中国版公开过程、附件和工具桥复用相同算法，但持久身份与统计事件/source 保留 qodercn；停止仍等待范围退出，未知用量不补零。
+- 所有 CLI 复用有界 Windows 公共安装目录及最新用户/机器 PATH 发现。原生安装、npm 包身份、跨版拒绝和特殊桌面 CLI 验证继续保留，显式损坏路径不静默更换。此公共层减少新增 CLI 的发现代码，不声称任意便携位置都能自动定位。
+- 仅在 Windows 做 Desktop 验收，Mac Desktop 供用户其他工作使用；本地只做源码、离线检查及隔离构建。实际证据与登录/真实模型边界见 doc/tasks.md、doc/qodercn-protocol.md。
+
+## v0.8.1 目标、规划、反馈与分支桥接（2026-10-20）
+
+OpenSpec：`openspec/changes/bridge-conversation-features/`。
+
+- **能力单一来源**：`src/shared/conversation-features.ts` 的 `bridgedFeatureSupport(worker)` 由 Host 写入子会话绑定的 `capabilities`/`reasons`；Client 只消费绑定。旧绑定缺 `goal/feedback/forkEarlier` 时按不支持处理。不支持的入口保持可见并禁用，用共享 Tooltip 显示原因，触发为无操作。
+- **目标**：不复用 Harness `ctx.goals`（会武装 goal-round-driver 自动续轮）。插件自有 `Worker.goal`（objective/status/revision），Remote `setWorkerGoal/setWorkerGoalStatus/clearWorkerGoal` 以 revision 比较防并发覆盖。`runtime` 受理新一轮时冻结目标，status=active 则把 `【当前目标】…【目标结束】` 前置到发给 CLI 的文本；steer 不注入，Harness 用户消息保持原文；不使用 Codex `thread/goal`、ZCode `session/goal`。GoalBar 以同 id 槽位替换。
+- **规划**：沿用 `worker-permissions.ts` 映射；`/plan` 与各控件按 `capabilities.plan` 处理，不支持时给提示而非错误。
+- **反馈**：“+”菜单调用 Harness `feedbackUi.openSession(childSessionId)`；赞踩保持原生；不发 CLI、不上传厂商、不进模型上下文。
+- **分支**：Remote `forkWorker(parent, workerId, atMessageId)` 与 `/fork` 共用 `src/host/worker-fork.ts`。校验归属与空闲后，按已完成轮的助手消息映射原生截点，调用 CLI 原生分支得到新会话 ID，新建同父 Worker（复制偏好、模式、目标，revision 重置）与 Harness 子会话（复制截点前历史）；全部成功后才发布，失败回滚。只对原生会话 transport 开放。
+- **逐 CLI 核实依据**（本机源码/协议/--help，未调用模型）：Codex 0.162.1 app-server `thread/fork` 含 `lastTurnId`（最新+较早）；Claude 2.1.287 `--resume --fork-session --resume-session-at`，新分支首轮延迟分叉，新 ID 取首轮事件；Kimi 2.1.1 ACP `unstable_forkSession`；MiMo 0.1.15 SDK `session.fork`；ZCode 0.16.9 `session/fork`（`forkedSessionId`）；Pi 1.0.4 RPC `clone`；OpenCode 1.19.0 HTTP fork 路由；Qoder 1.1.73 / Qoder CN 1.1.74 ACP `forkSession`。降级：Grok（ACP `x.ai/session/fork` 参数与回执未核实）、OMP（RPC 仅 `branch(entryId)`，无包含最新完成轮的 clone）、OpenCode/Pi/ZCode 较早截点（缺少可靠的原生截点映射）；Antigravity 无公开接口、Hermes 原生分支会结束原会话。
+- 取舍：目标作为普通前置指令，遵循程度取决于模型，换取全部 CLI 一致且不自动续轮。
+
+### 分支烟测修复（2026-10-20）
+
+- OpenCode 真实烟测 `run-kcm8YW` 的源 Worker 数据库含源会话和新分支 `ses_ea75a221fffeNtq9sP4ZIrcadF`，新 Worker 数据库为空；缺失原生状态根引用导致分支首轮 GET 404。分支状态现对 Pi、OpenCode、ZCode 保存并继承 `nativeStateWorkerId`，使后续任务、再次分支及元数据回滚使用同一原生存储，仍保留各自会话 ID。ZCode 同样按 Worker 目录设置 `ZCODE_SESSION_DB_PATH`，一并修复其后续恢复路径。
+- ZCode 0.16.9 本机 `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs` 的 `Usr/mGt` schema 支持 message 目标。`ZKo/vXa` 将其转为 `targetMessageId`，`mRo/lRo/oRo` 在没有后续检查点时走纯会话复制，`P6e/R6e` 包含目标助手及同轮响应。旧默认 latestCheckpoint 会在纯对话抛出 `No workspace checkpoint is available yet.`，且存在旧检查点时可能遗漏后续对话。现改为 resume 后从 `session/messages` 活动链取得最新助手 ID，以 message 目标分支；不伪造检查点、不调用 `session/send`，较早截点仍禁用。
+- 本次仅核对既有真实失败证据、本机源码并做模拟回归；修复后的真实模型与 Desktop 验收由主会话继续执行。
+
+### MiMo / Qoder CN 续聊烟测修复（2026-10-20）
+
+- MiMo 0.1.15 按消息 ID 排序识别旧回复；插件原随机十六进制用户 ID 排在原生 `msg_g` 助手 ID 前，导致第二轮直接结束，缺少助手终态。保留上一代理已落下的 MiMo 专属原生格式消息 ID 修复，目标块和终态校验不变。本轮只审阅和测试该共享文件，不编辑另一代理负责的 `native-session-http.mjs`。
+- Qoder / Qoder CN 绑定仍包含稳定账号主体、PAT 和真实路由。原生启动新建 `.models` 但没有 `customs` 时，不再新增一项虚假的“customs 不存在”路由；实际 customs 文件新增、改写、删除仍改变绑定，真实账号切换仍拒绝。该修复恢复既有同账号续聊行为，不改账号权限策略。
+- 既有 raw、原生数据库与安装源码共同定位根因；模拟覆盖含目标/无目标续聊、缺少助手仍失败、缓存初始化不变与真实账号变化拒绝。修复后的真实模型复验由主会话执行，未据此宣称远端验收通过。
+
+### 分支终态与原生视图命令源复核（2026-10-20）
+
+- `HarnessWorkerFork.turns()` 原先把任何有 `end` 和 closing 助手消息的轮次当成完成轮。现与 Host `selectForkHistory` 一致，要求 `turn/end.data.reason.kind === 'completed'` 且有助手消息。失败或中断轮不会映射为最新轮空串截点，DOM guard 保持其按钮禁用。
+- 安装包 `dsh-client-ui-workspace/lib/client.js` 的 `openSession` 调用 `replaceMain`，以 `mainView` retain 子会话并 reveal 原生 Conversation；`Panel.openWorker` 只修改面板内部选择，`activeHarnessSessionId` 只是同步选中状态，不会替换原生主视图。原生 Conversation 默认“+”菜单使用 `command`，并未取得插件面板传入的 `cliworker-settings`。
+- 复用随包 runtime 已有的 `commandSource` owner 属性，通过公开 `conversation.composer.bar` 槽位为已绑定 Worker 的 CLI 子会话设置桥接源。主视图、原生侧栏及插件面板共用该槽位；保留原组件、inject、子槽和菜单 controller，普通/无会话保留原始 props。绑定晚到会更新，卸载释放替换。保持现有分支打开方式，不修改 Harness 核心、node_modules 或 runtime-host。

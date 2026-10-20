@@ -19,11 +19,11 @@ export function nativeUsageReport(cli: CliId, usage?: TokenUsage): NativeUsageRe
   if (!usage || !['response', 'run', 'session', 'reported'].includes(usage.scope) || !count(usage.total)) return
   // Qoder's official routes intentionally redact token counts to zero. The
   // ACP zero triple carries no flag proving it was an actual zero request.
-  if (cli === 'qoder' && (usage.total === 0 || usage.cacheRead !== undefined || usage.cacheWrite !== undefined)) return
+  if ((cli === 'qoder' || cli === 'qodercn') && (usage.total === 0 || usage.cacheRead !== undefined || usage.cacheWrite !== undefined)) return
   if (cli === 'antigravity') return // Its native total excludes cache; use the verified complete conversion instead.
   for (const field of ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'] as const)
     if (usage[field] !== undefined && !count(usage[field])) return
-  const inclusive = ['codex', 'hermes', 'grok', 'zcode', 'qoder'].includes(cli)
+  const inclusive = ['codex', 'hermes', 'grok', 'zcode', 'qoder', 'qodercn'].includes(cli)
   const reasoningSeparate = cli === 'mimo' || cli === 'opencode'
   const extra = usage.orchestration
   if (extra && (cli !== 'omp' || Object.values(extra).some((v) => !count(v)))) return
@@ -48,7 +48,7 @@ export function nativeUsageReport(cli: CliId, usage?: TokenUsage): NativeUsageRe
     : usage.output
   if (output !== undefined && !count(output)) return
   return {
-    totalTokens: usage.total, inputBasis: cli === 'qoder' ? 'reported' : inclusive ? 'inclusive' : 'uncached',
+    totalTokens: usage.total, inputBasis: (cli === 'qoder' || cli === 'qodercn') ? 'reported' : inclusive ? 'inclusive' : 'uncached',
     ...(usage.input === undefined ? {} : { inputTokens: usage.input }),
     ...(output === undefined ? {} : { outputTokens: output }),
     ...(usage.cacheRead === undefined ? {} : { cacheReadTokens: usage.cacheRead }),

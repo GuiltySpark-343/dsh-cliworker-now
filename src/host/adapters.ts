@@ -1,3 +1,5 @@
+import { StringDecoder } from 'node:string_decoder'
+import { qoderVariant } from './qoder-variant.ts'
 import { readClaudeOwnRoute, claudeNativeSettingsArguments } from './claude-own-route.ts'
 import { discoverClaudeNativeOAuth } from './claude-native-oauth.ts'
 import { discoverCodexModels } from './codex-models.ts'
@@ -18,9 +20,13 @@ import {
   hasWindowsHermesInstallDirectory,
   presentWindowsCliCandidate,
   windowsQoderCliEntry,
+  rejectWindowsQoderCrossVariant,
+  windowsCliCommands,
+  validateWindowsCliCandidate,
   WindowsCliInstallationError,
   WindowsCliNotFoundError,
 } from './windows-cli-installation.ts'
+import { findWindowsPathCommand } from './windows-cli-path.ts'
 import { findWindowsDesktopCli, windowsOpenCodeDesktopCli } from './windows-desktop-cli-installation.ts'
 import { resolveModel } from '../shared/models.ts'
 import { existsSync, statSync, lstatSync, accessSync, constants } from 'node:fs'
@@ -66,53 +72,13 @@ function entryPresent(path: string): boolean {
 }
 export const executableFor = (cli: CliId, config: RuntimeConfig): string => {
   if (cli === 'harness') throw new Error('Harness CLI 已移除，请新建 Hermes 任务')
-  if (cli === 'antigravity') return config.executable
-  const configured = config[`${cli}Executable`]
-  if (configured && configured !== cli) return configured
-  // A deployed standalone runtime is shared across platforms. An explicit
-  // custom executable still wins, and a missing deployment keeps native lookup.
+  const configured = configuredCliExecutable(cli, config)
+  if (configured) return configured
+  // A deployed standalone runtime is shared across platforms.
   if (cli === 'zcode' && entryPresent(managedZCodeEntry())) return managedZCodeEntry()
-  if (process.platform === 'win32') {
-    // The official qoder alias may dispatch to the IDE. Its standalone CLI is
-    // qodercli; Desktop's inherited PATH can predate the native/npm install.
-    if (cli === 'qoder') {
-      const entry = presentWindowsCliCandidate(cli)
-      return entry ?? 'qodercli'
-    }
-    const roots = [
-      join(homedir(), '.local', 'bin'),
-      join(
-        homedir(),
-        cli === 'pi'
-          ? '.pi/agent/bin'
-          : cli === 'grok'
-            ? '.grok/bin'
-            : cli === 'kimi'
-              ? '.kimi-code/bin'
-              : cli === 'mimo'
-                ? '.mimocode/bin'
-                : '.local/bin',
-      ),
-    ]
-    if (cli === 'zcode') {
-      const programs = process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Programs')
-      for (const root of [programs, process.env.ProgramFiles]) {
-        if (!root) continue
-        const entry = join(root, 'ZCode', 'resources', 'glm', 'zcode.cjs')
-        if (entryPresent(entry)) return entry
-      }
-    }
-    for (const root of roots)
-      for (const extension of ['.exe', '.com', '.cmd', '.bat']) {
-        const entry = join(root, cli + extension)
-        if (entryPresent(entry)) return entry
-      }
-    if (cli === 'codex' || cli === 'hermes') {
-      const entry = presentWindowsCliCandidate(cli)
-      if (entry) return entry
-    }
-    return configured || cli
-  }
+  if (process.platform === 'win32')
+    return presentWindowsCliCandidate(cli) ?? windowsCliCommands(cli)[0]!
+  if (cli === 'antigravity') return config.executable
   if (cli === 'zcode') return '/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs'
   if (cli === 'grok') return join(homedir(), '.grok/bin/grok')
   if (cli === 'pi') {
@@ -150,12 +116,15 @@ export async function captureCatalogMetadata(
   let output = '',
     bytes = 0
   const read = async (stream: typeof process.stdout, keep: boolean) => {
-    if (stream)
-      for await (const chunk of stream) {
-        bytes += Buffer.byteLength(chunk)
-        if (bytes > config.maxRunBytes) throw new Error('CLI discovery output too large')
-        if (keep) output += String(chunk)
-      }
+    if (!stream) return
+    // A multi-byte UTF-8 character may be split across chunks.
+    const decoder = new StringDecoder('utf8')
+    for await (const chunk of stream) {
+      bytes += Buffer.byteLength(chunk)
+      if (bytes > config.maxRunBytes) throw new Error('CLI discovery output too large')
+      if (keep) output += decoder.write(chunk)
+    }
+    if (keep) output += decoder.end()
   }
   const readers = [read(process.stdout, true), read(process.stderr, false)]
   try {
@@ -187,10 +156,10 @@ export async function catalogFor(
 ): Promise<Catalog> {
   const executable = await resolveCliExecutable(cli, backend, config, signal)
   signal.throwIfAborted()
-  if (cli === 'qoder') {
-    const models = await discoverQoderModels(backend, config, executable, cwd, signal)
-    if (!models.length) throw new Error('Qoder 当前账号暂无可确认模型，请登录或刷新')
-    return { cli, models, notice: 'Qoder 原生账号模型目录；调用权限以实际请求为准' }
+  if ((cli === 'qoder' || cli === 'qodercn')) {
+    const models = await discoverQoderModels(backend, config, executable, cwd, signal, cli)
+    if (!models.length) throw new Error(`${qoderVariant(cli).label} 当前账号暂无可确认模型，请登录或刷新`)
+    return { cli, models, notice: `${qoderVariant(cli).label} 原生账号模型目录；调用权限以实际请求为准` }
   }
   if (isExtendedCli(cli)) {
     const models = await extendedCatalog(
@@ -226,7 +195,7 @@ export async function catalogFor(
   if (cli === 'claude' || cli === 'kimi' || cli === 'mimo') {
     const claudeRoute = cli === 'claude' ? await readClaudeOwnRoute(cwd, signal) : undefined
     if (claudeRoute?.kind === 'native') {
-      const { models } = await discoverClaudeNativeOAuth(
+      const { models, quota } = await discoverClaudeNativeOAuth(
         backend,
         config,
         executable,
@@ -234,7 +203,14 @@ export async function catalogFor(
         signal,
         claudeNativeSettingsArguments(claudeRoute.configDirectory, claudeRoute.suppressedEnvironment),
       )
-      return { cli, models, notice: 'Claude 官方账号当前可用模型' }
+      return {
+        cli,
+        models,
+        notice:
+          quota === 'confirmed'
+            ? 'Claude 官方账号当前可用模型'
+            : 'Claude 官方账号可用模型；剩余额度暂无法确认，以实际调用为准',
+      }
     }
     const sources = await readFirstPartyModelSources(
       cli,
@@ -304,7 +280,7 @@ export function workerArguments(
   const task = `任务：\n${prompt}`
   if (cli === 'antigravity')
     return agyArguments(executable, project, preference, mode, prompt, timeoutMs, conversationId)
-  if (cli === 'qoder') {
+  if ((cli === 'qoder' || cli === 'qodercn')) {
     if (!nativeTransport) throw new Error('Qoder 仅支持已确认的原生 ACP 通信，请新建任务')
     if (mode === 'plan') throw new Error('Qoder 当前 ACP 未公开只读规划模式，无法安全执行规划任务')
     return [executable, '--acp', '--permission-mode', 'accept_edits', '--model', preference.model]
@@ -381,7 +357,7 @@ export function protocolFor(
   expectedModel?: string,
 ) {
   if (cli === 'harness') throw new Error('Harness CLI 已移除，历史记录仅供查看')
-  if (cli === 'qoder') throw new Error('Qoder 必须通过原生 ACP 桥运行')
+  if ((cli === 'qoder' || cli === 'qodercn')) throw new Error('Qoder 必须通过原生 ACP 桥运行')
   if (cli === 'zcode') return new ZCodeProtocol(emit, identify, maxLineBytes, expectedModel)
   if (cli === 'hermes') return new HermesProtocol(emit, identify, maxLineBytes)
   if (cli === 'grok') return new GrokProtocol(emit, identify, maxLineBytes)
@@ -459,11 +435,10 @@ async function resolveUncachedCliExecutable(
 ): Promise<string> {
   signal.throwIfAborted()
   const executable = executableFor(cli, config)
-  const configured = cli !== 'antigravity' && cli !== 'harness' ? config[`${cli}Executable`] : undefined
-  const explicit = !!configured && configured !== cli
+  const explicit = !!configuredCliExecutable(cli, config)
   const desktopCli = process.platform === 'win32' && (cli === 'zcode' || cli === 'opencode')
   let resolved: string
-  if ((isExtendedCli(cli) || cli === 'qoder') && /\.[cm]?js$/.test(executable) && existsSync(executable)) {
+  if ((isExtendedCli(cli) || (cli === 'qoder' || cli === 'qodercn')) && /\.[cm]?js$/.test(executable) && existsSync(executable)) {
     // JavaScript launchers run through Node and need readability, not an executable bit.
     // A directory ending in .js is a broken configuration, not an installed CLI.
     if (!statSync(executable).isFile()) throw new Error('CLI 脚本路径不是普通文件')
@@ -474,18 +449,6 @@ async function resolveUncachedCliExecutable(
       try {
         return await backend.resolveExecutable(executable)
       } catch (error: any) {
-        const absent =
-          error instanceof SubprocessExecutableNotFoundError || ['ENOENT', 'ENOTDIR'].includes(error.code)
-        if (
-          process.platform === 'win32' &&
-          executable === cli &&
-          absent &&
-          cli === 'hermes' &&
-          hasWindowsHermesInstallDirectory()
-        )
-          throw new WindowsCliInstallationError(
-            '检测到 Hermes 安装目录，但未找到可用 CLI 入口，请完成安装或配置已有入口',
-          )
         // Only an absent default PATH entry can use the legacy private install.
         // A broken or incompatible native/configured entry must remain an error.
         if (cli === 'pi' && executable === 'pi' && ['ENOENT', 'ENOTDIR'].includes(error.code)) {
@@ -515,11 +478,29 @@ async function resolveUncachedCliExecutable(
       signal.throwIfAborted()
       const absent =
         error instanceof SubprocessExecutableNotFoundError || ['ENOENT', 'ENOTDIR'].includes(error.code)
-      if (process.platform === 'win32' && cli === 'qoder' && executable === 'qodercli' && !explicit && absent) {
-        try { resolved = await pathLookup(() => backend.resolveExecutable('qoder')) } catch (legacy: any) {
+      const refreshPath =
+        process.platform === 'win32' && cli !== 'harness' && !explicit &&
+        executable === windowsCliCommands(cli)[0] && absent
+      const refreshed = refreshPath
+        ? await findWindowsPathCommand(
+            windowsCliCommands(cli),
+            (argv, cwd) => captureCatalogMetadata(
+              backend, { ...config, maxRunBytes: Math.min(config.maxRunBytes, 131_072) }, argv, cwd, signal,
+            ),
+            signal,
+          )
+        : undefined
+      signal.throwIfAborted()
+      if (refreshed) {
+        const entry = validateWindowsCliCandidate(cli as Exclude<CliId, 'harness'>, refreshed)
+        resolved = /\.[cm]?js$/i.test(entry) ? entry : await pathLookup(() => backend.resolveExecutable(entry))
+      } else if (refreshPath && cli === 'hermes' && hasWindowsHermesInstallDirectory())
+        throw new WindowsCliInstallationError('检测到 Hermes 安装目录，但未找到可用 CLI 入口，请完成安装或配置已有入口')
+      else if (process.platform === 'win32' && (cli === 'qoder' || cli === 'qodercn') && executable === qoderVariant(cli).executable && !explicit && absent) {
+        try { resolved = await pathLookup(() => backend.resolveExecutable(cli)) } catch (legacy: any) {
           signal.throwIfAborted()
           if (legacy instanceof SubprocessExecutableNotFoundError || ['ENOENT', 'ENOTDIR'].includes(legacy.code))
-            throw new WindowsCliNotFoundError('qoder')
+            throw new WindowsCliNotFoundError(cli)
           throw legacy
         }
       } else if (desktopCli && executable === cli && !explicit && absent) {
@@ -557,8 +538,10 @@ async function resolveUncachedCliExecutable(
     }
   }
   signal.throwIfAborted()
-  if (process.platform === 'win32' && cli === 'qoder' && (!explicit || automaticSelection))
-    resolved = windowsQoderCliEntry(resolved)
+  if (process.platform === 'win32' && (cli === 'qoder' || cli === 'qodercn')) {
+    rejectWindowsQoderCrossVariant(resolved, cli)
+    if (!explicit || automaticSelection) resolved = windowsQoderCliEntry(resolved, cli)
+  }
   if (process.platform === 'win32' && cli === 'opencode') {
     const bundled = windowsOpenCodeDesktopCli(resolved, explicit)
     if (bundled) resolved = bundled

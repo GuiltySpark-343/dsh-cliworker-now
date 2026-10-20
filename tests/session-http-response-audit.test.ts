@@ -5,7 +5,7 @@ import { BridgeProtocol } from '../src/host/bridge-protocol.ts'
 import { foldEvents, type WorkerEvent } from '../src/shared/types.ts'
 
 // The HTTP/SSE boundary is explicitly simulated. No server, account or model runs.
-const wire = vi.hoisted(() => ({ scenario: 'two-responses', parentID: '', ready: undefined as any,
+const wire = vi.hoisted(() => ({ scenario: 'two-responses', parentID: '', prompt: '', previousID: '', ready: undefined as any,
   release: undefined as any, events: [] as any[], final: [] as any[] }))
 vi.mock('../src/host/native-http.mjs', async (load) => {
   const actual = await load<Record<string, any>>()
@@ -17,8 +17,10 @@ vi.mock('../src/host/native-http.mjs', async (load) => {
       if (path === '/doc') return { paths: { '/event': {}, '/session/{sessionID}/prompt_async': {}, '/session/{sessionID}/abort': {} } }
       if (path === '/provider') return { all: [{ id: 'simulated', models: { model: { id: 'model', limit: { context: 1000 } } } }] }
       if (path === '/session') return { id: 'ses_SIMULATED', directory: process.cwd() }
+      if (path === '/session/ses_SIMULATED') return { id: 'ses_SIMULATED', directory: process.cwd() }
       if (path.endsWith('/prompt_async')) {
         wire.parentID = options.body.messageID
+        wire.prompt = options.body.parts[0].text
         buildWire()
         wire.release()
         return
@@ -55,6 +57,17 @@ function buildWire() {
     message('message1', true), updated(tool), message('message2'), updated(lastText), message('message2', true),
     { type: 'session.idle', properties: { sessionID: sid } }]
   wire.final = [{ info: info('message1', true), parts: [thought, firstText, tool] }, { info: info('message2', true), parts: [lastText] }]
+  if (wire.scenario === 'resume-order' || wire.scenario === 'resume-no-assistant') {
+    // Simulate MiMo 0.1.15 existing-assistant classification: an earlier user
+    // ID is treated as already answered by the last completed assistant.
+    wire.previousID = `msg_g${(BigInt(Date.now() - 1000) * 4096n + 1n).toString(16).padStart(16, '0')}SIMULATED`
+    const history = { info: { ...info(wire.previousID, true), parentID: 'msg_SIMULATED_old_user', finish: 'stop' }, parts: [] }
+    if (wire.parentID < wire.previousID || wire.scenario === 'resume-no-assistant') {
+      wire.events = [{ type: 'session.status', properties: { sessionID: sid, status: { type: 'busy' } } },
+        { type: 'session.idle', properties: { sessionID: sid } }]
+      wire.final = [history]
+    } else wire.final.unshift(history)
+  }
   if (wire.scenario === 'final-only-public-blocks') {
     wire.events = [message('message2'), updated(lastText), message('message2', true), { type: 'session.idle', properties: { sessionID: sid } }]
     wire.final = [{ info: info('message2', true), parts: [lastText,
@@ -70,7 +83,7 @@ beforeEach(() => {
   wire.scenario = 'two-responses'
   wire.ready = new Promise<void>((resolve) => { wire.release = resolve })
 })
-async function run(cli: 'mimo' | 'opencode') {
+async function run(cli: 'mimo' | 'opencode', prompt = 'SIMULATED TASK', resume = false) {
   const events: WorkerEvent[] = [], records: any[] = [], frames: any[] = []
   const parser = new BridgeProtocol((event) => events.push({ ...event, seq: events.length, runId: 'SIMULATED-run', time: new Date(0).toISOString() }), () => {}, 1048576)
   const emit = (frame: any) => { frames.push(frame); parser.feed(JSON.stringify(frame) + '\n') }
@@ -78,11 +91,32 @@ async function run(cli: 'mimo' | 'opencode') {
     session: (id: string, model: string) => emit({ type: 'session', id, model }),
     result: (status: string, response: string, error: unknown, resultScope: string) => emit({ type: 'result', status, response, error, resultScope }) }
   await (cli === 'mimo' ? runNativeMimo : runNativeOpenCode)({ cli, argv: ['SIMULATED'], project: process.cwd(),
-    preference: { model: 'simulated/model', effort: 'default' }, mode: 'plan', prompt: 'SIMULATED TASK',
+    preference: { model: 'simulated/model', effort: 'default' }, mode: 'plan', prompt,
+    ...(resume ? { conversationId: 'ses_SIMULATED' } : {}),
     maxLineBytes: 1048576, maxRunBytes: 16777216, timeoutMs: 5000 }, io)
   parser.end()
   return { events, records, rows: foldEvents(events), frames }
 }
+
+it.each(['SIMULATED follow-up', '【当前目标】\nSIMULATED goal\n【目标结束】\n\nSIMULATED follow-up'])(
+  'MiMo resumes after its previous native reply with the original prompt: %s', async prompt => {
+    wire.scenario = 'resume-order'
+    const result = await run('mimo', prompt, true)
+    expect(wire.parentID).toMatch(/^msg_g[0-9a-f]{16}[0-9A-Za-z]{9}$/)
+    expect(wire.parentID > wire.previousID).toBe(true)
+    expect(wire.prompt).toBe(prompt)
+    expect(result.frames.at(-1)).toMatchObject({ status: 'SUCCESS', response: '工具前工具后' })
+    expect(result.events.filter(event => event.response?.complete)).toHaveLength(2)
+  },
+)
+
+it.each(['SIMULATED follow-up', '【当前目标】\nSIMULATED goal\n【目标结束】\n\nSIMULATED follow-up'])(
+  'MiMo still rejects a resumed round with no matching assistant: %s', async prompt => {
+    wire.scenario = 'resume-no-assistant'
+    await expect(run('mimo', prompt, true)).rejects.toThrow('原生轮次缺少助手终态')
+    expect(wire.prompt).toBe(prompt)
+  },
+)
 
 describe.each(['mimo', 'opencode'] as const)('%s HTTP producer with simulated wire', (cli) => {
   it('projects two precise model responses and their own usage/cache/reasoning/tool blocks', async () => {

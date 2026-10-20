@@ -1,3 +1,4 @@
+import { qoderVariant, type QoderCliId } from './qoder-variant.ts'
 import { constants } from 'node:fs'
 import { lstat, open, mkdtemp, mkdir, writeFile, rm, readdir } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
@@ -28,6 +29,7 @@ export class QoderAccountError extends Error {
 
 type QoderMetadata = { account: unknown; models: ModelChoice[] }
 interface QoderCatalogScope {
+  cli: QoderCliId
   backend: ProcessBackend
   config: RuntimeConfig
   executable: string
@@ -41,9 +43,9 @@ const changedSource = () => new QoderAccountError('Qoder 账号或模型来源�
 
 /** A fresh local proof, never a credential/principal cache. Include absent inputs
  * and the customs directory inventory so additions are observable as well. */
-async function qoderMetadataSource(executable: string, cwd: string, config: RuntimeConfig, signal: AbortSignal) {
-  const env = qoderEnvironment(), directory = env.QODER_CONFIG_DIR!
-  const name = process.env.QODER_CONFIG_DIR_NAME?.normalize('NFC') || '.qoder'
+async function qoderMetadataSource(executable: string, cwd: string, config: RuntimeConfig, signal: AbortSignal, cli: QoderCliId) {
+  const env = qoderEnvironment(cli), directory = env[qoderVariant(cli).prefix + 'CONFIG_DIR']!
+  const name = qoderProjectDirectoryName(cli)
   const paths = [join(directory, '.auth', 'user'), join(directory, '.auth', 'machine_id'),
     join(directory, 'settings.json'), join(directory, '.env'),
     ...['settings.json', 'settings.local.json', '.env'].map((file) => join(cwd, name, file))]
@@ -68,9 +70,9 @@ async function qoderMetadataSource(executable: string, cwd: string, config: Runt
     files.push([path, fingerprint])
   }
   const fingerprint = await nativeMetadataKey(executable, cwd, { env, files, inventory,
-    configuredExecutable: config.qoderExecutable,
-    savedExecutable: config.cliExecutablePaths?.read('qoder'),
-    executableRevision: config.cliExecutablePaths?.revision('qoder'),
+    cli, configuredExecutable: config[`${cli}Executable`],
+    savedExecutable: config.cliExecutablePaths?.read(cli),
+    executableRevision: config.cliExecutablePaths?.revision(cli),
   }, signal)
   if (!fingerprint) throw changedSource()
   return fingerprint
@@ -81,23 +83,23 @@ async function qoderMetadataSource(executable: string, cwd: string, config: Runt
  * source proof after leaving the scope rejects concurrent logout/routing changes. */
 export async function withQoderCatalogSnapshot<T>(
   backend: ProcessBackend, config: RuntimeConfig, executable: string, cwd: string,
-  signal: AbortSignal, operation: () => Promise<T>,
+  signal: AbortSignal, operation: () => Promise<T>, cli: QoderCliId = 'qoder',
 ): Promise<T> {
-  const before = await qoderMetadataSource(executable, cwd, config, signal)
-  const scope: QoderCatalogScope = { backend, config, executable, cwd, signal, active: true }
+  const before = await qoderMetadataSource(executable, cwd, config, signal, cli)
+  const scope: QoderCatalogScope = { cli, backend, config, executable, cwd, signal, active: true }
   const result = await catalogSnapshots.run(scope, async () => {
     try { return await operation() }
     finally { scope.active = false; scope.reading = undefined }
   })
   signal.throwIfAborted()
-  if (before !== await qoderMetadataSource(executable, cwd, config, signal)) throw changedSource()
+  if (before !== await qoderMetadataSource(executable, cwd, config, signal, cli)) throw changedSource()
   return result
 }
 
-async function scopedMetadata(backend: ProcessBackend, config: RuntimeConfig, executable: string, cwd: string, signal: AbortSignal) {
+async function scopedMetadata(backend: ProcessBackend, config: RuntimeConfig, executable: string, cwd: string, signal: AbortSignal, cli: QoderCliId) {
   const scope = catalogSnapshots.getStore()
-  if (!scope?.active || scope.backend !== backend || scope.config !== config || scope.executable !== executable || scope.cwd !== cwd || scope.signal !== signal) return undefined
-  const reading = scope.reading ??= queryQoderMetadata(backend, config, executable, cwd, signal, 'models').then((value) => {
+  if (!scope?.active || scope.cli !== cli || scope.backend !== backend || scope.config !== config || scope.executable !== executable || scope.cwd !== cwd || scope.signal !== signal) return undefined
+  const reading = scope.reading ??= queryQoderMetadata(backend, config, executable, cwd, signal, 'models', cli).then((value) => {
     if (!record(value) || !Array.isArray(value.models)) throw new QoderAccountError()
     return value as QoderMetadata
   })
@@ -114,30 +116,40 @@ const unsupportedEnvironment = [
   'QODER_SDK_AUTH_CONFIG_DIR', 'QODER_CENTER_ENDPOINT', 'QODER_SERVER_ENDPOINT',
   'QODER_VPC_ENDPOINT', 'QODER_ENV_VPC_ENABLED',
 ]
-export function qoderConfigDirectory(env = process.env): string {
-  if (env.QODERCLI_SITE && env.QODERCLI_SITE !== 'global')
-    throw new QoderAccountError('当前接入仅支持 Qoder 国际版 CLI，请检查原生程序')
-  const name = env.QODER_CONFIG_DIR_NAME?.normalize('NFC') || '.qoder'
+export function qoderProjectDirectoryName(cli: QoderCliId = 'qoder'): string {
+  return process.env[qoderVariant(cli).prefix + 'CONFIG_DIR_NAME']?.normalize('NFC') || '.qoder'
+}
+export function qoderConfigDirectory(env = process.env, cli: QoderCliId = 'qoder'): string {
+  const variant = qoderVariant(cli)
+  if (env.QODERCLI_SITE && env.QODERCLI_SITE !== variant.site)
+    throw new QoderAccountError(`当前接入仅支持 ${variant.label}${cli === 'qoder' ? ' 国际版' : ' 中国版'} CLI，请检查原生程序`)
+  const name = env[variant.prefix + 'CONFIG_DIR_NAME']?.normalize('NFC') || variant.directory
   if (basename(name) !== name || name === '.' || name === '..' || name !== name.trim() || name.endsWith('.') ||
       [...name].length > 64 || !/^[\p{L}\p{N}\p{M}._ -]+$/u.test(name) ||
       /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name) ||
       ['.git', '.svn', '.hg', '.vscode', '.idea', '.husky', '.github', 'node_modules', 'bower_components'].includes(name.toLowerCase()))
     throw new QoderAccountError()
-  return resolve(env.QODER_CONFIG_DIR?.trim() || join(env.QODER_CLI_HOME?.trim() || env.GEMINI_CLI_HOME?.trim() || homedir(), name))
+  return resolve(env[variant.prefix + 'CONFIG_DIR']?.trim() || join(env[variant.prefix + 'CLI_HOME']?.trim() || env.GEMINI_CLI_HOME?.trim() || homedir(), name))
 }
-/** Pin the same native account root for discovery, execution and user-owned login terminals. */
-export function qoderEnvironment(): Record<string, string> {
-  if (unsupportedEnvironment.some((name) => !!process.env[name]) ||
-      ['QODER_ENV', 'QODER_RUNNING_ENV'].some((name) => !!process.env[name] && process.env[name] !== 'prod'))
-    throw new QoderAccountError('Qoder 存在尚未支持的认证或服务路由，请在原生 CLI 中检查')
-  const token = process.env.QODER_PERSONAL_ACCESS_TOKEN
-  if (token && !literal(token)) throw new QoderAccountError('Qoder PAT 配置无效，请在原生 CLI 中检查')
+/** Pin the selected native account root and clear the other brand's controls. */
+export function qoderEnvironment(cli: QoderCliId = 'qoder'): Record<string, string> {
+  const variant = qoderVariant(cli), prefix = variant.prefix
+  const shared = new Set(['QODER_SDK_AUTH_PAYLOAD_FILE', 'QODER_SDK_AUTH_CONFIG_DIR'])
+  if (unsupportedEnvironment.some((name) => !!process.env[shared.has(name) ? name : prefix + name.slice('QODER_'.length)]) ||
+      ['ENV', 'RUNNING_ENV'].some((name) => !!process.env[prefix + name] && process.env[prefix + name] !== 'prod'))
+    throw new QoderAccountError(`${variant.label} 存在尚未支持的认证或服务路由，请在原生 CLI 中检查`)
+  const token = process.env[prefix + 'PERSONAL_ACCESS_TOKEN']
+  if (token && !literal(token)) throw new QoderAccountError(`${variant.label} PAT 配置无效，请在原生 CLI 中检查`)
+  const foreign = cli === 'qodercn' ? 'QODER_' : 'QODERCN_'
+  const cleared = Object.fromEntries(Object.keys(process.env).filter(name => name.startsWith(foreign)).map(name => [name, '']))
   return {
-    QODER_CONFIG_DIR: qoderConfigDirectory(),
-    QODER_WORKING_DIR: '', QODER_SESSION_ID: '', QODER_SESSION_NAME: '', QODER_MODEL: '', GEMINI_MODEL: '',
+    ...cleared,
+    QODERCLI_SITE: variant.site,
+    [prefix + 'CONFIG_DIR']: qoderConfigDirectory(process.env, cli),
+    [prefix + 'WORKING_DIR']: '', [prefix + 'SESSION_ID']: '', [prefix + 'SESSION_NAME']: '', [prefix + 'MODEL']: '', GEMINI_MODEL: '',
+    [prefix + 'PERSONAL_ACCESS_TOKEN']: token || '',
     QODER_AGENT_SDK_ENTRYPOINT: '', QODER_AGENT_SDK_VERSION: '',
-    // Harness scrubs inherited secret variables. Only this selected CLI receives its own PAT.
-    ...(token ? { QODER_PERSONAL_ACCESS_TOKEN: token } : {}),
+    QODER_SDK_AUTH_PAYLOAD_FILE: '', QODER_SDK_AUTH_CONFIG_DIR: '',
   }
 }
 
@@ -180,8 +192,8 @@ async function read(path: string, signal: AbortSignal, limit = 1024 * 1024, acco
 /** Native dotenv chooses project first, then user, and may supply authentication
  * or routing absent from the Host environment. Do not bind a different principal
  * by silently masking those declarations in the SDK metadata child. */
-async function checkQoderDotEnv(directory: string, cwd: string | undefined, signal: AbortSignal) {
-  const name = process.env.QODER_CONFIG_DIR_NAME?.normalize('NFC') || '.qoder'
+async function checkQoderDotEnv(directory: string, cwd: string | undefined, signal: AbortSignal, cli: QoderCliId) {
+  const name = qoderProjectDirectoryName(cli)
   const project = cwd ? await read(join(cwd, name, '.env'), signal) : undefined
   const raw = project ?? await read(join(directory, '.env'), signal)
   if (raw !== undefined && /(?:^|\n)\s*(?:export\s+)?(?:QODER(?:CLI|CN)?_[A-Za-z0-9_]*|GEMINI_CLI_HOME|GEMINI_MODEL)\s*(?:=|:)/im.test(raw))
@@ -190,8 +202,8 @@ async function checkQoderDotEnv(directory: string, cwd: string | undefined, sign
 
 /** Native G8o/MNu migrations write Project/Local sources during load. Refuse
  * their legacy inputs instead of permitting a read-only query to migrate them. */
-async function checkQoderProjectSettings(cwd: string, signal: AbortSignal) {
-  const name = process.env.QODER_CONFIG_DIR_NAME?.normalize('NFC') || '.qoder'
+async function checkQoderProjectSettings(cwd: string, signal: AbortSignal, cli: QoderCliId) {
+  const name = qoderProjectDirectoryName(cli)
   for (const file of ['settings.json', 'settings.local.json']) {
     const raw = await read(join(cwd, name, file), signal)
     if (raw === undefined) continue
@@ -234,31 +246,31 @@ async function copyQoderMetadataSettings(source: string, target: string, signal:
 
 /** Same installed CLI's SDK control protocol, without a prompt or SDK dependency.
  * qodercli is native readOnly/none; accessToken is native memoryOnly/none. */
-async function queryQoderMetadata(backend: ProcessBackend, config: RuntimeConfig, executable: string, cwd: string, signal: AbortSignal, kind: 'account' | 'models'): Promise<unknown> {
+async function queryQoderMetadata(backend: ProcessBackend, config: RuntimeConfig, executable: string, cwd: string, signal: AbortSignal, kind: 'account' | 'models', cli: QoderCliId): Promise<unknown> {
   signal.throwIfAborted()
-  const env = qoderEnvironment()
-  await checkQoderDotEnv(env.QODER_CONFIG_DIR!, cwd, signal)
-  await checkQoderProjectSettings(cwd, signal)
+  const env = qoderEnvironment(cli)
+  await checkQoderDotEnv(env[qoderVariant(cli).prefix + 'CONFIG_DIR']!, cwd, signal, cli)
+  await checkQoderProjectSettings(cwd, signal, cli)
   // Native telemetry also asks for a machine ID even in readOnly auth mode.
   // An incomplete browser store must be repaired by the user in the native CLI.
-  if (!env.QODER_PERSONAL_ACCESS_TOKEN && !(await read(join(env.QODER_CONFIG_DIR!, '.auth', 'machine_id'), signal))?.trim())
+  if (!env[qoderVariant(cli).prefix + 'PERSONAL_ACCESS_TOKEN'] && !(await read(join(env[qoderVariant(cli).prefix + 'CONFIG_DIR']!, '.auth', 'machine_id'), signal))?.trim())
     throw new QoderAccountError('Qoder 原生登录机器标识缺失，请在原生 CLI 检查登录')
-  const root = await mkdtemp(join(tmpdir(), 'cliworker-qoder-metadata-'))
+  const root = await mkdtemp(join(tmpdir(), `cliworker-${cli}-metadata-`))
   const payload = join(root, 'auth.json')
   let cleanupConfirmed = true
   try {
-    await copyQoderMetadataSettings(env.QODER_CONFIG_DIR!, root, signal)
-    if (env.QODER_PERSONAL_ACCESS_TOKEN) {
+    await copyQoderMetadataSettings(env[qoderVariant(cli).prefix + 'CONFIG_DIR']!, root, signal)
+    if (env[qoderVariant(cli).prefix + 'PERSONAL_ACCESS_TOKEN']) {
       // memoryOnly auth still creates a machine ID for token exchange. Keep that
       // write private, preserving an existing ID only for native customs decryption.
-      const machine = await read(join(env.QODER_CONFIG_DIR!, '.auth', 'machine_id'), signal)
+      const machine = await read(join(env[qoderVariant(cli).prefix + 'CONFIG_DIR']!, '.auth', 'machine_id'), signal)
       if (machine !== undefined) {
         await mkdir(join(root, '.auth'), { mode: 0o700 })
         await writeFile(join(root, '.auth', 'machine_id'), machine, { flag: 'wx', mode: 0o600 })
       }
     }
-    await writeFile(payload, JSON.stringify(env.QODER_PERSONAL_ACCESS_TOKEN
-      ? { type: 'accessToken', accessToken: env.QODER_PERSONAL_ACCESS_TOKEN } : { type: 'qodercli' }), { flag: 'wx', mode: 0o600 })
+    await writeFile(payload, JSON.stringify(env[qoderVariant(cli).prefix + 'PERSONAL_ACCESS_TOKEN']
+      ? { type: 'accessToken', accessToken: env[qoderVariant(cli).prefix + 'PERSONAL_ACCESS_TOKEN'] } : { type: 'qodercli' }), { flag: 'wx', mode: 0o600 })
     const control = AbortSignal.any([signal, AbortSignal.timeout(kind === 'models' ? 30_000 : 15_000)])
     control.throwIfAborted()
     const child = backend.spawn({
@@ -266,8 +278,8 @@ async function queryQoderMetadata(backend: ProcessBackend, config: RuntimeConfig
         '--no-session-persistence', '--tools', '', '--disable-builtin-skills', '--permission-mode', 'default',
         '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--settings',
         '{"disableAllHooks":true,"general":{"enableAutoUpdate":false},"aiCodeTracking":{"installGitCommitHook":false}}']),
-      cwd, env: { ...env, QODER_CONFIG_DIR: root, QODER_SDK_AUTH_CONFIG_DIR: env.QODER_PERSONAL_ACCESS_TOKEN ? root : env.QODER_CONFIG_DIR!,
-        QODER_PERSONAL_ACCESS_TOKEN: '', QODER_AGENT_SDK_ENTRYPOINT: 'sdk-ts', QODER_AGENT_SDK_VERSION: '1.0.53',
+      cwd, env: { ...env, [qoderVariant(cli).prefix + 'CONFIG_DIR']: root, QODER_SDK_AUTH_CONFIG_DIR: env[qoderVariant(cli).prefix + 'PERSONAL_ACCESS_TOKEN'] ? root : env[qoderVariant(cli).prefix + 'CONFIG_DIR']!,
+        [qoderVariant(cli).prefix + 'PERSONAL_ACCESS_TOKEN']: '', QODER_AGENT_SDK_ENTRYPOINT: 'sdk-ts', QODER_AGENT_SDK_VERSION: '1.0.53',
         QODER_SDK_AUTH_PAYLOAD_FILE: payload, QODER_SDK_CUSTOM_BASE_URL_BYOK: '1' },
       stdio: { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' }, signal: control, graceMs: config.graceMs,
     })
@@ -368,13 +380,14 @@ async function queryQoderMetadata(backend: ProcessBackend, config: RuntimeConfig
     if (cleanupConfirmed) await rm(root, { recursive: true, force: true })
   }
 }
-export async function queryQoderAccountInfo(backend: ProcessBackend, config: RuntimeConfig, executable: string, cwd: string, signal: AbortSignal): Promise<unknown> {
-  const snapshot = await scopedMetadata(backend, config, executable, cwd, signal)
+export async function queryQoderAccountInfo(backend: ProcessBackend, config: RuntimeConfig, executable: string, cwd: string, signal: AbortSignal, cli: QoderCliId = 'qoder'): Promise<unknown> {
+  const snapshot = await scopedMetadata(backend, config, executable, cwd, signal, cli)
   if (snapshot) return snapshot.account
-  return queryQoderMetadata(backend, config, executable, cwd, signal, 'account')
+  return queryQoderMetadata(backend, config, executable, cwd, signal, 'account', cli)
 }
 
 interface QoderAccountOptions {
+  cli?: QoderCliId
   directory?: string
   project?: string
   backend?: ProcessBackend
@@ -383,35 +396,36 @@ interface QoderAccountOptions {
   query?: () => Promise<unknown> | unknown
 }
 async function accountMaterial(executable: string, signal: AbortSignal, options: QoderAccountOptions = {}) {
-  const env = qoderEnvironment(), directory = options.directory ?? env.QODER_CONFIG_DIR!
-  await checkQoderDotEnv(directory, options.project, signal)
-  if (env.QODER_PERSONAL_ACCESS_TOKEN) return {
-    sourceIds: [directory, 'environment:QODER_PERSONAL_ACCESS_TOKEN'],
-    entries: [{ provider: 'qoder', principal: { kind: 'pat', key: hash(env.QODER_PERSONAL_ACCESS_TOKEN) } }],
-    identity: { state: 'configured', verification: 'local', authMethod: 'api', summary: '已配置 Qoder PAT，待原生目录验证' } as AccountIdentity,
+  const cli = options.cli ?? 'qoder'
+  const env = qoderEnvironment(cli), directory = options.directory ?? env[qoderVariant(cli).prefix + 'CONFIG_DIR']!
+  await checkQoderDotEnv(directory, options.project, signal, cli)
+  if (env[qoderVariant(cli).prefix + 'PERSONAL_ACCESS_TOKEN']) return {
+    sourceIds: [directory, `environment:${qoderVariant(cli).prefix}PERSONAL_ACCESS_TOKEN`],
+    entries: [{ provider: cli, principal: { kind: 'pat', key: hash(env[qoderVariant(cli).prefix + 'PERSONAL_ACCESS_TOKEN']) } }],
+    identity: { state: 'configured', verification: 'local', authMethod: 'api', summary: `已配置 ${qoderVariant(cli).label} PAT，待原生目录验证` } as AccountIdentity,
   }
   const encrypted = await read(join(directory, '.auth/user'), signal)
   if (!encrypted?.trim()) return {
     sourceIds: [directory], entries: [],
-    identity: { state: 'unconfigured', verification: 'local', summary: '尚未登录 Qoder' } as AccountIdentity,
+    identity: { state: 'unconfigured', verification: 'local', summary: `尚未登录 ${qoderVariant(cli).label}` } as AccountIdentity,
   }
   let value: unknown = options.query ? await options.query() :
     options.backend && options.config && options.project
-      ? await queryQoderAccountInfo(options.backend, options.config, executable, options.project, signal)
+      ? await queryQoderAccountInfo(options.backend, options.config, executable, options.project, signal, cli)
       : undefined
   signal.throwIfAborted()
   try {
     if (value === null) return {
       sourceIds: [directory], entries: [],
-      identity: { state: 'unauthenticated', verification: 'cli', summary: 'Qoder 登录不可用，请在原生 CLI 中重新登录' } as AccountIdentity,
+      identity: { state: 'unauthenticated', verification: 'cli', summary: `${qoderVariant(cli).label} 登录不可用，请在原生 CLI 中重新登录` } as AccountIdentity,
     }
     if (!record(value) || !text(value.userId)) throw new QoderAccountError()
     const email = accountEmail(value.email)
     return {
-      sourceIds: [directory, 'native:qoder-account-info'],
-      entries: [{ provider: 'qoder', principal: { kind: 'native-login', uid: value.userId,
+      sourceIds: [directory, `native:${cli}-account-info`],
+      entries: [{ provider: cli, principal: { kind: 'native-login', uid: value.userId,
         organization: text(value.organization) ? value.organization : undefined } }],
-      identity: { state: 'authenticated', verification: 'cli', summary: 'Qoder 原生登录已确认',
+      identity: { state: 'authenticated', verification: 'cli', summary: `${qoderVariant(cli).label} 原生登录已确认`,
         ...(email ? { accountLabel: email } : {}) } as AccountIdentity,
     }
   } finally { value = undefined }
@@ -428,9 +442,10 @@ export async function readQoderAccount(executable: string, signal: AbortSignal, 
 export async function readQoderAccountBindingMaterial(executable: string, signal: AbortSignal, options: QoderAccountOptions = {}) {
   const { sourceIds, entries } = await accountMaterial(executable, signal, options)
   if (!entries.length) throw new QoderAccountError()
-  const directory = options.directory ?? qoderConfigDirectory()
+  const cli = options.cli ?? 'qoder'
+  const directory = options.directory ?? qoderConfigDirectory(process.env, cli)
   const selected = entries[0]!.principal
-  const routing = await qoderRouting(directory, options.project, signal)
+  const routing = await qoderRouting(directory, options.project, signal, cli)
   let uid = 'uid' in selected && text(selected.uid) ? selected.uid : undefined
   const models = join(directory, '.models')
   try {
@@ -446,7 +461,9 @@ export async function readQoderAccountBindingMaterial(executable: string, signal
     for (const slot of slots.sort()) {
       const path = join(models, slot, 'customs')
       const raw = await read(path, signal)
-      if (raw !== undefined || uid) routing.push({ source: path, fingerprint: raw === undefined ? 'absent' : hash(raw) })
+      // Native startup may create .models for its catalog cache without any
+      // custom route. An absent customs file is the same route before/after it.
+      if (raw !== undefined) routing.push({ source: path, fingerprint: hash(raw) })
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -456,8 +473,8 @@ export async function readQoderAccountBindingMaterial(executable: string, signal
 
 /** Bind all native provider inputs conservatively; higher-priority project/local declarations cannot escape the epoch.
  * Custom-model secret values remain ephemeral and only a digest crosses this Host-private boundary. */
-async function qoderRouting(directory: string, project: string | undefined, signal: AbortSignal) {
-  const name = process.env.QODER_CONFIG_DIR_NAME?.normalize('NFC') || '.qoder'
+async function qoderRouting(directory: string, project: string | undefined, signal: AbortSignal, cli: QoderCliId) {
+  const name = qoderProjectDirectoryName(cli)
   const paths = [join(directory, 'settings.json'), ...(project ? [join(project, name, 'settings.json'), join(project, name, 'settings.local.json')] : [])]
   const routes: { source: string; fingerprint: string }[] = []
   for (const path of paths) {
@@ -501,9 +518,9 @@ export function parseQoderModelState(state: unknown): ModelChoice[] {
   return [...models.values()]
 }
 /** Metadata only: never authenticate, prompt, select a model or create a persisted session. */
-export async function discoverQoderModels(backend: ProcessBackend, config: RuntimeConfig, executable: string, cwd: string, signal: AbortSignal): Promise<ModelChoice[]> {
-  const result = await scopedMetadata(backend, config, executable, cwd, signal) ??
-    await queryQoderMetadata(backend, config, executable, cwd, signal, 'models')
+export async function discoverQoderModels(backend: ProcessBackend, config: RuntimeConfig, executable: string, cwd: string, signal: AbortSignal, cli: QoderCliId = 'qoder'): Promise<ModelChoice[]> {
+  const result = await scopedMetadata(backend, config, executable, cwd, signal, cli) ??
+    await queryQoderMetadata(backend, config, executable, cwd, signal, 'models', cli)
   if (!record(result) || !Array.isArray(result.models)) throw new QoderAccountError('Qoder 原生模型目录暂不可用，请在原生 CLI 检查登录和网络')
   return result.models
 }

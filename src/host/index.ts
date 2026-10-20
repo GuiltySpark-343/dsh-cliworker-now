@@ -7,19 +7,29 @@ import z from '@deepseek-ai/schemastery'
 import { z as validate } from 'zod'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import type { SettingsCacheMetadata } from '../shared/settings-cache.ts'
 import { createHarnessConversationBridge } from './harness-conversation.ts'
+import { workerGoalCommand } from './harness-conversation-commands.ts'
 import { HarnessConversationStore } from './harness-conversation-store.ts'
-import { projectExternalTurnUsage, recoverHarnessTurnRuns, type HarnessTurnObservation } from './harness-turn-usage.ts'
+import {
+  projectExternalTurnUsage,
+  recoverHarnessTurnRuns,
+  type HarnessTurnObservation,
+} from './harness-turn-usage.ts'
 import { projectExternalTurnAnswer } from './harness-turn-answer.ts'
 import { projectRequestState } from './native-request-state.ts'
 import type { HarnessConversationApi, HarnessConversationRecord } from './harness-conversation-types.ts'
 import {
   classifyHarnessTool,
+  adoptNativeHarnessLease,
   createNativeHarnessTools,
   type NativeHarnessSkill,
 } from './native-harness-tools.ts'
-import { nativeHarnessToolCapability } from './native-harness-injection.mjs'
+import { nativeHarnessToolCapability, nativeHarnessExecutionReady } from './native-harness-injection.mjs'
 import { installHarnessModelGuard, withinCliTool } from './harness-model-guard.ts'
+import { resolveHarnessAttachments } from './harness-attachments.ts'
+import type { NativeAttachment } from './native-attachments.mjs'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -28,6 +38,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type {} from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-subprocess'
+import { SubprocessExecutableNotFoundError } from '@deepseek-ai/dsh-subprocess'
 import type {} from '@deepseek-ai/dsh-user-questions'
 import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions/types'
 import type {} from '@deepseek-ai/dsh-system-prompt'
@@ -62,7 +73,7 @@ import { CliExecutablePathStore } from './cli-executable-paths.ts'
 import type { CliExecutablePathStatus } from '../shared/cli-settings.ts'
 import { RUNNING_MESSAGE_MODES } from '../shared/running-message.ts'
 import { workerPermissionOptions, type WorkerPermissionState } from '../shared/worker-permissions.ts'
-import { WindowsCliInstallationError } from './windows-cli-installation.ts'
+import { WindowsCliInstallationError, WindowsCliNotFoundError } from './windows-cli-installation.ts'
 import { ACCOUNT_CHANGED, authorizedCatalog, authorizeSelection } from './authorized-catalog.ts'
 import { WorkerStorage, type DispatchSetup } from './storage.ts'
 import { WorkerRuntime, type Submission } from './runtime.ts'
@@ -73,6 +84,8 @@ import {
   registerCliRouting,
   requireCliName,
   resolveCliName,
+  isGenericQoderName,
+  resolveAvailableCliName,
 } from './routing.ts'
 
 export type {
@@ -108,6 +121,7 @@ export interface Config {
   hermesHome?: string
   opencodeExecutable?: string
   qoderExecutable?: string
+  qodercnExecutable?: string
   zcodeAuthDirectory?: string
   zcodeBuiltinConfig?: string
   /** @deprecated Accepted for old deployments only; never read or forwarded. */
@@ -214,6 +228,7 @@ export class CliWorkerService extends TypertRemoteService {
     hermesHome: z.string(),
     opencodeExecutable: z.string(),
     qoderExecutable: z.string().min(1).default('qoder'),
+    qodercnExecutable: z.string().min(1).default('qodercn'),
     zcodeAuthDirectory: z.string(),
     zcodeBuiltinConfig: z.string(),
     zaiCredentialRef: z.string(),
@@ -237,6 +252,8 @@ export class CliWorkerService extends TypertRemoteService {
   private selectionProjects = new WeakMap<Preference, string>()
   private displayedBindings = new Map<string, string>()
   private settingsCatalogs?: SettingsCatalogCache
+  private settingsInstance?: string
+  private settingsSourceRevisions?: Map<CliId, number>
   private disposed = new AbortController()
   private harnessConversation?: HarnessConversationApi
   private harnessConversationStore?: HarnessConversationStore
@@ -254,7 +271,9 @@ export class CliWorkerService extends TypertRemoteService {
       config.stateDirectory ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'cliworker-now')
     this.options.cliExecutablePaths = new CliExecutablePathStore(stateDirectory)
     this.backend = nativeProcessBackend(ctx.subprocess)
-    this.accounts = new AccountManager(this.backend, this.options)
+    this.accounts = new AccountManager(this.backend, this.options, undefined, (cli, error) =>
+      this.runtime.blockCatalogOnCleanup(cli, error),
+    )
     this.runtime = new WorkerRuntime(
       new WorkerStorage(
         config.stateDirectory ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'cliworker-now'),
@@ -334,6 +353,21 @@ export class CliWorkerService extends TypertRemoteService {
         steer: async (record, prompt, runId, requestId, signal) => {
           await this.steerMessage(record.parentSessionId, record.workerId, prompt, runId, requestId, signal)
         },
+        fork: async (record, signal) => {
+          const result = JSON.parse(await this.forkWorker(record.parentSessionId, record.workerId, '', signal)) as { childSessionId: string }
+          return `已创建 CLI 会话分支：${result.childSessionId}`
+        },
+        goal: async (record, input, signal) => {
+          const worker = this.runtime.get(record.parentSessionId, record.workerId)
+          if (worker.harnessConversation?.sessionId !== record.sessionId)
+            throw new Error('CLI 子会话绑定已改变，未修改目标')
+          signal.throwIfAborted()
+          return workerGoalCommand(worker, input, {
+            set: async (objective, revision) => JSON.parse(await this.setWorkerGoal(record.parentSessionId, record.workerId, objective, revision, signal)),
+            status: (status, revision) => this.setWorkerGoalStatus(record.parentSessionId, record.workerId, status, revision, signal),
+            clear: (revision) => this.clearWorkerGoal(record.parentSessionId, record.workerId, revision, signal),
+          })
+        },
         permission: async (record, mode, signal) => {
           const worker = this.runtime.get(record.parentSessionId, record.workerId)
           if (worker.harnessConversation?.sessionId !== record.sessionId)
@@ -345,20 +379,37 @@ export class CliWorkerService extends TypertRemoteService {
           const state = JSON.parse(await this.permissionForWorker(record.parentSessionId, record.workerId, signal)) as WorkerPermissionState
           return `当前 CLI 权限：${state.currentValue}。可用模式：${state.options.map((option) => `${option.value}（${option.name}）`).join('、')}${state.reason ? `。${state.reason}` : ''}`
         },
-        run: async (record, prompt, requestId, signal) => {
+        run: async (record, prompt, requestId, signal, messages = []) => {
           const parent = await this.parent(record.parentSessionId)
           signal.throwIfAborted()
           const worker = this.runtime.get(parent.id, record.workerId)
           if (worker.harnessConversation?.sessionId !== record.sessionId)
             throw new Error('CLI 子会话绑定已改变，未启动任务')
           const previous = this.runtime.directMessageReceipt(parent.id, worker.id, prompt, requestId)
-          if (previous?.runId) return { runId: previous.runId, done: this.waitHarnessRun(record, previous.runId) }
+          if (previous?.runId)
+            return { runId: previous.runId, done: this.waitHarnessRun(record, previous.runId) }
+          const child = this.ctx.agents.get(record.sessionId as Agent['id'])
+          if (!child) throw new Error('CLI 子会话已失效，未读取附件')
+          const attachments = resolveHarnessAttachments(child.ctx, messages)
           // The native Agent has claimed this message. Reuse the same launch
           // checks and process lifetime, without a second conversation queue.
-          const receipt = JSON.parse(await this.launch(
-            parent, worker.title, prompt, worker.preference, worker.mode,
-            worker.id, undefined, signal, undefined, undefined, undefined, requestId,
-          )) as { runId: string }
+          const receipt = JSON.parse(
+            await this.launch(
+              parent,
+              worker.title,
+              prompt,
+              worker.preference,
+              worker.mode,
+              worker.id,
+              undefined,
+              signal,
+              undefined,
+              undefined,
+              undefined,
+              requestId,
+              attachments,
+            ),
+          ) as { runId: string }
           return { runId: receipt.runId, done: this.waitHarnessRun(record, receipt.runId) }
         },
         wait: (record, runId) => this.waitHarnessRun(record, runId),
@@ -457,7 +508,7 @@ export class CliWorkerService extends TypertRemoteService {
             },
             tools,
             signal,
-            executionReady: ['codex', 'claude', 'opencode', 'mimo', 'pi'].includes(cli),
+            executionReady: nativeHarnessExecutionReady(cli),
             authorize: async (identity) => {
               signal.throwIfAborted()
               const current = this.runtime.get(parent.id, worker.id)
@@ -504,37 +555,30 @@ export class CliWorkerService extends TypertRemoteService {
           resetPresentation()
           throw error
         }
-        if (worker.harnessConversation) {
-          worker.harnessConversation = {
-            ...worker.harnessConversation,
-            capabilities: {
-              ...worker.harnessConversation.capabilities,
-              tools: lease.capabilities.ready && lease.capabilities.toolCount > 0,
-              skills: lease.capabilities.ready && lease.capabilities.skills,
-            },
-            reasons: {
-              ...worker.harnessConversation.reasons,
-              tools: lease.capabilities.ready
-                ? '共享当前子 Agent 获准的 DSH 工具与 MCP；每次执行仍走宿主权限和审批链，未接通的模型辅助与递归派遣不可用'
-                : lease.capabilities.reason,
-              skills: lease.capabilities.ready
-                ? '当前子 Agent 没有可供模型读取的 DSH 技能'
-                : lease.capabilities.reason,
-            },
-          }
-          this.runtime.storage.save(worker)
-        }
-        this.runtime.changed()
-        return {
-          connection: lease.connection,
-          close: async () => {
-            try {
-              await lease.close()
-            } finally {
-              resetPresentation()
+        const owned = lease
+        return adoptNativeHarnessLease(owned, resetPresentation, () => {
+          if (worker.harnessConversation) {
+            worker.harnessConversation = {
+              ...worker.harnessConversation,
+              capabilities: {
+                ...worker.harnessConversation.capabilities,
+                tools: owned.capabilities.ready && owned.capabilities.toolCount > 0,
+                skills: owned.capabilities.ready && owned.capabilities.skills,
+              },
+              reasons: {
+                ...worker.harnessConversation.reasons,
+                tools: owned.capabilities.ready
+                  ? '共享当前子 Agent 获准的 DSH 工具与 MCP；每次执行仍走宿主权限和审批链，未接通的模型辅助与递归派遣不可用'
+                  : owned.capabilities.reason,
+                skills: owned.capabilities.ready
+                  ? '当前子 Agent 没有可供模型读取的 DSH 技能'
+                  : owned.capabilities.reason,
+              },
             }
-          },
-        }
+            this.runtime.storage.save(worker)
+          }
+          this.runtime.changed()
+        })
       })
       scope.effect(() => async () => {
         removePreparation()
@@ -619,7 +663,7 @@ export class CliWorkerService extends TypertRemoteService {
     try {
       return await authorizedCatalog(...args)
     } catch (error) {
-      if (error instanceof ProcessCleanupUnconfirmedError) this.runtime.blockOnCleanup(error)
+      if (error instanceof ProcessCleanupUnconfirmedError) this.runtime.blockCatalogOnCleanup(args[0], error)
       throw error
     }
   }
@@ -627,8 +671,108 @@ export class CliWorkerService extends TypertRemoteService {
     try {
       return await authorizeSelection(...args)
     } catch (error) {
-      if (error instanceof ProcessCleanupUnconfirmedError) this.runtime.blockOnCleanup(error)
+      if (error instanceof ProcessCleanupUnconfirmedError)
+        this.runtime.blockCatalogOnCleanup(cliOf(args[0]), error)
       throw error
+    }
+  }
+  /** Read installation paths without saving discovery or opening a native account/model process. */
+  private async resolveDispatchName(name: string, signal: AbortSignal) {
+    return resolveAvailableCliName(name, async (cli) => {
+      signal.throwIfAborted()
+      const saved = this.options.cliExecutablePaths?.read(cli)
+      const config = {
+        ...this.options,
+        cliExecutablePaths: undefined,
+        ...(saved?.mode === 'manual' ? { [`${cli}Executable`]: saved.path } : {}),
+      }
+      try {
+        await resolveCliExecutable(cli, this.backend, config, signal)
+        signal.throwIfAborted()
+        return true
+      } catch (error) {
+        if (error instanceof ProcessCleanupUnconfirmedError) {
+          this.runtime.blockCatalogOnCleanup(cli, error)
+          throw error
+        }
+        signal.throwIfAborted()
+        // A missing manually configured entry is a broken selection, not absence.
+        if (!saved || saved.mode !== 'manual') {
+          if (
+            !configuredCliExecutable(cli, config) &&
+            (error instanceof WindowsCliNotFoundError ||
+              error instanceof SubprocessExecutableNotFoundError ||
+              ['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException)?.code ?? ''))
+          )
+            return false
+        }
+        throw error
+      }
+    })
+  }
+  private async chooseQoderVariant(agent: Agent, callerSignal: AbortSignal, name: string) {
+    const signal = AbortSignal.any([callerSignal, this.disposed.signal])
+    signal.throwIfAborted()
+    const project = this.project(agent)
+    const key = JSON.stringify([agent.id, project, 'qoder-variant'])
+    const waits = (this.dispatchWaits ??= new Map())
+    const previous = waits.get(key) ?? Promise.resolve()
+    let release!: () => void
+    const owned = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const tail = previous.then(() => owned)
+    waits.set(key, tail)
+    void tail.then(() => {
+      if (waits.get(key) === tail) waits.delete(key)
+    })
+    this.pending.set(agent.id, (this.pending.get(agent.id) ?? 0) + 1)
+    this.runtime.changed()
+    try {
+      await waitForInput(previous, signal)
+      this.assertExecution(agent)
+      const resolution = await this.resolveDispatchName(name, signal)
+      signal.throwIfAborted()
+      let cli: 'qoder' | 'qodercn'
+      if (resolution.status === 'resolved' && (resolution.cli === 'qoder' || resolution.cli === 'qodercn'))
+        cli = resolution.cli
+      else if (resolution.status === 'ambiguous') {
+        const response = await waitForInput(
+          agent.ctx.get('userQuestions')!.ask({
+            agent,
+            signal,
+            questions: [
+              {
+                id: 'cliworker_qoder_variant',
+                header: 'Qoder 版本',
+                question: '检测到 Qoder 和 Qoder CN，请选择本次使用的版本',
+                options: [{ label: 'Qoder' }, { label: 'Qoder CN' }],
+              },
+            ],
+          }),
+          signal,
+        )
+        signal.throwIfAborted()
+        const answer = response.answers.find((item) => item.id === 'cliworker_qoder_variant')
+        if (
+          answer?.custom !== undefined ||
+          answer?.selected.length !== 1 ||
+          !['Qoder', 'Qoder CN'].includes(answer.selected[0]!)
+        )
+          throw new Error('请选择 Qoder 或 Qoder CN；任务尚未启动')
+        cli = answer.selected[0] === 'Qoder' ? 'qoder' : 'qodercn'
+      } else throw new Error('未找到 Qoder 或 Qoder CN 安装，请先安装或配置 CLI 路径；任务尚未启动')
+      signal.throwIfAborted()
+      this.assertExecution(agent)
+      if (this.project(agent) !== project) throw new Error('项目已变更，请重新选择')
+      this.runtime.assertCliEnabled(cli)
+      return cli
+    } finally {
+      release()
+      const pending = (this.pending.get(agent.id) ?? 1) - 1
+      if (pending) this.pending.set(agent.id, pending)
+      else this.pending.delete(agent.id)
+      this.runtime.changed()
     }
   }
   /** Serialize only this conversation's selection; a cancelled waiter never owns the question. */
@@ -791,6 +935,7 @@ export class CliWorkerService extends TypertRemoteService {
     queuedAdmission?: { id: string; expectedRunId: string; priority?: boolean },
     preparationId?: string,
     submissionId?: string,
+    attachments?: readonly NativeAttachment[],
   ): Promise<string> {
     if (workerId && !preparationId)
       return this.runtime.prepareFollowup(
@@ -811,6 +956,7 @@ export class CliWorkerService extends TypertRemoteService {
             queuedAdmission,
             id,
             submissionId,
+            attachments,
           ),
         queuedAdmission?.priority ? queuedAdmission.id : undefined,
       )
@@ -863,6 +1009,7 @@ export class CliWorkerService extends TypertRemoteService {
           queuedAdmission,
           preparationId,
           submissionId,
+          attachments,
         )
         submission = submitted
         return {
@@ -1043,7 +1190,15 @@ export class CliWorkerService extends TypertRemoteService {
             },
             output,
             isConcurrencySafe: () => true,
-            execute: async (args) => JSON.stringify(resolveCliName(args.name)),
+            execute: async (args, exec) =>
+              JSON.stringify(
+                isGenericQoderName(args.name)
+                  ? await this.resolveDispatchName(
+                      args.name,
+                      AbortSignal.any([exec.signal, this.disposed.signal]),
+                    )
+                  : resolveCliName(args.name),
+              ),
           }),
         ),
       'cliworker:resolve',
@@ -1053,7 +1208,7 @@ export class CliWorkerService extends TypertRemoteService {
         this.ctx.tools.register(
           defineTool({
             name: 'cliworker_start',
-            description: `用户明确要求“调用 agy cli”或“用 glm cli 完成任务”时，调用本工具打开 CLI Worker 的选型流程。只需提供 CLI、任务标题和任务内容；模型、思考强度与角色由插件收集，完成选型前不会启动任务，不要把它们当作调用本工具的前置输入。${CLI_NAME_GUIDANCE}。Host 仅在首次选择模型、思考强度与角色，或同项目新对话确认是否沿用时提问；同对话后续不重复。不要提前自行提问或增加确认，不代答。返回后台 job、worker ID 和 agentName。已有智能体续聊用 cliworker_followup；歧义返回简短候选错误，不启动、不额外发问题卡。`,
+            description: `用户明确要求“调用 agy cli”或“用 glm cli 完成任务”时，调用本工具打开 CLI Worker 的选型流程。只需提供 CLI、任务标题和任务内容；模型、思考强度与角色由插件收集，完成选型前不会启动任务，不要把它们当作调用本工具的前置输入。${CLI_NAME_GUIDANCE}。泛称 qoder 在双版本均安装时先通过原生询问选择版本。Host 在首次选择模型、思考强度与角色，或同项目新对话确认是否沿用时提问；同对话后续不重复。不要提前自行提问或增加确认，不代答。返回后台 job、worker ID 和 agentName。已有智能体续聊用 cliworker_followup；除泛称 qoder 的双版本选择外，其他歧义返回简短候选错误，不启动、不额外发问题卡。`,
             parameters: {
               cli: {
                 type: 'string',
@@ -1079,7 +1234,9 @@ export class CliWorkerService extends TypertRemoteService {
             execute: async (args, exec) => {
               if (!exec.agent) throw new Error('A parent Agent is required')
               this.assertExecution(exec.agent)
-              const cli = requireCliName(args.cli)
+              let cli = requireCliName(args.cli)
+              if (isGenericQoderName(args.cli))
+                cli = await this.chooseQoderVariant(exec.agent, exec.signal, args.cli)
               const agentName =
                 args.agent_name === undefined ? undefined : agentNameSchema.parse(args.agent_name)
               if (cli === 'kimi' && args.read_only) throw new Error('Kimi 非交互模式不支持只读派遣')
@@ -1210,12 +1367,20 @@ export class CliWorkerService extends TypertRemoteService {
           !record?.turnRuns?.some((entry) => entry.runId === event.runId)))
         let externalTurnAnswer: import('../shared/native-turn-answer.ts').ExternalTurnAnswer | undefined
         if (record && selected && (record.turnRuns?.length || (!snapshot.selectedBusy && needsRecovery))) {
-          const query = this.ctx?.get('sessionQuery') as { observeSession(
-            id: SessionId, options: { signal: AbortSignal; projectionMode: 'none' },
-          ): Promise<Disposable & HarnessTurnObservation> } | undefined
+          const query = this.ctx?.get('sessionQuery') as
+            | {
+                observeSession(
+                  id: SessionId,
+                  options: { signal: AbortSignal; projectionMode: 'none' },
+                ): Promise<Disposable & HarnessTurnObservation>
+              }
+            | undefined
           if (query) {
             try {
-              const observation = await query.observeSession(SessionId(record.sessionId), { signal: lifetime, projectionMode: 'none' })
+              const observation = await query.observeSession(SessionId(record.sessionId), {
+                signal: lifetime,
+                projectionMode: 'none',
+              })
               try {
                 if (!snapshot.selectedBusy && needsRecovery) record = recoverHarnessTurnRuns(record, selected, events, observation)
                 externalTurnAnswer = projectExternalTurnAnswer(record, selected, events, observation)
@@ -1232,13 +1397,20 @@ export class CliWorkerService extends TypertRemoteService {
         }
         yield JSON.stringify({
           ...snapshot,
-          ...(selected && binding?.parentSessionId === parentSessionId ? {
-            externalRequestState: projectRequestState(selected, events),
-            externalTurnAnswer,
-            externalTurnUsage: projectExternalTurnUsage(record, selected, !!snapshot.selectedBusy,
-              events,
-              (runId) => this.runtime.runUsage(parentSessionId, selected.id, runId)),
-          } : {}),
+          ...(selected && binding?.parentSessionId === parentSessionId
+            ? {
+                externalRequestState: projectRequestState(selected, events),
+                externalTurnAnswer,
+                externalTurnUsage: projectExternalTurnUsage(
+                  record,
+                  selected,
+                  !!snapshot.selectedBusy,
+                  events,
+                  (runId) => this.runtime.runUsage(parentSessionId, selected.id, runId),
+                  (runId) => this.runtime.runCredits(parentSessionId, selected.id, runId),
+                ),
+              }
+            : {}),
           configuring: this.pending.has(parentSessionId),
         })
       }
@@ -1266,12 +1438,54 @@ export class CliWorkerService extends TypertRemoteService {
   @Remote('cliSettings')
   async cliSettings(parentSessionId: string, signal: AbortSignal): Promise<string> {
     try {
-      await this.parent(parentSessionId)
+      const parent = await this.parent(parentSessionId)
       signal.throwIfAborted()
-      return JSON.stringify(this.runtime.storage.cliSettings())
+      const settings = this.runtime.storage.cliSettings()
+      let project: string
+      try {
+        project = this.project(parent)
+      } catch {
+        return JSON.stringify(settings)
+      }
+      // Reusing the same project's display list in another parent still pins
+      // configure() to the original verified account; no CLI query is needed.
+      for (const cli of CLI_IDS) {
+        const binding = this.settingsCatalogs?.displayBinding(project, cli)
+        const key = JSON.stringify([parentSessionId, cli])
+        if (binding) (this.displayedBindings ??= new Map()).set(key, binding)
+      }
+      return JSON.stringify({ ...settings, settingsCache: this.settingsDisplayMetadata(project) })
     } catch (error) {
       throw failure(error)
     }
+  }
+  private settingsDisplayMetadata(project: string): SettingsCacheMetadata {
+    this.settingsInstance ??= randomUUID()
+    return {
+      policy: 1,
+      host: this.settingsInstance,
+      project: createHash('sha256').update(project).digest('hex'),
+      revisions: Object.fromEntries(
+        CLI_IDS.map((cli) => [
+          cli,
+          `${this.settingsSourceRevisions?.get(cli) ?? 0}:${this.options.cliExecutablePaths?.revision(cli) ?? 0}`,
+        ]),
+      ) as Record<CliId, string>,
+      catalogReady: Object.fromEntries(
+        CLI_IDS.map((cli) => [cli, !!this.settingsCatalogs?.displayBinding(project, cli)]),
+      ) as Record<CliId, boolean>,
+      preferences: Object.fromEntries(
+        CLI_IDS.flatMap((cli) => {
+          const preference = this.runtime.storage.preference(project, cli)
+          return preference ? [[cli, preference]] : []
+        }),
+      ),
+    }
+  }
+  private invalidateSettingsDisplay(cli: CliId) {
+    this.settingsCatalogs?.invalidate(cli)
+    const revisions = (this.settingsSourceRevisions ??= new Map())
+    revisions.set(cli, (revisions.get(cli) ?? 0) + 1)
   }
   /** @param parentSessionId - Active parent. @param cli - Explicit CLI. @param signal - Read lifetime. @returns Project/CLI running-message preference and native capability. */
   @Remote('runningMessageSettings')
@@ -1376,6 +1590,39 @@ export class CliWorkerService extends TypertRemoteService {
       throw failure(error)
     }
   }
+  /** @param parentSessionId - Owning parent. @param workerId - Worker identity. @param objective - Persistent objective. @param expectedRevision - Current goal revision, or zero when absent. @param signal - Mutation lifetime. @returns WorkerGoal JSON. */
+  @Remote('setWorkerGoal')
+  async setWorkerGoal(parentSessionId: string, workerId: string, objective: string, expectedRevision: number, signal: AbortSignal): Promise<string> {
+    try {
+      await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      return JSON.stringify(this.runtime.setWorkerGoal(parentSessionId, workerId, objective, expectedRevision))
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param workerId - Worker identity. @param status - Active or paused. @param expectedRevision - Current goal revision. @param signal - Mutation lifetime. @returns WorkerGoal JSON. */
+  @Remote('setWorkerGoalStatus')
+  async setWorkerGoalStatus(parentSessionId: string, workerId: string, status: 'active' | 'paused', expectedRevision: number, signal: AbortSignal): Promise<string> {
+    try {
+      await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      return JSON.stringify(this.runtime.setWorkerGoalStatus(parentSessionId, workerId, status, expectedRevision))
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param workerId - Worker identity. @param expectedRevision - Current goal revision. @param signal - Mutation lifetime. @returns Completion. */
+  @Remote('clearWorkerGoal')
+  async clearWorkerGoal(parentSessionId: string, workerId: string, expectedRevision: number, signal: AbortSignal): Promise<void> {
+    try {
+      await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      this.runtime.clearWorkerGoal(parentSessionId, workerId, expectedRevision)
+    } catch (error) {
+      throw failure(error)
+    }
+  }
   /** @param parentSessionId - Owning parent. @param workerId - Idle Worker to hide. @param signal - Mutation lifetime. @returns Completion without deleting native data. */
   @Remote('deleteWorker')
   async deleteWorker(parentSessionId: string, workerId: string, signal: AbortSignal): Promise<void> {
@@ -1398,6 +1645,16 @@ export class CliWorkerService extends TypertRemoteService {
       throw failure(error)
     }
   }
+  /** @param parentSessionId - Owning parent. @param workerId - Idle source Worker. @param atMessageId - Completed assistant message, or empty for latest. @param signal - Fork lifetime. @returns Worker and child session identities as JSON. */
+  @Remote('forkWorker')
+  async forkWorker(parentSessionId: string, workerId: string, atMessageId: string, signal: AbortSignal): Promise<string> {
+    try {
+      const parent = await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      if (!this.harnessConversation) throw new Error('Harness CLI 会话桥未就绪')
+      return JSON.stringify(await this.runtime.forkWorker(parent, workerId, atMessageId, this.harnessConversation, signal))
+    } catch (error) { throw failure(error) }
+  }
   /** @param parentSessionId - Owning session. @param cli - Selected CLI. @param enabled - Allow new CLI operations. @param signal - Mutation admission lifetime. @returns Updated profile-wide CLI enablement JSON. */
   @Remote('setCliEnabled')
   async setCliEnabled(
@@ -1416,7 +1673,9 @@ export class CliWorkerService extends TypertRemoteService {
       if (!next && this.accounts.isBusy(id))
         throw new Error('此 CLI 正在管理账号，请先关闭账号终端再关闭 CLI')
       signal.throwIfAborted()
-      return JSON.stringify(this.runtime.setCliEnabled(id, next))
+      const settings = this.runtime.setCliEnabled(id, next)
+      this.invalidateSettingsDisplay(id)
+      return JSON.stringify(settings)
     } catch (error) {
       throw failure(error)
     }
@@ -1424,8 +1683,10 @@ export class CliWorkerService extends TypertRemoteService {
   /** @param parentSessionId - Owning session. @param cli - Selected CLI. @param signal - Query lifetime. @returns Safe account status JSON. */
   @Remote('accountStatus')
   async accountStatus(parentSessionId: string, cli: string, signal: AbortSignal): Promise<string> {
+    let queriedCli: CliId | undefined
     try {
       const id = validate.enum(CLI_IDS).parse(cli)
+      queriedCli = id
       const project = this.project(await this.parent(parentSessionId))
       signal.throwIfAborted()
       this.runtime.assertCliEnabled(id)
@@ -1434,6 +1695,8 @@ export class CliWorkerService extends TypertRemoteService {
       this.runtime.assertCliEnabled(id)
       return JSON.stringify(status)
     } catch (error) {
+      if (queriedCli && error instanceof ProcessCleanupUnconfirmedError)
+        this.runtime.blockCatalogOnCleanup(queriedCli, error)
       throw failure(error)
     }
   }
@@ -1457,7 +1720,7 @@ export class CliWorkerService extends TypertRemoteService {
       return { ...current, path: current.source === 'manual' ? current.path : path, available: true }
     } catch (error) {
       if (error instanceof ProcessCleanupUnconfirmedError) {
-        this.runtime.blockOnCleanup(error)
+        this.runtime.blockCatalogOnCleanup(cli, error)
         throw error
       }
       signal.throwIfAborted()
@@ -1513,7 +1776,7 @@ export class CliWorkerService extends TypertRemoteService {
       if (operation === 'manual') store.setManual(id, path)
       else if (operation === 'auto') store.reset(id)
       this.displayedBindings?.clear()
-      this.settingsCatalogs?.invalidate(id)
+      this.invalidateSettingsDisplay(id)
       this.runtime.changed()
       return JSON.stringify(await this.probeExecutablePath(id, control))
     } catch (error) {
@@ -1591,7 +1854,7 @@ export class CliWorkerService extends TypertRemoteService {
         )
         this.accountParents.set(parent.id, dispose)
       }
-      this.settingsCatalogs?.invalidate(id)
+      this.invalidateSettingsDisplay(id)
       return JSON.stringify(
         await this.accounts.start(parent.id, id, operation, this.project(parent), signal, source, provider),
       )
@@ -1664,12 +1927,14 @@ export class CliWorkerService extends TypertRemoteService {
   /** @param parentSessionId - Owning parent. @param workerId - Worker whose original account scopes the saved choices. @param signal - Caller lifetime. @returns Saved model choices; only a missing valid directory requires discovery. */
   @Remote('catalogForWorker')
   async catalogForWorker(parentSessionId: string, workerId: string, signal: AbortSignal): Promise<string> {
+    let queriedCli: CliId | undefined
     try {
       const agent = await this.parent(parentSessionId)
       const control = AbortSignal.any([signal, this.disposed.signal])
       control.throwIfAborted()
       const worker = this.runtime.get(agent.id, workerId)
       const cli = cliOf(worker.preference)
+      queriedCli = cli
       const expected = this.runtime.storage.accountBinding(workerId)
       if (!expected) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
       this.runtime.assertCliEnabled(cli)
@@ -1680,7 +1945,7 @@ export class CliWorkerService extends TypertRemoteService {
           cli,
           project: worker.project,
           signal: control,
-          selfVerifiedDiscovery: cli === 'qoder',
+          selfVerifiedDiscovery: cli === 'qoder' || cli === 'qodercn',
           binding: async () => {
             const current = await readCliAccountBinding(
               cli,
@@ -1701,7 +1966,8 @@ export class CliWorkerService extends TypertRemoteService {
       this.runtime.assertCliEnabled(cli)
       return JSON.stringify(catalog)
     } catch (error) {
-      if (error instanceof ProcessCleanupUnconfirmedError) this.runtime.blockOnCleanup(error)
+      if (queriedCli && error instanceof ProcessCleanupUnconfirmedError)
+        this.runtime.blockCatalogOnCleanup(queriedCli, error)
       throw failure(error)
     }
   }
@@ -1716,8 +1982,10 @@ export class CliWorkerService extends TypertRemoteService {
     signal: AbortSignal,
     refresh: boolean,
   ): Promise<string> {
+    let queriedCli: CliId | undefined
     try {
       const id = validate.enum(CLI_IDS).parse(cli)
+      queriedCli = id
       const project = this.project(await this.parent(parentSessionId))
       const control = AbortSignal.any([signal, this.disposed.signal])
       this.runtime.assertCliEnabled(id)
@@ -1727,7 +1995,7 @@ export class CliWorkerService extends TypertRemoteService {
         project,
         signal: control,
         refresh,
-        selfVerifiedDiscovery: id === 'qoder',
+        selfVerifiedDiscovery: id === 'qoder' || id === 'qodercn',
         binding: () => readCliAccountBinding(id, this.backend, this.options, project, control),
         discover: () => this.queryCatalog(id, this.backend, this.options, project, control),
       })
@@ -1736,7 +2004,8 @@ export class CliWorkerService extends TypertRemoteService {
       this.runtime.assertCliEnabled(id)
       return JSON.stringify({ ...catalog, preference: this.runtime.storage.preference(project, id) })
     } catch (error) {
-      if (error instanceof ProcessCleanupUnconfirmedError) this.runtime.blockOnCleanup(error)
+      if (queriedCli && error instanceof ProcessCleanupUnconfirmedError)
+        this.runtime.blockCatalogOnCleanup(queriedCli, error)
       throw failure(error)
     }
   }
@@ -1876,7 +2145,10 @@ export class CliWorkerService extends TypertRemoteService {
           detach = sessions.enter(session)
           // Native restore may append a lifecycle marker before publication.
           // Read that suffix through the public query rather than private logs.
-          const observation = await query.observeSession(sessionId, { signal: control, projectionMode: 'none' })
+          const observation = await query.observeSession(sessionId, {
+            signal: control,
+            projectionMode: 'none',
+          })
           try {
             const suffix = observation.events.slice(read.events.length)
             if (suffix.length) await writer.append(suffix, { signal: control })

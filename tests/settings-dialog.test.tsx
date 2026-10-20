@@ -237,6 +237,147 @@ async function setup(
     saveRunningMessageMode,
   }
 }
+function warmMetadata() {
+  return { policy: 1, host: 'SIMULATED-host', project: 'SIMULATED-project',
+    revisions: Object.fromEntries(CLI_IDS.map(id => [id, '0:0'])),
+    catalogReady: Object.fromEntries(CLI_IDS.map(id => [id, true])), preferences: {} as Record<string, any> }
+}
+async function setupWarm(overrides: Record<string, any> = {}, ids: readonly CliId[] = CLI_IDS, initial: CliId = 'codex') {
+  const metadata = warmMetadata(), enabled = Object.fromEntries(CLI_IDS.map(id => [id, ids.includes(id)]))
+  const cliSettings = vi.fn(async () => remote({ enabled, settingsCache: metadata }))
+  const setCliEnabled = vi.fn(async (_session, cli: CliId, next: boolean) => {
+    enabled[cli] = next; metadata.revisions[cli] += ':changed'; return remote({ enabled })
+  })
+  const configure = vi.fn(async (_session, raw: string) => {
+    const pref = JSON.parse(raw); metadata.preferences[pref.cli] = pref; return remote(pref)
+  })
+  const t = await setup({ cliSettings, setCliEnabled, configure, ...overrides }, undefined, initial)
+  return { ...t, metadata, enabled, settingsRead: cliSettings, savedPreference: configure }
+}
+
+it('warms every enabled CLI model and effort list once and reuses the receipts on close/reopen and navigation', async () => {
+  const t = await setupWarm()
+  expect(t.accountStatus).toHaveBeenCalledTimes(CLI_IDS.length)
+  expect(t.catalogForCli).toHaveBeenCalledTimes(CLI_IDS.length)
+  expect(new Set(t.catalogForCli.mock.calls.map(call => call[1])).size).toBe(CLI_IDS.length)
+  expect(t.savedPreference).not.toHaveBeenCalled()
+  await t.click('关闭设置'); await t.open(); await t.click(`${CLI_LABELS.qoder} 设置`); await t.click('默认思考强度')
+  expect(t.button('High')).toBeDefined()
+  expect(t.accountStatus).toHaveBeenCalledTimes(CLI_IDS.length)
+  expect(t.catalogForCli).toHaveBeenCalledTimes(CLI_IDS.length)
+  expect(t.settingsRead).toHaveBeenCalledTimes(2)
+})
+
+it('bounds combined account/model warmup to two jobs and promotes a newly selected queued CLI', async () => {
+  const reads = new Map<CliId, ReturnType<typeof deferred>>(), models = new Map<CliId, ReturnType<typeof deferred>>()
+  const accountStatus = vi.fn((_parent, cli: CliId) => { const d = deferred(); reads.set(cli, d); return d.promise })
+  const catalogForCli = vi.fn((_parent, cli: CliId) => { const d = deferred(); models.set(cli, d); return d.promise })
+  const t = await setupWarm({ accountStatus, catalogForCli })
+  expect(accountStatus.mock.calls.map(call => call[1])).toEqual(['codex', 'antigravity'])
+  await act(async () => reads.get('codex')!.resolve(status('codex')))
+  expect(catalogForCli.mock.calls.map(call => call[1])).toEqual(['codex'])
+  expect(accountStatus).toHaveBeenCalledTimes(2)
+  await t.click(`${CLI_LABELS.qoder} 设置`)
+  await act(async () => models.get('codex')!.resolve(catalog('codex')))
+  expect(accountStatus.mock.calls.map(call => call[1])).toEqual(['codex', 'antigravity', 'qoder'])
+  await t.click('关闭设置')
+  expect(accountStatus.mock.calls[1]![2].aborted).toBe(true)
+  expect(accountStatus.mock.calls[2]![2].aborted).toBe(true)
+  await act(async () => { for (const [id, d] of reads) d.resolve(status(id)) })
+  expect(catalogForCli).toHaveBeenCalledTimes(1)
+})
+
+it('keeps a completed account when closing during model discovery and fills only the cancelled model on reopen', async () => {
+  const first = deferred(), catalogForCli = vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue(catalog('codex', 'fresh-model'))
+  const t = await setupWarm({ catalogForCli }, ['codex'])
+  expect(t.accountStatus).toHaveBeenCalledTimes(1)
+  await t.click('关闭设置')
+  expect(catalogForCli.mock.calls[0]![2].aborted).toBe(true)
+  await act(async () => first.resolve(catalog('codex', 'STALE-model')))
+  await t.open()
+  expect(t.accountStatus).toHaveBeenCalledTimes(1)
+  expect(catalogForCli).toHaveBeenCalledTimes(2)
+  expect(t.text()).toContain('fresh-model'); expect(t.text()).not.toContain('STALE-model')
+})
+
+it('uses a fresh model query for explicit refresh while retaining account evidence and the refreshed display cache', async () => {
+  const t = await setupWarm({}, ['codex'])
+  await t.click('刷新模型')
+  expect(t.refreshCatalogForCli).toHaveBeenCalledExactlyOnceWith('simulation-parent', 'codex', expect.any(AbortSignal))
+  expect(t.accountStatus).toHaveBeenCalledTimes(1)
+  await t.click('关闭设置'); await t.open()
+  expect(t.catalogForCli).toHaveBeenCalledTimes(1)
+  expect(t.refreshCatalogForCli).toHaveBeenCalledTimes(1)
+})
+
+it('waits for a fresh account before forcing its model directory and never reloads other CLIs', async () => {
+  const pending = deferred(), accountStatus = vi.fn(async (_parent, cli: CliId) => status(cli))
+  const t = await setupWarm({ accountStatus }, ['codex', 'qoder'])
+  accountStatus.mockReturnValueOnce(pending.promise)
+  await t.click('刷新状态')
+  expect(t.refreshCatalogForCli).not.toHaveBeenCalled()
+  expect(t.button('默认模型').props.disabled).toBe(true)
+  await act(async () => pending.resolve(status('codex', { state: 'authenticated' })))
+  expect(t.refreshCatalogForCli).toHaveBeenCalledExactlyOnceWith('simulation-parent', 'codex', expect.any(AbortSignal))
+  expect(accountStatus.mock.calls.filter(call => call[1] === 'qoder')).toHaveLength(1)
+})
+
+it('keeps a failed refreshed directory unknown across reopen instead of reviving the old cached model', async () => {
+  const refreshCatalogForCli = vi.fn().mockRejectedValue(new Error('SIMULATED fresh source failure'))
+  const t = await setupWarm({ refreshCatalogForCli }, ['codex'])
+  await t.click('刷新模型')
+  expect(t.text()).toContain('SIMULATED fresh source failure')
+  expect(t.button('默认模型').props.disabled).toBe(true)
+  await t.click('关闭设置'); await t.open()
+  expect(t.text()).toContain('SIMULATED fresh source failure')
+  expect(t.catalogForCli).toHaveBeenCalledTimes(1)
+  expect(t.accountStatus).toHaveBeenCalledTimes(1)
+})
+
+it('invalidates only the CLI whose Host source changed and resets all receipts after a Host restart', async () => {
+  const t = await setupWarm({}, ['codex', 'qoder'])
+  await t.click('关闭设置'); t.metadata.revisions.qoder = '1:0'; await t.open()
+  expect(t.accountStatus.mock.calls.filter(call => call[1] === 'codex')).toHaveLength(1)
+  expect(t.accountStatus.mock.calls.filter(call => call[1] === 'qoder')).toHaveLength(2)
+  await t.click('关闭设置'); t.metadata.host = 'SIMULATED-new-host'; await t.open()
+  expect(t.accountStatus.mock.calls.filter(call => call[1] === 'codex')).toHaveLength(2)
+  expect(t.accountStatus.mock.calls.filter(call => call[1] === 'qoder')).toHaveLength(3)
+})
+
+it('applies current saved defaults on reopen without querying models or writing a replacement preference', async () => {
+  const t = await setupWarm({}, ['codex'])
+  await t.click('关闭设置')
+  t.metadata.preferences.codex = { cli: 'codex', model: 'codex-fixture', effort: 'high' }
+  await t.open()
+  expect(visibleText(t.button('默认思考强度'))).toContain('High')
+  expect(t.catalogForCli).toHaveBeenCalledTimes(1)
+  expect(t.savedPreference).not.toHaveBeenCalled()
+})
+
+it('preserves a human-saved model-effort pair across navigation and reopen without a second save', async () => {
+  const t = await setupWarm({}, ['codex'])
+  await t.chooseEffort('High')
+  expect(t.savedPreference).not.toHaveBeenCalled()
+  await t.click(`${CLI_LABELS.qoder} 设置`)
+  expect(t.savedPreference).toHaveBeenCalledTimes(1)
+  await t.click('Codex 设置')
+  expect(visibleText(t.button('默认思考强度'))).toContain('High')
+  await t.click('关闭设置'); await t.open()
+  expect(visibleText(t.button('默认思考强度'))).toContain('High')
+  expect(t.savedPreference).toHaveBeenCalledTimes(1)
+  expect(t.catalogForCli).toHaveBeenCalledTimes(1)
+})
+
+it('does not warm disabled CLIs and clears the selected cache when a CLI is disabled', async () => {
+  const t = await setupWarm({}, ['codex'])
+  expect(t.accountStatus.mock.calls.map(call => call[1])).toEqual(['codex'])
+  const toggle = t.r.root.findAllByType('button').find(button => button.props.role === 'switch')!
+  await act(async () => toggle.props.onClick())
+  await t.click('关闭设置'); await t.open()
+  expect(t.accountStatus).toHaveBeenCalledTimes(1)
+  expect(t.button('默认模型').props.disabled).toBe(true)
+})
+
 it('starts the selected CLI first and bounds background account discovery', async () => {
   const reads = new Map<CliId, ReturnType<typeof deferred>>()
   const accountStatus = vi.fn((_parent, cli: CliId) => {
@@ -367,12 +508,14 @@ it('lets model defaults work independently when account discovery fails', async 
   expect(t.button('默认模型').props.disabled).toBe(false)
   expect(t.configure).not.toHaveBeenCalled()
   await t.chooseModel('antigravity-fixture')
+  expect(t.configure).not.toHaveBeenCalled()
+  await t.click('智能体设置')
   expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({
     cli: 'antigravity',
     model: 'antigravity-fixture',
     effort: 'low',
   })
-  expect(t.text()).toContain('默认设置已保存')
+  expect(t.configure).toHaveBeenCalledOnce()
 })
 it('never treats unknown account status as logged out or mounts a terminal without an explicit action', async () => {
   const t = await setup({
@@ -400,11 +543,11 @@ it('keeps a delayed save scoped to its original CLI and leaves navigation usable
   const configure = vi.fn().mockReturnValue(saved.promise)
   const t = await setup({ configure })
   await t.chooseEffort('High')
-  expect(configure).toHaveBeenCalledOnce()
-  expect(t.text()).toContain('data-loading')
+  expect(configure).not.toHaveBeenCalled()
   expect(t.button('Kimi 设置').props.disabled).not.toBe(true)
   await t.click('Kimi 设置')
-  expect(configure.mock.calls[0]![2].aborted).toBe(true)
+  expect(configure).toHaveBeenCalledOnce()
+  expect(configure.mock.calls[0]![2].aborted).toBe(false)
   await act(async () => saved.reject(new Error('stale save failure')))
   expect(t.text()).not.toContain('stale save failure')
   expect(t.text()).not.toContain('默认设置已保存')
@@ -679,6 +822,8 @@ it('displays only the native model name while saving the exact provider/model id
   expect(visibleText(t.button('默认模型'))).not.toMatch(/[()（）]/u)
   expect(t.configure).not.toHaveBeenCalled()
   await t.chooseModel('GLM-5.3')
+  expect(t.configure).not.toHaveBeenCalled()
+  await t.click('智能体设置')
   expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({ cli: 'zcode', model: id, effort: 'default' })
 })
 
@@ -706,6 +851,8 @@ it('deduplicates route names and puts proven free models first without combining
   expect(visibleText(menu)).not.toMatch(/source|[()（）]/u)
   await t.click('GLM-5.3-Flash')
   expect(visibleText(t.button('默认思考强度')).trim()).toBe('Medium')
+  expect(t.configure).not.toHaveBeenCalled()
+  await t.click('智能体设置')
   expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({
     cli: 'zcode',
     model: 'paid/GLM-5.3-Flash',
@@ -732,6 +879,8 @@ it('retains the exact valid saved paid route when a free duplicate is available'
   await t.click('默认模型')
   expect(t.r.root.findByProps({ role: 'menu' }).findAllByType('button')).toHaveLength(1)
   await t.click('Chat')
+  expect(t.configure).not.toHaveBeenCalled()
+  await t.click('智能体设置')
   expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({ cli: 'pi', model: 'paid/chat', effort: 'high' })
 })
 
@@ -754,6 +903,8 @@ it('asks to reselect an unavailable saved route instead of silently switching to
   expect(t.configure).not.toHaveBeenCalled()
   await t.click('默认模型')
   await t.click('Chat')
+  expect(t.configure).not.toHaveBeenCalled()
+  await t.click('智能体设置')
   expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({
     cli: 'omp',
     model: 'free/chat',
@@ -781,12 +932,14 @@ it('uses Kimi supported default effort without a saved preference and can persis
       .map((item) => item.children.join('')),
   ).toEqual(['默认'])
   await t.click('默认')
+  expect(t.configure).not.toHaveBeenCalled()
+  await t.click('智能体设置')
   expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({
     cli: 'kimi',
     model: 'kimi-simulation',
     effort: 'default',
   })
-  expect(t.text()).toContain('默认设置已保存')
+  expect(t.configure).toHaveBeenCalledOnce()
 })
 
 it('persists each CLI switch without moving the current navigation row until reopening', async () => {
@@ -2139,142 +2292,180 @@ it('does not write model defaults on initialization, capability refresh, or CLI 
   expect(t.button('保存默认值')).toBeUndefined()
 })
 
-it('writes an explicitly reselected saved value but never submits unchanged defaults from the form', async () => {
+it('coalesces explicit reselection and never submits unchanged defaults from the form', async () => {
   const t = await setup({
-    catalogForCli: vi.fn(async (_parent, cli: CliId) =>
-      remote({
-        cli,
-        models: [{ id: `${cli}-saved`, label: 'Saved model', efforts: ['low', 'high'] }],
-        preference: { cli, model: `${cli}-saved`, effort: 'high' },
-      }),
-    ),
+    catalogForCli: vi.fn(async (_parent, cli: CliId) => remote({ cli,
+      models: [{ id: `${cli}-saved`, label: 'Saved model', efforts: ['low', 'high'] }],
+      preference: { cli, model: `${cli}-saved`, effort: 'high' },
+    })),
   })
   const preventDefault = vi.fn()
-  await act(async () =>
-    t.r.root.findByProps({ className: 'cwn-settings-form' }).props.onSubmit({ preventDefault }),
-  )
+  await act(async () => t.r.root.findByProps({ className: 'cwn-settings-form' }).props.onSubmit({ preventDefault }))
   expect(preventDefault).toHaveBeenCalledOnce()
   expect(t.configure).not.toHaveBeenCalled()
-  await t.chooseModel('Saved model')
-  await t.chooseEffort('High')
-  expect(t.configure).toHaveBeenCalledTimes(2)
-  for (const call of t.configure.mock.calls) {
-    expect(JSON.parse(call[1]!)).toEqual({ cli: 'antigravity', model: 'antigravity-saved', effort: 'high' })
-  }
-  expect(t.text()).toContain('默认设置已保存')
-})
-
-it('automatically saves an explicit effort and pairs a new model with its supported effort', async () => {
-  const t = await setup({
-    catalogForCli: vi.fn(async (_parent, cli: CliId) =>
-      remote({
-        cli,
-        models: [
-          { id: 'source/alpha', label: 'Alpha', efforts: ['low', 'high'] },
-          { id: 'source/beta', label: 'Beta', efforts: ['medium'] },
-        ],
-      }),
-    ),
-  })
+  await t.chooseModel('Saved model'); await t.chooseEffort('High')
   expect(t.configure).not.toHaveBeenCalled()
-  await t.chooseEffort('High')
-  expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({
-    cli: 'antigravity',
-    model: 'source/alpha',
-    effort: 'high',
-  })
-  await t.chooseModel('Beta')
-  expect(JSON.parse(t.configure.mock.calls[1]![1])).toEqual({
-    cli: 'antigravity',
-    model: 'source/beta',
-    effort: 'medium',
-  })
-  expect(visibleText(t.button('默认模型')).trim()).toBe('Beta')
-  expect(visibleText(t.button('默认思考强度')).trim()).toBe('Medium')
-  expect(t.configure).toHaveBeenCalledTimes(2)
-  expect(t.text()).toContain('默认设置已保存')
+  await t.click('智能体设置')
+  expect(t.configure).toHaveBeenCalledOnce()
+  expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({ cli: 'antigravity', model: 'antigravity-saved', effort: 'high' })
 })
 
-it('serializes automatic saves and commits only the newest model-effort pair after an aborted write settles', async () => {
-  const first = deferred(),
-    latest = deferred()
+it('shows selections immediately and saves only the final supported model-effort pair on departure', async () => {
+  const t = await setup({ catalogForCli: vi.fn(async (_parent, cli: CliId) => remote({ cli, models: [
+    { id: 'source/alpha', label: 'Alpha', efforts: ['low', 'high'] },
+    { id: 'source/beta', label: 'Beta', efforts: ['medium'] },
+  ] })) })
+  await t.chooseEffort('High'); await t.chooseModel('Beta')
+  expect(t.configure).not.toHaveBeenCalled()
+  expect(visibleText(t.button('默认模型')).trim()).toBe('Beta')
+  expect(visibleText(t.button('默认思考强度')).trim()).toBe('Medium')
+  expect(t.text()).not.toContain('正在保存默认设置')
+  await t.click('Codex 设置')
+  expect(t.configure).toHaveBeenCalledOnce()
+  expect(JSON.parse(t.configure.mock.calls[0]![1])).toEqual({ cli: 'antigravity', model: 'source/beta', effort: 'medium' })
+})
+
+it('does not flush a new on-page draft when an earlier background write completes', async () => {
+  const first = deferred(), latest = deferred()
   const configure = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(latest.promise)
-  const t = await setup({
-    configure,
-    catalogForCli: vi.fn(async (_parent, cli: CliId) =>
-      remote({
-        cli,
-        models: [
-          { id: 'source/alpha', label: 'Alpha', efforts: ['low', 'high'] },
-          { id: 'source/beta', label: 'Beta', efforts: ['high', 'medium'] },
-        ],
-      }),
-    ),
-  })
-  await t.chooseEffort('High')
+  const t = await setup({ configure, catalogForCli: vi.fn(async (_parent, cli: CliId) => remote({ cli, models: [
+    { id: 'source/alpha', label: 'Alpha', efforts: ['low', 'high'] },
+    { id: 'source/beta', label: 'Beta', efforts: ['high', 'medium'] },
+  ] })) })
+  await t.chooseEffort('High'); await t.click('Kimi 设置')
   expect(configure).toHaveBeenCalledOnce()
+  await t.click('Antigravity 设置')
   expect(t.button('默认模型').props.disabled).toBe(false)
-  await t.chooseModel('Beta')
-  await t.chooseEffort('Medium')
+  await t.chooseModel('Beta'); await t.chooseEffort('Medium')
   expect(configure).toHaveBeenCalledOnce()
-  expect(configure.mock.calls[0]![2].aborted).toBe(true)
+  expect(configure.mock.calls[0]![2].aborted).toBe(false)
+  await act(async () => first.resolve(remote({})))
+  expect(configure).toHaveBeenCalledOnce()
   expect(visibleText(t.button('默认模型')).trim()).toBe('Beta')
   expect(visibleText(t.button('默认思考强度')).trim()).toBe('Medium')
-  await act(async () => first.resolve(remote({})))
-  expect(configure).toHaveBeenCalledTimes(2)
-  expect(JSON.parse(configure.mock.calls[1]![1])).toEqual({
-    cli: 'antigravity',
-    model: 'source/beta',
-    effort: 'medium',
-  })
   expect(t.text()).not.toContain('默认设置已保存')
-  await act(async () => latest.resolve(remote({})))
-  expect(t.text()).toContain('默认设置已保存')
+  await t.click('Kimi 设置')
   expect(configure).toHaveBeenCalledTimes(2)
+  expect(JSON.parse(configure.mock.calls[1]![1])).toEqual({ cli: 'antigravity', model: 'source/beta', effort: 'medium' })
+  await act(async () => latest.resolve(remote({})))
+  await t.click('Antigravity 设置')
+  expect(t.text()).toContain('默认设置已保存')
+  expect(visibleText(t.button('默认模型')).trim()).toBe('Beta')
 })
 
-it('keeps a failed automatic selection visible and retries it only after another explicit selection', async () => {
-  const configure = vi
-    .fn()
-    .mockRejectedValueOnce(new Error('模拟：自动保存失败'))
-    .mockResolvedValue(remote({}))
-  const t = await setup({ configure })
+it.each(['legacy', 'warm'] as const)('retains a failed %s background selection and retries only on a later departure', async mode => {
+  const configure = vi.fn().mockRejectedValueOnce(new Error('模拟：后台保存失败')).mockResolvedValue(remote({}))
+  const t = mode === 'warm' ? await setupWarm({ configure }, ['antigravity'], 'antigravity') : await setup({ configure })
   await t.chooseEffort('High')
+  expect(configure).not.toHaveBeenCalled()
+  await t.click('关闭设置')
+  expect(configure).toHaveBeenCalledOnce()
+  await t.open()
   expect(configure).toHaveBeenCalledOnce()
   expect(visibleText(t.button('默认思考强度')).trim()).toBe('High')
-  expect(t.text()).toContain('模拟：自动保存失败')
+  expect(t.text()).toContain('模拟：后台保存失败')
   expect(t.text()).not.toContain('默认设置已保存')
-  expect(t.button('默认思考强度').props.disabled).toBe(false)
-  await t.chooseEffort('High')
+  await t.click('智能体设置')
   expect(configure).toHaveBeenCalledTimes(2)
-  expect(JSON.parse(configure.mock.calls[1]![1])).toEqual({
-    cli: 'antigravity',
-    model: 'antigravity-fixture',
-    effort: 'high',
-  })
-  expect(t.text()).not.toContain('模拟：自动保存失败')
+  expect(JSON.parse(configure.mock.calls[1]![1])).toEqual({ cli: 'antigravity', model: 'antigravity-fixture', effort: 'high' })
+})
+
+it.each(['Kimi 设置', '智能体设置', '关闭设置'])(
+  'flushes on %s without waiting for the background write or aborting it', async leave => {
+    const pending = deferred(), configure = vi.fn().mockReturnValue(pending.promise)
+    const t = await setup({ configure })
+    await t.chooseEffort('High'); await t.chooseEffort('Low')
+    expect(configure).not.toHaveBeenCalled()
+    await t.click(leave)
+    expect(configure).toHaveBeenCalledOnce()
+    expect(JSON.parse(configure.mock.calls[0]![1]).effort).toBe('low')
+    expect(configure.mock.calls[0]![2].aborted).toBe(false)
+    if (leave === '关闭设置') expect(t.r.toJSON()).toBe(null)
+    else if (leave === 'Kimi 设置') expect(t.text()).toContain('kimi-fixture')
+    else expect(t.button('智能体设置').props['aria-pressed']).toBe(true)
+    await act(async () => pending.resolve(remote({})))
+    expect(configure).toHaveBeenCalledOnce()
+  },
+)
+
+it.each(['legacy', 'warm'] as const)('serializes %s writes across rapid close/reopen and preserves the newest draft', async mode => {
+  const first = deferred(), latest = deferred()
+  const configure = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(latest.promise)
+  const t = mode === 'warm' ? await setupWarm({ configure }, ['antigravity'], 'antigravity') : await setup({ configure })
+  await t.chooseEffort('High'); await t.click('关闭设置')
+  await t.open()
+  expect(visibleText(t.button('默认思考强度')).trim()).toBe('High')
+  expect(configure.mock.calls[0]![2].aborted).toBe(false)
+  await t.chooseEffort('Low'); await t.click('关闭设置')
+  expect(configure).toHaveBeenCalledOnce()
+  await act(async () => first.resolve(remote({})))
+  expect(configure).toHaveBeenCalledTimes(2)
+  expect(JSON.parse(configure.mock.calls[1]![1]).effort).toBe('low')
+  await t.open()
+  expect(visibleText(t.button('默认思考强度')).trim()).toBe('Low')
+  await act(async () => latest.resolve(remote({})))
+  expect(visibleText(t.button('默认思考强度')).trim()).toBe('Low')
   expect(t.text()).toContain('默认设置已保存')
 })
 
-it.each(['Kimi 设置', '关闭设置'])(
-  'cancels active and queued automatic saves on %s without reporting late completion',
-  async (leave) => {
-    const pending = deferred()
-    const configure = vi.fn().mockReturnValue(pending.promise)
-    const t = await setup({ configure })
-    await t.chooseEffort('High')
-    await t.chooseEffort('Low')
-    expect(configure).toHaveBeenCalledOnce()
-    const signal = configure.mock.calls[0]![2]
-    await t.click(leave)
-    expect(signal.aborted).toBe(true)
-    await act(async () => pending.resolve(remote({})))
-    expect(configure).toHaveBeenCalledOnce()
-    expect(t.text()).not.toContain('默认设置已保存')
-    if (leave === 'Kimi 设置') expect(t.text()).toContain('kimi-fixture')
-    else expect(t.r.toJSON()).toBe(null)
-  },
-)
+it('does not save on same-page navigation and flushes explicit changes on external unmount', async () => {
+  const t = await setupWarm({}, ['codex'])
+  await t.chooseEffort('High'); await t.click('Codex 设置')
+  expect(t.savedPreference).not.toHaveBeenCalled()
+  await act(async () => t.r.unmount())
+  expect(t.savedPreference).toHaveBeenCalledOnce()
+  expect(JSON.parse(t.savedPreference.mock.calls[0]![1]).effort).toBe('high')
+})
+
+it('rechecks missing catalog binding proof without cancelling an already submitted preference', async () => {
+  const first = deferred(), configure = vi.fn().mockReturnValue(first.promise)
+  const t = await setupWarm({ configure }, ['codex'])
+  await t.chooseEffort('High'); await t.click('关闭设置')
+  t.metadata.catalogReady.codex = false
+  await t.open()
+  expect(configure.mock.calls[0]![2].aborted).toBe(false)
+  expect(t.catalogForCli).toHaveBeenCalledTimes(2)
+  expect(visibleText(t.button('默认思考强度')).trim()).toBe('High')
+  await act(async () => first.resolve(remote({ cli: 'codex', model: 'codex-fixture', effort: 'high' })))
+  expect(t.text()).toContain('默认设置已保存')
+})
+
+it('keeps a new save receipt when an older settings read arrives late, then accepts a later fresh snapshot', async () => {
+  const write = deferred(), read = deferred(), configure = vi.fn().mockReturnValue(write.promise)
+  const t = await setupWarm({ configure }, ['codex'])
+  await t.chooseEffort('High'); await t.click('关闭设置')
+  const stale = remote({ enabled: t.enabled, settingsCache: structuredClone(t.metadata) })
+  t.settingsRead.mockReturnValueOnce(read.promise)
+  await t.open()
+  t.metadata.preferences.codex = { cli: 'codex', model: 'codex-fixture', effort: 'high' }
+  await act(async () => write.resolve(remote(t.metadata.preferences.codex)))
+  await act(async () => read.resolve(stale))
+  expect(visibleText(t.button('默认思考强度')).trim()).toBe('High')
+  expect(configure).toHaveBeenCalledOnce()
+  await t.click('关闭设置')
+  t.metadata.preferences.codex.effort = 'low'
+  await t.open()
+  expect(visibleText(t.button('默认思考强度')).trim()).toBe('Low')
+  expect(configure).toHaveBeenCalledOnce()
+})
+
+it.each(['刷新状态', '刷新模型'])('discards an unsubmitted choice on explicit %s instead of saving the old model scope', async refresh => {
+  const t = await setupWarm({}, ['codex'])
+  await t.chooseEffort('High'); await t.click(refresh); await t.click('关闭设置')
+  expect(t.savedPreference).not.toHaveBeenCalled()
+})
+
+it('cancels old-source background writes and ignores their late result after a source revision changes', async () => {
+  const first = deferred(), configure = vi.fn().mockReturnValue(first.promise)
+  const t = await setupWarm({ configure }, ['codex'])
+  await t.chooseEffort('High'); await t.click('关闭设置')
+  t.metadata.revisions.codex = 'SIMULATED-new-source'
+  await t.open()
+  expect(configure.mock.calls[0]![2].aborted).toBe(true)
+  await act(async () => first.resolve(remote({ cli: 'codex', model: 'codex-fixture', effort: 'high' })))
+  expect(visibleText(t.button('默认思考强度')).trim()).toBe('Low')
+  expect(t.text()).not.toContain('默认设置已保存')
+})
 
 it('toggles advanced content only through its separate arrow and preserves hidden content for collapse animation', async () => {
   const t = await setup()

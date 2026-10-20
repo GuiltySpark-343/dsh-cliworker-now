@@ -32,7 +32,11 @@ describe('one CLI name registry', () => {
   it('normalizes every canonical name and alias, including CLI suffix/case/spacing', () => {
     for (const cli of CLI_IDS) {
       expect(resolveCliName(cli)).toMatchObject({ status: 'resolved', cli, match: 'canonical' })
-      for (const alias of CLI_ALIASES[cli]) expect(requireCliName(` ${alias.toUpperCase()} CLI `)).toBe(cli)
+      for (const alias of CLI_ALIASES[cli])
+        expect(resolveCliName(` ${alias.toUpperCase()} CLI `), alias).toMatchObject({
+          status: 'resolved',
+          cli,
+        })
     }
     expect(resolveCliName('agy')).toEqual({
       status: 'resolved',
@@ -205,6 +209,7 @@ async function fixture() {
     nativeRunDone: new Map(),
     ctx,
     chooseDispatch,
+    chooseQoderVariant: vi.fn(async () => 'qoder'),
     launch,
     followup,
     runtime: { resolveWorker },
@@ -279,6 +284,16 @@ async function fixture() {
 }
 
 describe('native prompt/tool integration', () => {
+  it('preserves generic versus explicit international Qoder selectors in current-step guidance', async () => {
+    const f = await fixture()
+    const generic = await f.request([user('调用 qoder 检查代码')])
+    expect(generic.text).toContain('必须显式传入 cli="qoder"')
+    expect(generic.text).toContain('双版本先用宿主原生询问')
+    const international = await f.request([user('调用 qoder国际版 检查代码')])
+    expect(international.text).toContain('必须显式传入 cli="qoder国际版"')
+    expect(international.text).not.toContain('必须显式传入 cli="qoder"')
+    expect(f.launch).not.toHaveBeenCalled()
+  })
   it('includes the screenshot request guidance in the FIRST model request, after native assembly order', async () => {
     const f = await fixture()
     const messages = [user('用agy和我说你好')]

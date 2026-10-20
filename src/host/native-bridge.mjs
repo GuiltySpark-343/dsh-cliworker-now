@@ -11,6 +11,7 @@ const modules = {
   antigravity: ['native-agy', 'runNativeAgy'],
   kimi: ['native-kimi', 'runNativeKimi'],
   qoder: ['native-qoder', 'runNativeQoder'],
+  qodercn: ['native-qoder', 'runNativeQoder'],
   grok: ['native-grok', 'runNativeGrok'],
   zcode: ['native-zcode', 'runNativeZcode'],
   opencode: ['native-opencode', 'runNativeOpenCode'],
@@ -84,7 +85,7 @@ try {
   )
     throw new Error('Invalid native bridge configuration')
   io = createNativeIO(
-    config,
+    config.forkOperation ? { ...config, conversationId: undefined } : config,
     (line) => process.stdout.write(line),
     controller.signal,
     (chunk) => process.stderr.write(chunk),
@@ -104,7 +105,7 @@ try {
     stop()
   }, config.timeoutMs)
   const [module, entry] = modules[config.cli]
-  const runner = (await import(`./${module}.mjs`))[entry]
+  const runner = (await import(`./${module}.mjs`))[config.forkOperation ? entry.replace('runNative', 'forkNative') : entry]
   await runner(config, io)
   if (controller.signal.aborted) error ??= new Error('任务已停止')
 } catch (caught) {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Button,
   Modal,
@@ -16,7 +16,6 @@ import {
   isRetiredCli,
   effortLabel,
   type CliId,
-  type ModelChoice,
   type Preference,
 } from '../shared/types.ts'
 import type { AccountAction, AccountSource, AccountStatus, ZCodeLoginProvider } from '../shared/accounts.ts'
@@ -30,6 +29,10 @@ import { RolePresetsPane } from './role-presets.tsx'
 import { AccountQueryQueue } from './account-query-queue.ts'
 import { CliExecutableSettings } from './cli-executable-settings.tsx'
 import { NativeChoice } from './native-settings-choice.tsx'
+import { preferenceReadVersion, SettingsPreferenceSaves } from './settings-preference-saves.ts'
+import { settingsCacheMetadata, settingsDisplayPool, type SettingsDisplayCache,
+  type SettingsCatalog as Catalog, type SettingsAccountEntry as AccountEntry, type SettingsCatalogEntry,
+} from './settings-display-cache.ts'
 
 interface SettingsDialogProps {
   open: boolean
@@ -39,18 +42,7 @@ interface SettingsDialogProps {
   initialCli: CliId
   openNativeSettings?: () => void
 }
-interface Catalog {
-  cli: CliId
-  models: ModelChoice[]
-  preference?: Preference
-  notice?: string
-}
 type Enabled = Record<CliId, boolean>
-interface AccountEntry {
-  loading: boolean
-  data?: AccountStatus
-  error?: string
-}
 function readEnabled(raw: string): Enabled {
   const parsed = JSON.parse(raw)
   if (!parsed?.enabled || CLI_IDS.some((id) => typeof parsed.enabled[id] !== 'boolean')) {
@@ -123,8 +115,9 @@ function connectionStatus(enabled: boolean | undefined, account?: AccountEntry, 
 
 /** Native modal owns focus, dismissal, theme, elevation and entrance animation. */
 export function SettingsDialog(props: SettingsDialogProps) {
-  // Closing unmounts pending requests and the user-operated account terminal.
-  return props.open ? <OpenSettingsDialog {...props} /> : null
+  const fallbackSaves = useMemo(() => new SettingsPreferenceSaves(), [props.api, props.sessionId])
+  // Discovery and terminals unmount on close. Explicit preference writes finish in the background.
+  return props.open ? <OpenSettingsDialog {...props} fallbackSaves={fallbackSaves} /> : null
 }
 function OpenSettingsDialog({
   onClose,
@@ -132,7 +125,8 @@ function OpenSettingsDialog({
   sessionId,
   initialCli,
   openNativeSettings,
-}: SettingsDialogProps) {
+  fallbackSaves,
+}: SettingsDialogProps & { fallbackSaves: SettingsPreferenceSaves }) {
   const [cli, setCli] = useState<CliId>(isRetiredCli(initialCli) ? 'hermes' : initialCli)
   const [page, setPage] = useState<'cli' | 'roles'>('cli')
   const [cliExpanded, setCliExpanded] = useState(true)
@@ -143,6 +137,12 @@ function OpenSettingsDialog({
   const [togglingCli, setTogglingCli] = useState<CliId>()
   const [toggleErrors, setToggleErrors] = useState<Partial<Record<CliId, string>>>({})
   const [accounts, setAccounts] = useState<Partial<Record<CliId, AccountEntry>>>({})
+  const [catalogEntries, setCatalogEntries] = useState<Partial<Record<CliId, SettingsCatalogEntry>>>({})
+  const [warmCatalogs, setWarmCatalogs] = useState(false)
+  const [preferenceSaves, setPreferenceSaves] = useState(fallbackSaves)
+  const displayCache = useRef<SettingsDisplayCache>()
+  const mounted = useRef(true)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const enabledRef = useRef(enabled)
   enabledRef.current = enabled
   const probes = useRef(new AccountQueryQueue<CliId>())
@@ -160,14 +160,44 @@ function OpenSettingsDialog({
     }
   }
 
+  const readCatalog = useCallback(async (id: CliId, signal: AbortSignal, force = false,
+    cache = displayCache.current, version = cache?.version(id)) => {
+    try {
+      if (cache && cache.version(id) !== version) throw new Error('设置来源已变化，请刷新状态')
+      const next: Catalog = JSON.parse(value(await (force
+        ? api.cliworker.refreshCatalogForCli(sessionId, id, signal)
+        : api.cliworker.catalogForCli(sessionId, id, signal))))
+      if (next.cli !== id || !Array.isArray(next.models)) throw new Error('收到不匹配的 CLI 模型目录，请重试')
+      if (signal.aborted) return
+      if (cache && cache.version(id) !== version) throw new Error('设置来源已变化，请刷新状态')
+      const entry = { data: next, loading: false }
+      cache?.catalog(id, entry, version)
+      setCatalogEntries(old => ({ ...old, [id]: entry }))
+    } catch (error) {
+      if (signal.aborted) return
+      const entry = { loading: false, error: operationMessage(error) }
+      cache?.catalog(id, entry, version)
+      setCatalogEntries(old => ({ ...old, [id]: entry }))
+    }
+  }, [api, sessionId])
+  const refreshCatalog = useCallback((id: CliId, force = false) => {
+    if (!enabledRef.current?.[id]) return
+    if (force) (displayCache.current?.preferenceSaves ?? fallbackSaves).invalidate(id)
+    if (probes.current.enqueue(id, signal => readCatalog(id, signal, force), force))
+      setCatalogEntries(old => ({ ...old, [id]: { loading: true } }))
+  }, [readCatalog, fallbackSaves])
   const refreshAccount = useCallback(
     (id: CliId, replace = false, clearPrevious = false) => {
       if (!enabledRef.current?.[id]) return
       if (probes.current.has(id) && !replace) return
+      displayCache.current?.invalidate(id, replace || clearPrevious)
+      if (!displayCache.current && (replace || clearPrevious)) fallbackSaves.invalidate(id)
+      const cache = displayCache.current, version = cache?.version(id)
       setAccounts((old) => ({
         ...old,
         [id]: { data: clearPrevious ? undefined : old[id]?.data, loading: true },
       }))
+      if (displayCache.current) setCatalogEntries(old => ({ ...old, [id]: { loading: true } }))
       probes.current.enqueue(
         id,
         async (signal) => {
@@ -176,24 +206,43 @@ function OpenSettingsDialog({
               value(await api.cliworker.accountStatus(sessionId, id, signal)),
             )
             if (next.cli !== id) throw new Error('收到不匹配的 CLI 账号状态，请重试')
-            if (!signal.aborted) setAccounts((old) => ({ ...old, [id]: { data: next, loading: false } }))
+            if (cache && cache.version(id) !== version) throw new Error('账号来源已变化，请刷新状态')
+            if (!signal.aborted) {
+              const entry = { data: next, loading: false }
+              cache?.account(id, entry, version)
+              setAccounts((old) => ({ ...old, [id]: entry }))
+            }
           } catch (error) {
-            if (!signal.aborted)
-              setAccounts((old) => ({ ...old, [id]: { loading: false, error: operationMessage(error) } }))
+            if (!signal.aborted) {
+              const entry = { loading: false, error: operationMessage(error) }
+              cache?.account(id, entry, version)
+              setAccounts((old) => ({ ...old, [id]: entry }))
+            }
           }
+          if (!signal.aborted && cache) await readCatalog(id, signal, replace, cache, version)
         },
         replace,
       )
     },
-    [api, sessionId],
+    [api, sessionId, readCatalog, fallbackSaves],
   )
 
   useEffect(() => {
     const controller = new AbortController()
     void (async () => {
       try {
-        const next = readEnabled(value(await api.cliworker.cliSettings(sessionId, controller.signal)))
+        const readVersion = preferenceReadVersion()
+        const raw = value(await api.cliworker.cliSettings(sessionId, controller.signal))
+        const next = readEnabled(raw)
+        const metadata = settingsCacheMetadata(JSON.parse(raw).settingsCache)
         if (controller.signal.aborted) return
+        displayCache.current = metadata ? settingsDisplayPool(api).resolve(metadata, next, readVersion) : undefined
+        const saves = displayCache.current?.preferenceSaves ?? fallbackSaves
+        if (!metadata) for (const id of CLI_IDS) saves.sync(id, readVersion)
+        setPreferenceSaves(saves)
+        setAccounts(displayCache.current?.accountSnapshot() ?? {})
+        setCatalogEntries(displayCache.current?.catalogSnapshot() ?? {})
+        setWarmCatalogs(metadata !== undefined)
         enabledRef.current = next
         setEnabled(next)
         // Keep this ordering for the lifetime of the open dialog. A toggle does
@@ -208,15 +257,18 @@ function OpenSettingsDialog({
       toggleController.current?.abort()
       probes.current.clear()
     }
-  }, [api, sessionId])
+  }, [api, sessionId, fallbackSaves])
   useEffect(() => {
     if (!enabled) return
     probes.current.prioritize(cli)
     for (const id of [cli, ...CLI_IDS.filter((id) => id !== cli)]) {
       if (enabled[id]) {
         if (!accounts[id]) refreshAccount(id)
+        else if (warmCatalogs && !catalogEntries[id]) refreshCatalog(id)
       } else {
         probes.current.cancel(id)
+        displayCache.current?.invalidate(id)
+        if (!displayCache.current) fallbackSaves.invalidate(id)
         if (accounts[id])
           setAccounts((old) => {
             const next = { ...old }
@@ -228,7 +280,7 @@ function OpenSettingsDialog({
     // A completed or failed probe is cached until explicitly refreshed. This
     // Selection only reprioritizes pending work; it does not repeat settled reads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, cli, refreshAccount])
+  }, [enabled, cli, refreshAccount, refreshCatalog, warmCatalogs])
 
   async function toggleCli(id: CliId, nextValue: boolean) {
     if (!enabled || toggleController.current) return
@@ -351,8 +403,21 @@ function OpenSettingsDialog({
             cli={cli}
             enabled={enabled?.[cli]}
             account={accounts[cli]}
+            warmCatalogs={warmCatalogs}
+            catalogEntry={catalogEntries[cli]}
+            preferenceSaves={preferenceSaves}
+            onRefreshModels={() => refreshCatalog(cli, true)}
+            onPreferenceSaved={preference => {
+              const id = preference.cli ?? 'antigravity'
+              displayCache.current?.preference(id, preference)
+              if (!mounted.current) return
+              setCatalogEntries(old => {
+                const entry = old[id]
+                return entry?.data ? { ...old, [id]: { ...entry, data: { ...entry.data, preference } } } : old
+              })
+            }}
             connection={connectionStatus(enabled?.[cli], accounts[cli], settingsError)}
-            onRefreshAccount={(replace, clearPrevious) => refreshAccount(cli, replace, clearPrevious)}
+            onRefreshAccount={(replace = true, clearPrevious) => refreshAccount(cli, replace, clearPrevious)}
             onToggle={(next) => void toggleCli(cli, next)}
             toggleBusy={!!togglingCli}
             toggling={togglingCli === cli}
@@ -456,6 +521,11 @@ function CliSettings({
   cli,
   enabled,
   account,
+  warmCatalogs,
+  catalogEntry,
+  preferenceSaves,
+  onRefreshModels,
+  onPreferenceSaved,
   connection,
   onRefreshAccount,
   onToggle,
@@ -471,6 +541,11 @@ function CliSettings({
   cli: CliId
   enabled?: boolean
   account?: AccountEntry
+  warmCatalogs: boolean
+  catalogEntry?: SettingsCatalogEntry
+  preferenceSaves: SettingsPreferenceSaves
+  onRefreshModels: () => void
+  onPreferenceSaved: (preference: Preference) => void
   connection: ReturnType<typeof connectionStatus>
   onRefreshAccount: (replace?: boolean, clearPrevious?: boolean) => void
   onToggle: (enabled: boolean) => void
@@ -481,10 +556,11 @@ function CliSettings({
 }) {
   const [catalog, setCatalog] = useState<Catalog>()
   const [modelLoading, setModelLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
+  const [writeState, setWriteState] = useState(() => preferenceSaves.snapshot(cli))
+  const saving = writeState.saving
+  const saved = writeState.status === 'saved'
+  const saveError = writeState.error
   const [modelError, setModelError] = useState('')
-  const [saveError, setSaveError] = useState('')
-  const [saved, setSaved] = useState(false)
   const [modelRevision, refreshModels] = useState(0)
   const forceCatalogRefresh = useRef(false)
   const [model, setModel] = useState('')
@@ -494,35 +570,24 @@ function CliSettings({
   const [accountSource, setAccountSource] = useState<AccountSource>()
   const [loginProvider, setLoginProvider] = useState<ZCodeLoginProvider>()
   const [pathChanging, setPathChanging] = useState(false)
-  const saves = useRef(new AccountQueryQueue<'preference'>(1))
-  const saveRevision = useRef(0)
-  const latestSave = useRef<{ key: string; revision: number; state: 'pending' | 'saved' | 'failed' }>()
   const selection = useRef({ model: '', effort: 'default' as Preference['effort'] })
-  const mounted = useRef(true)
-  const cancelSaves = useCallback((updateState = true) => {
-    saveRevision.current++
-    latestSave.current = undefined
-    saves.current.clear()
-    if (updateState) setSaving(false)
-  }, [])
   useEffect(() => {
-    mounted.current = true
+    const update = () => setWriteState(preferenceSaves.snapshot(cli))
+    const unsubscribe = preferenceSaves.subscribe(cli, update)
+    update()
     return () => {
-      mounted.current = false
-      cancelSaves(false)
+      unsubscribe()
+      preferenceSaves.flush(cli)
     }
-  }, [cancelSaves])
+  }, [preferenceSaves, cli])
   useEffect(() => {
     // A refreshed account/catalog owns a new model scope. Only subsequent
     // human choice events may write a preference in that scope.
-    cancelSaves()
     selection.current = { model: '', effort: 'default' }
     setCatalog(undefined)
     setModel('')
     setEffort('default')
     setModelError('')
-    setSaveError('')
-    setSaved(false)
     if (!enabled) {
       setModelLoading(false)
       return
@@ -532,6 +597,35 @@ function CliSettings({
     // after this account check settles, including a fresh independent read if
     // the CLI cannot report an account identity.
     if (!account || account.loading) return
+    const applyCatalog = (next: Catalog) => {
+      setCatalog(next)
+      if (!next.models.length)
+        setModelError(operationMessage(next.notice || '此 CLI 未返回可用模型，请登录或刷新重试'))
+      const preference = preferenceSaves.snapshot(cli).preference ?? next.preference
+      const preferred = preference ? modelName(preference) : ''
+      const saved = next.models.find(
+        (item) =>
+          item.id === preferred ||
+          Object.values(item.variants ?? {}).includes(preference?.model ?? ''),
+      )
+      const chosen = preference ? saved : visibleModelChoices(next.models)[0]
+      if (preference && !saved && next.models.length)
+        setModelError('原默认模型已不可用，请重新选择模型')
+      const effort =
+        preference && chosen?.efforts?.includes(preference.effort)
+          ? preference.effort
+          : (chosen?.efforts?.[0] ?? 'default')
+      selection.current = { model: chosen?.id ?? '', effort }
+      setModel(selection.current.model)
+      setEffort(effort)
+    }
+    if (warmCatalogs) {
+      if (!catalogEntry || catalogEntry.loading) return
+      if (catalogEntry.data) applyCatalog(catalogEntry.data)
+      else setModelError(catalogEntry.error || '模型目录不可用，请刷新重试')
+      setModelLoading(false)
+      return
+    }
     const controller = new AbortController()
     void (async () => {
       try {
@@ -546,25 +640,7 @@ function CliSettings({
         )
         if (next.cli !== cli) throw new Error('收到不匹配的 CLI 模型目录，请重试')
         if (controller.signal.aborted) return
-        setCatalog(next)
-        if (!next.models.length)
-          setModelError(operationMessage(next.notice || '此 CLI 未返回可用模型，请登录或刷新重试'))
-        const preferred = next.preference ? modelName(next.preference) : ''
-        const saved = next.models.find(
-          (item) =>
-            item.id === preferred ||
-            Object.values(item.variants ?? {}).includes(next.preference?.model ?? ''),
-        )
-        const chosen = next.preference ? saved : visibleModelChoices(next.models)[0]
-        if (next.preference && !saved && next.models.length)
-          setModelError('原默认模型已不可用，请重新选择模型')
-        const effort =
-          next.preference && chosen?.efforts?.includes(next.preference.effort)
-            ? next.preference.effort
-            : (chosen?.efforts?.[0] ?? 'default')
-        selection.current = { model: chosen?.id ?? '', effort }
-        setModel(selection.current.model)
-        setEffort(effort)
+        applyCatalog(next)
       } catch (error) {
         if (!controller.signal.aborted) {
           setCatalog(undefined)
@@ -578,44 +654,18 @@ function CliSettings({
     return () => {
       controller.abort()
     }
-  }, [api, sessionId, cli, enabled, account, modelRevision, cancelSaves])
+  }, [api, sessionId, cli, enabled, account, modelRevision, preferenceSaves, warmCatalogs,
+    catalogEntry?.loading, catalogEntry?.error, catalogEntry?.data?.models, catalogEntry?.data?.notice])
   const inactive = !enabled || toggling
   const settingsPending = enabled === undefined && !settingsError
   const accountLoading = !settingsError && enabled !== false && (!account || account.loading)
   const supportedEfforts = catalog?.models.find((item) => item.id === model)?.efforts ?? []
   const choiceDisabled = inactive || pathChanging || modelLoading || accountLoading || !!action || !catalog
   function savePreference(preference: Preference) {
-    const key = JSON.stringify(preference)
-    if (latestSave.current?.key === key && latestSave.current.state === 'pending') return
-    const revision = ++saveRevision.current
-    latestSave.current = { key, revision, state: 'pending' }
-    setSaving(true)
-    setSaveError('')
-    setSaved(false)
-    // New events replace the waiting choice and cancel the previous request.
-    // The queue waits for that request to settle before starting the latest
-    // selection, preserving Host cleanup and preventing out-of-order writes.
-    saves.current.enqueue(
-      'preference',
-      async (signal) => {
-        const current = () => mounted.current && !signal.aborted && latestSave.current?.revision === revision
-        try {
-          value(await api.cliworker.configure(sessionId, JSON.stringify(preference), signal))
-          if (current()) {
-            latestSave.current!.state = 'saved'
-            setSaved(true)
-          }
-        } catch (error) {
-          if (current()) {
-            latestSave.current!.state = 'failed'
-            setSaveError(`${operationMessage(error)}；请重新选择模型或思考强度重试`)
-          }
-        } finally {
-          if (current()) setSaving(false)
-        }
-      },
-      true,
-    )
+    preferenceSaves.stage(preference, async (next, signal) => {
+      const saved = JSON.parse(value(await api.cliworker.configure(sessionId, JSON.stringify(next), signal)))
+      return saved?.cli === cli && typeof saved.model === 'string' ? saved as Preference : next
+    }, onPreferenceSaved)
   }
   const changeModel = (id: string) => {
     if (choiceDisabled) return
@@ -698,6 +748,7 @@ function CliSettings({
               openNativeSettings?.()
               return
             }
+            preferenceSaves.invalidate(cli)
             setChosenAction(item)
             setLoginProvider(undefined)
             setAccountSource(
@@ -867,8 +918,12 @@ function CliSettings({
                 aria-label="刷新模型"
                 disabled={inactive || modelLoading || saving || pathChanging}
                 onClick={() => {
-                  forceCatalogRefresh.current = true
-                  refreshModels((n) => n + 1)
+                  preferenceSaves.invalidate(cli)
+                  if (warmCatalogs) onRefreshModels()
+                  else {
+                    forceCatalogRefresh.current = true
+                    refreshModels((n) => n + 1)
+                  }
                 }}
               >
                 <IconRefreshOutlineRegular size={16} />

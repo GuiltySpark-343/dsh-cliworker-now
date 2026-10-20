@@ -45,6 +45,15 @@ it('discovers once per Host and persists choices; unchanged data on restart is n
   expect(readFileSync(f.file(), 'utf8')).toBe(text)
   if (process.platform !== 'win32') expect(statSync(f.file()).mode & 0o777).toBe(0o600)
 })
+it('exposes only this Host verified display binding, never a previous disk-only identity', async () => {
+  const f = fixture()
+  expect(f.cache.displayBinding(f.root, 'codex')).toBeUndefined()
+  await f.cache.get(f.input)
+  expect(f.cache.displayBinding(f.root, 'codex')).toBe('synthetic-binding')
+  expect(new SettingsCatalogCache(f.root).displayBinding(f.root, 'codex')).toBeUndefined()
+  f.cache.invalidate('codex')
+  expect(f.cache.displayBinding(f.root, 'codex')).toBeUndefined()
+})
 it('updates changed model and effort lists after restart without creating preferences', async () => {
   const f = fixture()
   await f.cache.get(f.input)

@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { qoderVariant, type QoderCliId } from '../src/host/qoder-variant.ts'
+import { findWindowsPathCommand, windowsPathDirectories, windowsCommandCandidates, WINDOWS_PATH_QUERY } from '../src/host/windows-cli-path.ts'
 import {
   codexAppxExecutable,
   findWindowsCodexAppx,
   hasWindowsHermesInstallDirectory,
   presentWindowsCliCandidate,
+  rejectWindowsQoderCrossVariant,
   validateWindowsCodexNpmEntry,
   validateWindowsQoderNpmEntry,
   windowsCliCandidates,
@@ -40,14 +43,15 @@ function npm(f = fixture()) {
   writeFileSync(shim, '@echo off\r\nnode "%~dp0node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n')
   return { f, shim, root }
 }
-function qoderNpm(f = fixture()) {
-  const entries = windowsCliCandidates('qoder', f), root = join(f.env.APPDATA, 'npm/node_modules/@qoder-ai/qodercli')
-  const bin = { qodercli: 'bundle/qodercli.js', qoder: 'bundle/qoder-npm-dispatcher.cjs' }
+function qoderNpm(f = fixture(), cli: QoderCliId = 'qoder') {
+  const variant = qoderVariant(cli), entries = windowsCliCandidates(cli, f)
+  const root = join(f.env.APPDATA, 'npm/node_modules', variant.package)
+  const bin = { [variant.executable]: `bundle/${variant.executable}.js`, [cli]: `bundle/${cli}-npm-dispatcher.cjs` }
   mkdirSync(join(root, 'bundle'), { recursive: true })
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@qoder-ai/qodercli', version: '1.1.73', bin }))
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: variant.package, version: '1.1.74', bin }))
   for (const [command, script] of Object.entries(bin)) {
     writeFileSync(join(root, script), '#!/usr/bin/env node\n// Synthetic Qoder bin; never executed.\n')
-    writeFileSync(join(f.env.APPDATA, 'npm', command + '.cmd'), `@echo off\r\nnode "%~dp0node_modules\\@qoder-ai\\qodercli\\${script.replaceAll('/', '\\')}" %*\r\n`)
+    writeFileSync(join(f.env.APPDATA, 'npm', command + '.cmd'), `@echo off\r\nnode "%~dp0node_modules\\${variant.package.replaceAll('/', '\\')}\\${script.replaceAll('/', '\\')}" %*\r\n`)
   }
   return { f, entries, root }
 }
@@ -141,7 +145,7 @@ describe('known Windows CLI installation discovery', () => {
   it('finds the native Hermes installer and legacy venv locations without searching arbitrary environments', () => {
     const f = fixture(),
       entries = windowsCliCandidates('hermes', f)
-    expect(entries).toEqual([
+    expect(entries.slice(0, 3)).toEqual([
       join(f.env.LOCALAPPDATA, 'hermes/bin/hermes.exe'),
       join(f.env.LOCALAPPDATA, 'hermes/bin/hermes.cmd'),
       join(f.env.LOCALAPPDATA, 'hermes/hermes-agent/venv/Scripts/hermes.exe'),
@@ -245,5 +249,110 @@ describe('registered Codex MSIX CLI identity (synthetic metadata)', () => {
       return JSON.stringify(packageRecord)
     }
     await expect(findWindowsCodexAppx(capture, controller.signal)).rejects.toThrow()
+  })
+})
+
+
+describe('synthetic shared Windows path discovery', () => {
+  it.each(['antigravity', 'codex', 'claude', 'kimi', 'mimo', 'zcode', 'grok', 'omp', 'pi', 'hermes', 'opencode', 'qoder', 'qodercn'] as const)(
+    'discovers %s through a common user bin without a product-specific installer branch', cli => {
+      const f = fixture(), command = cli === 'antigravity' ? 'agy' : cli === 'qoder' || cli === 'qodercn' ? qoderVariant(cli).executable : cli
+      const entry = join(f.home, '.local/bin', command + '.exe')
+      pe(entry)
+      expect(presentWindowsCliCandidate(cli, f)).toBe(entry)
+    },
+  )
+  it('refreshes only fixed system PowerShell metadata and finds a newly installed custom user PATH bin', async () => {
+    const f = fixture(), directory = join(f.home, 'new custom 中文 bin'), entry = join(directory, 'claude.exe')
+    pe(entry)
+    const capture = vi.fn(async () => JSON.stringify({ user: directory, machine: '' }))
+    expect(await findWindowsPathCommand(['claude'], capture, new AbortController().signal,
+      { ...f, env: { ...f.env, SystemRoot: 'C:\\Windows', PATH: 'C:\\stale' } })).toBe(entry)
+    const [argv, cwd] = capture.mock.calls[0] as unknown as [string[], string]
+    expect(argv.slice(0, 5)).toEqual(['C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand'])
+    expect(Buffer.from(argv[5]!, 'base64').toString('utf16le')).toBe(WINDOWS_PATH_QUERY)
+    expect(cwd).toBe(f.home)
+    expect(WINDOWS_PATH_QUERY).not.toMatch(/Get-ChildItem|Start-Process|cmd \/c/)
+  })
+  it('uses machine PATH too and does not cache stale metadata between lookups', async () => {
+    const f = fixture(), first = join(f.home, 'first'), second = join(f.home, 'second')
+    pe(join(first, 'kimi.exe')); pe(join(second, 'kimi.exe'))
+    const capture = vi.fn().mockResolvedValueOnce(JSON.stringify({ user: '', machine: first }))
+      .mockResolvedValueOnce(JSON.stringify({ user: second, machine: '' }))
+    expect(await findWindowsPathCommand(['kimi'], capture, new AbortController().signal, f)).toBe(join(first, 'kimi.exe'))
+    expect(await findWindowsPathCommand(['kimi'], capture, new AbortController().signal, f)).toBe(join(second, 'kimi.exe'))
+    expect(capture).toHaveBeenCalledTimes(2)
+  })
+  it('prefers a standalone Qoder command across all PATH directories over an earlier IDE alias', async () => {
+    const f = fixture(), ide = join(f.home, 'IDE'), cli = join(f.home, 'CLI')
+    pe(join(ide, 'qodercn.exe')); pe(join(cli, 'qoderclicn.exe'))
+    const capture = vi.fn(async () => JSON.stringify({ user: ide + ';' + cli, machine: '' }))
+    expect(await findWindowsPathCommand(['qoderclicn', 'qodercn'], capture, new AbortController().signal, f))
+      .toBe(join(cli, 'qoderclicn.exe'))
+  })
+  it('skips relative, empty, network and unresolved PATH entries and deduplicates case-insensitively', () => {
+    expect(windowsPathDirectories(['.;relative;;C:\\safe;"c:\\SAFE";\\\\server\\share;//server/share;%UNKNOWN%\\bin;C:\\other']))
+      .toEqual(['C:\\safe', 'C:\\other'])
+    expect(windowsCommandCandidates(['claude'], ['C:\\safe'], { PATHEXT: '.PS1;.EXE;.exe;.JS;.CMD' }))
+      .toEqual([join('C:\\safe', 'claude.exe'), join('C:\\safe', 'claude.cmd')])
+    expect(() => windowsCommandCandidates(['other & evil'], ['C:\\safe'])).toThrow()
+    expect(() => windowsPathDirectories(['x'.repeat(65_537)])).toThrow()
+    expect(() => windowsPathDirectories([Array.from({ length: 257 }, (_, i) => `C:\\bin${i}`).join(';')])).toThrow()
+  })
+  it('preserves a broken symlink rather than selecting another installation or guessed version', async () => {
+    const f = fixture(), first = join(f.home, 'broken'), next = join(f.home, 'working')
+    mkdirSync(first); symlinkSync(join(first, 'missing.exe'), join(first, 'mimo.exe')); pe(join(next, 'mimo.exe'))
+    const capture = vi.fn(async () => JSON.stringify({ user: first + ';' + next, machine: '' }))
+    expect(await findWindowsPathCommand(['mimo'], capture, new AbortController().signal, f)).toBe(join(first, 'mimo.exe'))
+  })
+  it.each(['null', '{}', '{"user":[],"machine":""}', '{"user":"","machine":"","command":"evil"}'])(
+    'rejects malformed PATH metadata %s', async raw => {
+      await expect(findWindowsPathCommand(['codex'], async () => raw, new AbortController().signal, fixture())).rejects.toThrow()
+    },
+  )
+  it('does not start a cancelled lookup or adopt a late result and preserves capture cleanup errors', async () => {
+    const controller = new AbortController(), reason = new Error('Synthetic cancellation'), capture = vi.fn(async () => '{}')
+    controller.abort(reason)
+    await expect(findWindowsPathCommand(['codex'], capture, controller.signal)).rejects.toBe(reason)
+    expect(capture).not.toHaveBeenCalled()
+    const late = new AbortController()
+    await expect(findWindowsPathCommand(['codex'], async () => { late.abort(reason); return '{}'}, late.signal)).rejects.toBe(reason)
+    const cleanup = new Error('Synthetic cleanup unconfirmed')
+    await expect(findWindowsPathCommand(['codex'], async () => { throw cleanup }, new AbortController().signal)).rejects.toBe(cleanup)
+  })
+  it('rejects an unsafe Windows system root before starting a process', async () => {
+    const capture = vi.fn()
+    await expect(findWindowsPathCommand(['codex'], capture, new AbortController().signal,
+      { env: { SystemRoot: '\\\\network\\Windows' } })).rejects.toThrow()
+    expect(capture).not.toHaveBeenCalled()
+  })
+})
+
+describe('synthetic Qoder CN and international Windows installation isolation', () => {
+  it.each(['qoder', 'qodercn'] as const)('resolves the observed canonical native symlink for %s without version enumeration', cli => {
+    const f = fixture(), variant = qoderVariant(cli), entry = windowsCliCandidates(cli, f)[0]!
+    const versioned = join(entry, '..', variant.executable + '-1.1.74.exe')
+    pe(versioned); symlinkSync(versioned, entry)
+    expect(presentWindowsCliCandidate(cli, f)).toBe(entry)
+    expect(windowsQoderCliEntry(entry, cli)).toBe(realpathSync(versioned))
+    rmSync(entry)
+    expect(presentWindowsCliCandidate(cli, f)).toBeUndefined()
+  })
+  it.each(['qoder', 'qodercn'] as const)('normalizes only the proven %s npm dispatcher and rejects the other brand', cli => {
+    const f = fixture(), own = qoderNpm(f, cli), otherCli = cli === 'qoder' ? 'qodercn' : 'qoder', other = qoderNpm(f, otherCli)
+    const ownScript = join(own.root, 'bundle', qoderVariant(cli).executable + '.js')
+    expect(validateWindowsQoderNpmEntry(own.entries[2]!, cli)).toBe(realpathSync(ownScript))
+    expect(() => windowsQoderCliEntry(other.entries[1]!, cli)).toThrow('安装入口无法确认')
+    expect(() => rejectWindowsQoderCrossVariant(other.entries[1]!, cli)).toThrow('另一版本')
+    expect(() => rejectWindowsQoderCrossVariant(join(other.root, 'bundle', qoderVariant(otherCli).executable + '.js'), cli)).toThrow('另一版本')
+    expect(() => rejectWindowsQoderCrossVariant(`D:\\custom\\${qoderVariant(otherCli).executable}-1.1.74.exe`, cli)).toThrow('另一版本')
+  })
+  it('does not fall back to the international install when CN is absent or broken', () => {
+    const f = fixture(), international = windowsCliCandidates('qoder', f)[0]!, cn = windowsCliCandidates('qodercn', f)[0]!
+    pe(international)
+    expect(presentWindowsCliCandidate('qodercn', f)).toBeUndefined()
+    pe(cn); writeFileSync(cn, 'Synthetic corrupt binary')
+    expect(() => presentWindowsCliCandidate('qodercn', f)).toThrow('Qoder CN Windows 安装入口无法确认')
+    expect(presentWindowsCliCandidate('qoder', f)).toBe(international)
   })
 })

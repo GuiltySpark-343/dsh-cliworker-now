@@ -15,6 +15,8 @@ export interface ExternalRequestState extends Omit<NativeRequestState, 'nativeRu
 export interface TelemetryAvailability {
   /** The displayed turn/step/timing values describe the Harness-to-CLI call. */
   statisticsBasis?: 'harness-cli-adapter'
+  /** Billing unit for providers that expose credits rather than token charges. */
+  usageUnit?: 'credits'
   statistics: MetricAvailability
   tokenUsage: MetricAvailability
   context: MetricAvailability

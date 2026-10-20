@@ -70,12 +70,12 @@ const validateCli = (cli: CliId) => {
   if (!(CLI_IDS as readonly string[]).includes(cli)) throw new Error('不支持的 CLI')
 }
 const instructionFor = (cli: CliId, action: AccountAction): string => {
-  if (cli === 'qoder')
+  if ((cli === 'qoder' || cli === 'qodercn'))
     return action === 'login'
-      ? '按 Qoder 原生提示完成登录；设置 PAT 环境变量时优先使用该 PAT。'
+      ? `按 ${cli === 'qodercn' ? 'Qoder CN' : 'Qoder'} 原生提示完成登录；仅使用本版 PAT。`
       : action === 'logout'
-        ? '在 Qoder 原生终端输入 /logout 并确认；PAT 环境变量须由你自行清除。'
-        : '在 Qoder 原生终端使用 /login、/logout 和 /status 管理账号。'
+        ? `在 ${cli === 'qodercn' ? 'Qoder CN' : 'Qoder'} 原生终端输入 /logout 并确认；本版 PAT 环境变量须由你自行清除。`
+        : `在 ${cli === 'qodercn' ? 'Qoder CN' : 'Qoder'} 原生终端使用 /login、/logout 和 /status 管理账号。`
   if (cli === 'zcode' || cli === 'grok') return zcodeGrokInstruction(cli, action)
   if (cli === 'antigravity')
     return action === 'manage'
@@ -124,7 +124,7 @@ const actionsFor = (cli: CliId, config: RuntimeConfig): AccountStatus['actions']
 
 /** Only commands verified against the installed CLIs. Never send a prompt/slash command. */
 const argumentsFor = (cli: CliId, action: AccountAction): string[] => {
-  if (cli === 'qoder') return action === 'login' ? ['login'] : []
+  if ((cli === 'qoder' || cli === 'qodercn')) return action === 'login' ? ['login'] : []
   if (cli === 'antigravity' || action === 'manage' || (cli === 'kimi' && action === 'logout')) return []
   if (cli === 'codex' || cli === 'kimi') return [action]
   return ['auth', action]
@@ -252,6 +252,7 @@ export class AccountManager {
     private backend: ProcessBackend,
     private config: RuntimeConfig,
     private identity: AccountIdentitySource = nativeAgyAccountIdentity(backend, config),
+    private onQueryCleanup?: (cli: CliId, error: ProcessCleanupUnconfirmedError) => void,
   ) {}
 
   isBusy(cli: CliId): boolean {
@@ -328,7 +329,7 @@ export class AccountManager {
       }
     const timer = new AbortController()
     // Qoder's native account budget includes its acknowledged session teardown.
-    const timeout = setTimeout(() => timer.abort(), cli === 'qoder' ? 15_000 : STATUS_TIMEOUT)
+    const timeout = setTimeout(() => timer.abort(), (cli === 'qoder' || cli === 'qodercn') ? 15_000 : STATUS_TIMEOUT)
     timeout.unref?.()
     const control = AbortSignal.any([signal, this.controller.signal, timer.signal])
     let installed = false
@@ -336,9 +337,9 @@ export class AccountManager {
       const executable = await resolveCliExecutable(cli, this.backend, this.config, control)
       installed = true
       control.throwIfAborted()
-      if (cli === 'qoder')
+      if ((cli === 'qoder' || cli === 'qodercn'))
         return {
-          cli, installed, ...(await readQoderAccount(executable, control, { backend: this.backend, config: this.config, project: cwd })),
+          cli, installed, ...(await readQoderAccount(executable, control, { cli, backend: this.backend, config: this.config, project: cwd })),
           actions: this.backend.spawnTerminal ? actionsFor(cli, this.config) : [],
         }
       if (cli === 'mimo')
@@ -494,6 +495,7 @@ export class AccountManager {
     } catch (error) {
       if (error instanceof ProcessCleanupUnconfirmedError) {
         this.unsafeQueries.add(cli)
+        this.onQueryCleanup?.(cli, error)
         return {
           cli,
           installed,
@@ -680,9 +682,9 @@ export class AccountManager {
           action === 'logout'
             ? '退出 Claude 官方账号；本地代理设置保留。'
             : '在原生终端登录 Claude 官方账号；本地代理设置保留。'
-      } else if (cli === 'qoder') {
+      } else if ((cli === 'qoder' || cli === 'qodercn')) {
         launch.argv = [executable, ...QODER_METADATA_ARGUMENTS.filter((value) => value !== '--acp'), ...argumentsFor(cli, action)]
-        launch.env = qoderEnvironment()
+        launch.env = qoderEnvironment(cli)
       } else if (cli === 'kimi') {
         if (action === 'login') {
           const current = await this.readStatus(cli, cwd, startup)

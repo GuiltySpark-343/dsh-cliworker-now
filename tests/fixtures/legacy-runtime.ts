@@ -6,7 +6,7 @@ import type { CliId } from '../../src/shared/types.ts'
  */
 export class WorkerRuntime extends NativeWorkerRuntime {
   protected override initialTransport(cli: CliId): string | undefined {
-    // Qoder was introduced with ACP and has no pre-migration execution path.
-    return cli === 'qoder' ? super.initialTransport(cli) : undefined
+    // Both Qoder variants were introduced with ACP and have no pre-migration path.
+    return cli === 'qoder' || cli === 'qodercn' ? super.initialTransport(cli) : undefined
   }
 }

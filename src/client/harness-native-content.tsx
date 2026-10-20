@@ -6,7 +6,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'cliworker.native.sidebar': {
       kind: 'single'
       scope: 'session'
-      owner: { composerPresentation?: 'default' | 'main'; commandSource?: string }
+      owner: { composerPresentation?: 'default' | 'main'; commandSource?: string; childImageUploads?: boolean }
     }
   }
 }

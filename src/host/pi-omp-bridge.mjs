@@ -398,6 +398,9 @@ try {
     const contextObserver = config.cli === 'pi' ? await preparePiContextObserver(config.executable) : { argv: [], env: {} }
     delete env[PI_CONTEXT_ENV]
     Object.assign(env, contextObserver.env)
+    const attachmentInput = config.cli === 'pi'
+      ? await nativeAttachmentInput('pi', config.prompt, config.attachments, metadataController.signal)
+      : { message: await nativeAttachmentInput('text', config.prompt, config.attachments, metadataController.signal) }
     const harnessExtension = await prepareNativeHarnessExtension(harnessTools, { signal: metadataController.signal })
     const tools = config.cli === 'pi' ? ['read', 'grep', 'find', 'ls'] : ['read', 'grep', 'glob']
     if (config.mode === 'accept-edits') tools.push('write', 'edit')
@@ -599,6 +602,39 @@ try {
         return
       }
       if (contextInspection?.consume(value)) return
+      if (value.type === 'response' && config.forkOperation) {
+        if (!value.success) throw new Error('Pi 原生分支 RPC 被拒绝')
+        if (value.id === 'initial') {
+          validateState(value.data, false)
+          if (value.data.isStreaming || value.data.isCompacting || (value.data.pendingMessageCount ?? 0) > 0)
+            throw new Error('Pi 原生会话仍在运行')
+          if (config.forkOperation === 'delete') {
+            // Only the exact branch mapping passed by the Host owns this deletion.
+            child.stdin.end()
+            settled = finalState = sent = true
+            return
+          }
+          send({ id: 'fork-clone', type: 'clone' })
+        } else if (value.id === 'fork-clone') {
+          if (value.data?.cancelled) throw new Error('Pi 已取消分支')
+          send({ id: 'fork-state', type: 'get_state' })
+        } else if (value.id === 'fork-state') {
+          if (!value.data?.sessionId || value.data.sessionId === config.conversationId)
+            throw new Error('Pi 分支回执没有新的原生会话 ID')
+          // clone switched only this metadata process; the source mapping is immutable.
+          session = undefined
+          resume = undefined
+          const source = config.conversationId
+          config.conversationId = undefined
+          validateState(value.data, false)
+          config.conversationId = source
+          output({ type: 'native', record: { type: 'cliworker.fork_created', id: session.id } })
+          settled = finalState = sent = true
+          child.stdin.end()
+        }
+        closeTimer ??= setTimeout(() => stop('Pi 分支元数据进程未退出'), 5000)
+        return
+      }
       if (value.type === 'response') {
         if (typeof value.id === 'string' && value.id.startsWith('cliworker-live-stats-')) {
           if (value.id !== liveStatsId) return
@@ -694,7 +730,7 @@ try {
           if (!stopped && !failure) {
             sent = true
             requestLiveStats()
-            send({ id: 'prompt', type: 'prompt', message: config.prompt })
+            send({ id: 'prompt', type: 'prompt', ...attachmentInput })
           }
         } else if (value.id === 'final') {
           validateState(value.data)
@@ -899,7 +935,10 @@ try {
     if (outcome.code !== 0) failure ??= '原生 CLI 异常退出'
     if (!settled || !finalState || !sent) failure ??= '原生 CLI 未确认任务完成'
     try {
-      await persist()
+      if (config.forkOperation === 'delete') {
+        await unlink(resume)
+        await unlink(join(config.stateDirectory, 'sessions', createHash('sha256').update(config.conversationId).digest('hex') + '.json'))
+      } else await persist()
     } catch (error) {
       failure ??= errorMessage(error)
     }
@@ -917,3 +956,4 @@ try {
 }
 await controlReceiver?.close().catch(() => undefined)
 await stopReceiver?.close().catch(() => undefined)
+import { nativeAttachmentInput } from './native-attachments.mjs'

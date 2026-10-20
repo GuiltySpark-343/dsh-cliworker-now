@@ -354,7 +354,7 @@ function ProcessItem({ item, rows, worker }: { item: TimelineItem; rows: Timelin
   if (item.kind === 'assistant')
     return (
       <div className="cwn-process-event" data-empty-reply-id={item.id}>
-        无正文回复 · <UsageIndicator usage={item.usage} reply />
+        无正文回复 · <UsageIndicator usage={item.usage} providerCredits={item.providerCredits} creditsBased={worker?.preference.cli === 'qoder' || worker?.preference.cli === 'qodercn'} reply />
         {item.durationSeconds !== undefined && ` · CLI 报告耗时：${item.durationSeconds}秒`} ·{' '}
         <time dateTime={item.time}>{messageClock(item.time)}</time>
         {item.sessionDurationSeconds !== undefined && ` · CLI 会话累计耗时：${item.sessionDurationSeconds}秒`}

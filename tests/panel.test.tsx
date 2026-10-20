@@ -997,17 +997,25 @@ it('selects defaults per CLI and limits effort choices to the selected model', a
   await f.click('默认模型')
   await f.click('model-b')
   expect(f.text()).toContain('High')
+  await f.click('默认思考强度')
+  expect(f.r.root.findAllByType('button')
+    .filter(button => ['low', 'high'].includes(button.props['aria-label']))
+    .map(button => button.props['aria-label'])).toEqual(['high'])
+  await f.click('high')
+  expect(configure).not.toHaveBeenCalled()
+  await f.click('Kimi 设置')
   expect(configure).toHaveBeenCalledTimes(1)
   expect(JSON.parse(configure.mock.calls[0]![1])).toEqual({
     cli: 'codex',
     model: 'model-b',
     effort: 'high',
   })
-  await f.click('Kimi 设置')
   expect(f.text()).toContain('默认')
   expect(configure).toHaveBeenCalledTimes(1)
   await f.click('默认模型')
   await f.click('kimi-model')
+  expect(configure).toHaveBeenCalledTimes(1)
+  await f.click('关闭设置')
   expect(configure).toHaveBeenCalledTimes(2)
   expect(JSON.parse(configure.mock.calls[1]![1])).toEqual({
     cli: 'kimi',

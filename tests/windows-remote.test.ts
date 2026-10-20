@@ -1,26 +1,36 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, mkdir, writeFile, readFile, symlink, link, rm, chmod } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, symlink, link, rm, chmod, cp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
-  SOURCE_ROOT_FILES, WINDOWS_TESTS, sha256, createSnapshot, validateSnapshot,
+  SOURCE_ROOT_FILES, SOURCE_SCRIPTS, WINDOWS_TESTS, sha256, createSnapshot, validateSnapshot,
   validateSourcePath, validateRemoteRoot, validateArchiveEntries, strictSshArgs,
-  assertNoLinksWithin,
+  assertNoLinksWithin, runtimeManifestFromSnapshot,
 } from '../scripts/windows-remote-common.mjs'
 import { readConfig, verifyRemoteReport, verifyPreviewSnapshot } from '../scripts/windows-remote.mjs'
 import { acquireRunLock, isolatedEnvironment, stageOutcome } from '../scripts/windows-remote-runner.mjs'
 
 const roots: string[] = []
+// The repository's tracked runtime-host is the real packaged structure (203 manifest files plus manifest.json).
+const repositoryRuntime = resolve(import.meta.dirname, '..', 'runtime-host')
+const repositoryManifest = JSON.parse(await readFile(join(repositoryRuntime, 'manifest.json'), 'utf8'))
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'windows-remote-test-'))
   roots.push(root)
-  for (const file of [...SOURCE_ROOT_FILES, ...WINDOWS_TESTS, 'src/host/index.ts', 'scripts/build.mjs', 'scripts/build-preview.mjs']) {
+  for (const file of [...SOURCE_ROOT_FILES, ...WINDOWS_TESTS, 'src/host/index.ts', ...SOURCE_SCRIPTS]) {
     await mkdir(join(root, file, '..'), { recursive: true })
     await writeFile(join(root, file), '')
   }
+  await cp(repositoryRuntime, join(root, 'runtime-host'), { recursive: true })
   return root
 }
+/** Mirrors `tar -tzf` of an npm pack of the current files list: files only, no directory entries. */
+function packageListing(runtimeFiles = ['manifest.json', ...repositoryManifest.files.map((file: { path: string }) => file.path)]) {
+  return ['package/LICENSE', 'package/package.json', 'package/README.en.md', 'package/README.md', 'package/cordis.patch.yml',
+    'package/lib/index.js', 'package/lib/client.js', ...runtimeFiles.map((path) => `package/runtime-host/${path}`)].join('\n') + '\n'
+}
+const regular = (listing: string) => listing.trim().split('\n').map((name) => `-rw-r--r-- 0 0 0 1 Oct 20 00:00 ${name}`).join('\n')
 
 describe('Windows remote developer safety and evidence boundaries (synthetic fixtures)', () => {
   it('requires private explicit config and bypasses general SSH config/password fallback', async () => {
@@ -86,11 +96,30 @@ describe('Windows remote developer safety and evidence boundaries (synthetic fix
   })
 
   it('rejects package traversal, special entries and absent Host entry', () => {
-    const valid = 'package/package.json\npackage/lib/index.js\n'
-    expect(validateArchiveEntries(valid, '-rw-r--r-- package/package.json\n-rw-r--r-- package/lib/index.js')).toHaveLength(2)
-    for (const bad of ['package/lib/../../escape', 'package/lib/file:stream', 'package/lib/nul.js', 'package/lib/.. /outside']) expect(() => validateArchiveEntries(`${valid}${bad}`, '-rw-r--r-- entries')).toThrow()
-    expect(() => validateArchiveEntries(valid, 'lrwxrwxrwx package/lib/link -> outside')).toThrow('links')
-    expect(() => validateArchiveEntries('package/package.json', '-rw-r--r-- manifest')).toThrow('Host')
+    const valid = packageListing()
+    expect(validateArchiveEntries(valid, regular(valid), repositoryManifest)).toContain('package/lib/index.js')
+    for (const bad of ['package/lib/../../escape', 'package/lib/file:stream', 'package/lib/nul.js', 'package/lib/.. /outside', 'package/runtime-host/../escape', 'package/src/index.ts']) expect(() => validateArchiveEntries(`${valid}${bad}`, '-rw-r--r-- entries', repositoryManifest)).toThrow()
+    expect(() => validateArchiveEntries(valid, 'lrwxrwxrwx package/lib/link -> outside', repositoryManifest)).toThrow('links')
+    const noHost = valid.replace('package/lib/index.js\n', '')
+    expect(() => validateArchiveEntries(noHost, regular(noHost), repositoryManifest)).toThrow('Host')
+  })
+
+  it('accepts the real runtime-host package structure and rejects files outside its manifest', async () => {
+    const root = await fixture()
+    const snapshot = validateSnapshot(await createSnapshot(root))
+    const paths = snapshot.files.map((file: { path: string }) => file.path)
+    expect(paths).toEqual(expect.arrayContaining([...SOURCE_SCRIPTS, 'runtime-host/manifest.json', 'runtime-host/source.patch', 'runtime-host/dsh-client-ui-chat/lib/client.js']))
+    const manifest = runtimeManifestFromSnapshot(snapshot)
+    expect(manifest.files).toHaveLength(repositoryManifest.files.length)
+    const listing = packageListing()
+    expect(validateArchiveEntries(listing, regular(listing), manifest)).toHaveLength(7 + 1 + repositoryManifest.files.length)
+    const withDirectories = `package/\npackage/runtime-host/\npackage/runtime-host/dsh-client-ui-chat/lib/\n${listing}`
+    expect(() => validateArchiveEntries(withDirectories, regular(withDirectories), manifest)).not.toThrow()
+    for (const extra of ['package/runtime-host/extra.js', 'package/runtime-host/dsh-client-ui-chat/lib/injected.js', 'package/runtime-host/dsh-client-ui-other/', 'package/runtime-host/manifest.json/'])
+      expect(() => validateArchiveEntries(`${listing}${extra}\n`, regular(listing), manifest)).toThrow(/runtime-host/)
+    expect(() => validateArchiveEntries(packageListing(['manifest.json', ...repositoryManifest.files.slice(1).map((file: { path: string }) => file.path)]), regular(listing), manifest)).toThrow('missing runtime-host')
+    expect(() => validateArchiveEntries(listing, regular(listing), { ...manifest, files: [...manifest.files, { path: '../escape.js', bytes: 1, sha256: '0'.repeat(64) }] })).toThrow()
+    expect(() => validateArchiveEntries(listing, regular(listing), undefined)).toThrow('manifest')
   })
 
   it('fails on a concurrent run and preserves the existing lock ownership', async () => {

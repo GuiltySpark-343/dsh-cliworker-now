@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PassThrough } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
 import type { SubprocessHandle } from '@deepseek-ai/dsh-subprocess'
 import { WorkerRuntime } from './fixtures/legacy-runtime.ts'
 import { WorkerStorage } from '../src/host/storage.ts'
@@ -149,6 +149,30 @@ it.each(CLI_IDS)(
     expect(catalogFor).not.toHaveBeenCalled()
   },
 )
+
+it.each([false, true])('preserves split UTF-8 stderr diagnostics, including an incomplete tail: %s', async incomplete => {
+  const { backend, storage, submit } = setup()
+  const diagnostic = '鉴权失败：账号未登录 🐱'
+  const bytes = Buffer.concat([Buffer.from(diagnostic), ...(incomplete ? [Buffer.from([0xe4, 0xb8])] : [])])
+  vi.mocked(backend.spawn).mockImplementation(() => ({
+    stdout: Readable.from([]),
+    stderr: Readable.from((async function* () {
+      for (const byte of bytes) {
+        yield Buffer.from([byte])
+        await new Promise(resolve => setImmediate(resolve))
+      }
+    })()),
+    done: Promise.resolve({ exitCode: 1 }),
+    terminate: vi.fn(),
+    waitForExit: vi.fn(async () => true),
+  }) as unknown as SubprocessHandle)
+  const task = submit()
+  expect(await task.done).toMatchObject({
+    status: 'failed',
+    error: `Error: CLI exited with 1: ${diagnostic}${incomplete ? '�' : ''}`,
+  })
+  expect(readFileSync(storage.rawPath(task.worker) + '.stderr')).toEqual(bytes)
+})
 
 it.each(['logout', 'switch', 'model', 'effort'])('rechecks %s after waiting in the queue', async (change) => {
   const { backend, finishes, submit } = setup()

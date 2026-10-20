@@ -226,7 +226,7 @@ describe('run-isolated Harness MCP bridge (synthetic)', () => {
   })
 })
 describe('temporary native injection (synthetic)', () => {
-  it.each(['codex', 'claude', 'opencode', 'mimo', 'kimi', 'grok', 'zcode', 'pi'])('injects %s without putting secrets in argv', async cli => {
+  it.each(['codex', 'claude', 'opencode', 'mimo', 'kimi', 'grok', 'zcode', 'pi', 'qoder', 'qodercn'])('injects %s without putting secrets in argv', async cli => {
     const target = await lease({ binding: { ...binding, cli } })
     const argv = cli === 'claude' ? ['claude', '--print', '--model', 'fixture', 'prompt'] : [cli, 'serve']
     const result = buildNativeHarnessInjection({ cli, argv, env: {}, connection: target.connection, mcpEntryPath: '/synthetic/bridge.mjs' })
@@ -238,7 +238,7 @@ describe('temporary native injection (synthetic)', () => {
     expect(argv).toEqual(cli === 'claude' ? ['claude', '--print', '--model', 'fixture', 'prompt'] : [cli, 'serve'])
   })
   it('has concrete unavailable reasons and refuses CLI/namespace conflicts', async () => {
-    for (const cli of ['omp', 'hermes', 'antigravity']) expect(nativeHarnessToolCapability(cli, undefined)).toMatchObject({ transport: false, ready: false, reason: expect.any(String) })
+    for (const cli of ['omp', 'hermes']) expect(nativeHarnessToolCapability(cli, undefined)).toMatchObject({ transport: false, ready: false, reason: expect.any(String) })
     const target = await lease()
     expect(() => buildNativeHarnessInjection({ cli: 'kimi', argv: ['kimi'], connection: target.connection })).toThrow('身份不匹配')
     expect(() => buildNativeHarnessInjection({ cli: 'opencode', argv: ['opencode'], connection: { ...target.connection, binding: { ...binding, cli: 'opencode' } }, env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ mcp: { dsh_worker_tools: {} } }) } })).toThrow('拒绝覆盖')

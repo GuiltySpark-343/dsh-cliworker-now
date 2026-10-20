@@ -7,7 +7,9 @@ import { windowsCodexBackgroundLaunch } from './windows-codex-launch.ts'
 import { nativeLaunchArgv } from './native-launch.mjs'
 import { createNativeStopControl, createNativeGuidanceControl } from './pi-omp-control.mjs'
 import { buildNativeHarnessInjection } from './native-harness-injection.mjs'
+import { prepareAgyHarnessWorkspace } from './native-agy-harness.mjs'
 import type { NativeHarnessConnection } from './native-harness-tools.ts'
+import type { NativeAttachment } from './native-attachments.mjs'
 
 export const NATIVE_TRANSPORTS = {
   antigravity: 'agy-stream-v1',
@@ -22,6 +24,7 @@ export const NATIVE_TRANSPORTS = {
   hermes: 'hermes-http-v1',
   opencode: 'opencode-http-v1',
   qoder: 'qoder-acp-v1',
+  qodercn: 'qodercn-acp-v1',
 } as const
 export function transportFor(cli: CliId): string {
   if (cli === 'harness') throw new Error('Harness CLI 已移除')
@@ -49,6 +52,8 @@ export async function prepareNativeWorker<
     preference: Preference
     mode: TaskMode
     prompt: string
+    attachments?: readonly NativeAttachment[]
+    forkSource?: { conversationId: string; messageId: string }
     conversationId?: string
     stateDirectory: string
     /** Non-secret model IDs from the exact admitted Claude route. */
@@ -70,7 +75,9 @@ export async function prepareNativeWorker<
     const activeControl = control
     const native =
       process.platform === 'win32' && input.cli === 'codex'
-        ? windowsCodexBackgroundLaunch(nativeLaunchArgv(launch.argv), { ...process.env, ...launch.env })
+        ? // Only this launch's explicit variables: the Host backend applies its
+          // parent-environment scrubbing, which a copy of process.env would bypass.
+          windowsCodexBackgroundLaunch(nativeLaunchArgv(launch.argv), launch.env)
         : undefined
     const baseEnv = native ? native.env : launch.env
     // Secrets stay in the child environment, never argv or the request payload.
@@ -79,6 +86,11 @@ export async function prepareNativeWorker<
       env: baseEnv ? Object.fromEntries(Object.entries(baseEnv).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) : undefined,
       connection: harnessTools })
     let nativeArgv = injected.argv
+    if (input.cli === 'antigravity' && harnessTools) {
+      const prepared = prepareAgyHarnessWorkspace({ directory, argv: nativeArgv, connection: harnessTools })
+      nativeArgv = prepared.argv
+      Object.assign(injected.env, prepared.env)
+    }
     if (input.cli === 'codex' && harnessTools) {
       // The verified exec parser requires the prompt to remain last.
       const promptIndex = nativeArgv.indexOf(`任务：\n${input.prompt}`)

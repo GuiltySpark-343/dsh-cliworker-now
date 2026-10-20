@@ -29,7 +29,37 @@ const catalog: Catalog = {
   models: [{ id: 'fixture', label: 'Synthetic fixture', efforts: ['low'] }],
   notice: 'Synthetic fixture',
 }
-it('a settings model-query cleanup failure blocks later metadata and task admission', async () => {
+it('returns lightweight Host/project display metadata and latest preferences without any CLI probe', async () => {
+  const f = fixture()
+  f.storage.setPreference(f.project, preference)
+  const first = JSON.parse(await f.service.cliSettings('parent', f.signal))
+  const second = JSON.parse(await f.service.cliSettings('parent', f.signal))
+  expect(first.settingsCache).toMatchObject({ policy: 1, host: expect.any(String), project: expect.any(String),
+    preferences: { antigravity: preference } })
+  expect(second.settingsCache.host).toBe(first.settingsCache.host)
+  expect(second.settingsCache.project).toBe(first.settingsCache.project)
+  expect(f.accounts.status).not.toHaveBeenCalled()
+  expect(f.backend.spawn).not.toHaveBeenCalled()
+  expect(first.settingsCache).not.toHaveProperty('binding')
+  await f.service.setCliEnabled('parent', 'codex', false, f.signal)
+  const changed = JSON.parse(await f.service.cliSettings('parent', f.signal))
+  expect(changed.settingsCache.revisions.codex).not.toBe(first.settingsCache.revisions.codex)
+  expect(changed.settingsCache.revisions.antigravity).toBe(first.settingsCache.revisions.antigravity)
+})
+it('pins a reused project list to its original account for another parent without querying auth', async () => {
+  const f = fixture(), cache = new SettingsCatalogCache(f.storage.directory)
+  cache.remember(f.project, { catalog, binding: 'SIMULATED-original-account' }, cache.revision('antigravity'))
+  ;(f.service as any).settingsCatalogs = cache
+  const settings = JSON.parse(await f.service.cliSettings('another-parent', f.signal))
+  expect(settings.settingsCache.catalogReady.antigravity).toBe(true)
+  expect((f.service as any).displayedBindings.get(JSON.stringify(['another-parent', 'antigravity']))).toBe('SIMULATED-original-account')
+  expect(f.accounts.status).not.toHaveBeenCalled(); expect(f.backend.spawn).not.toHaveBeenCalled()
+  cache.invalidate('antigravity')
+  const invalid = JSON.parse(await f.service.cliSettings('another-parent', f.signal))
+  expect(invalid.settingsCache.catalogReady.antigravity).toBe(false)
+  expect((f.service as any).displayedBindings.get(JSON.stringify(['another-parent', 'antigravity']))).toBe('SIMULATED-original-account')
+})
+it('a settings model-query cleanup failure blocks only that CLI metadata and task admission', async () => {
   const f = fixture()
   vi.mocked(catalogFor).mockRejectedValueOnce(new ProcessCleanupUnconfirmedError())
   await expect(
@@ -42,7 +72,106 @@ it('a settings model-query cleanup failure blocks later metadata and task admiss
     f.runtime.submit('parent', f.project, 'Synthetic', 'Synthetic', preference, 'accept-edits'),
   ).toThrow('清理')
   expect(catalogFor).toHaveBeenCalledTimes(1)
+  expect(f.storage.cleanupBlockState()).toBe('none')
+  expect(f.storage.cleanupBlockState('antigravity')).toBe('blocked')
+  expect(() => f.runtime.assertCliEnabled('codex')).not.toThrow()
   expect(f.backend.spawn).not.toHaveBeenCalled()
+})
+describe.each(CLI_IDS)('%s refresh failure isolation (synthetic queries, no real CLI)', (failedCli) => {
+  const others = CLI_IDS.filter(cli => cli !== failedCli)
+  const mockQuery = (f: ReturnType<typeof fixture>) => {
+    // Protocol-specific account transports have separate suites. Exercise the
+    // actual RPC/cache/runtime boundary with one synthetic account per CLI.
+    vi.spyOn(f.service as any, 'queryCatalog').mockImplementation(async (cli: any) => ({
+      binding: 'synthetic-settings-account',
+      catalog: await catalogFor(cli, f.backend, DEFAULT_CONFIG, f.project, f.signal),
+    }))
+  }
+  it.each(['renewal', 'denied', 'timeout', 'cancelled', 'invalid-catalog'] as const)(
+    'keeps every other CLI query and task admission available after %s', async kind => {
+      const f = fixture()
+      mockQuery(f)
+      const error = kind === 'cancelled' ? new DOMException('Synthetic caller cancelled', 'AbortError')
+        : new Error(`Synthetic ${kind} metadata failure`)
+      vi.mocked(catalogFor).mockImplementation(async cli => {
+        if (cli === failedCli) throw error
+        return { ...catalog, cli }
+      })
+      f.accounts.status.mockImplementation(async cli => ({ cli, state: 'authenticated', actions: [] }))
+      await expect(f.service.refreshCatalogForCli('parent', failedCli, f.signal)).rejects.toThrow()
+      expect(f.storage.cleanupBlockState()).toBe('none')
+      expect(f.storage.cleanupBlockState(failedCli)).toBe('none')
+      for (const cli of others) {
+        expect(JSON.parse(await f.service.refreshCatalogForCli('parent', cli, f.signal)).cli).toBe(cli)
+        expect(JSON.parse(await f.service.accountStatus('parent', cli, f.signal)).cli).toBe(cli)
+        const accepted = f.runtime.submit('parent', f.project, 'Synthetic isolation', 'Synthetic no-model',
+          { cli, model: 'fixture', effort: 'low' }, 'accept-edits')
+        // Verify real Runtime admission, then cancel before any native task spawn.
+        await f.runtime.stop('parent', accepted.worker.id)
+        expect((await accepted.done).status).toBe('interrupted')
+      }
+      expect(f.backend.spawn).not.toHaveBeenCalled()
+    },
+  )
+  it.each(['models', 'account'] as const)('quarantines only this CLI after unconfirmed %s cleanup', async entry => {
+    const f = fixture()
+    mockQuery(f)
+    vi.mocked(catalogFor).mockImplementation(async cli => ({ ...catalog, cli }))
+    f.accounts.status.mockImplementation(async cli => ({ cli, state: 'authenticated', actions: [] }))
+    if (entry === 'models') {
+      vi.mocked(catalogFor).mockRejectedValueOnce(new ProcessCleanupUnconfirmedError())
+      await expect(f.service.refreshCatalogForCli('parent', failedCli, f.signal)).rejects.toThrow('cleanup')
+    } else {
+      f.accounts.status.mockRejectedValueOnce(new ProcessCleanupUnconfirmedError())
+      await expect(f.service.accountStatus('parent', failedCli, f.signal)).rejects.toThrow('cleanup')
+    }
+    expect(f.storage.cleanupBlockState()).toBe('none')
+    expect(f.storage.cleanupBlockState(failedCli)).toBe('blocked')
+    expect(() => f.runtime.assertCliEnabled(failedCli)).toThrow('此 CLI')
+    expect(() => f.runtime.assertAccountIdle(failedCli)).toThrow('此 CLI')
+    for (const cli of others) {
+      expect(JSON.parse(await f.service.refreshCatalogForCli('parent', cli, f.signal)).cli).toBe(cli)
+      expect(JSON.parse(await f.service.accountStatus('parent', cli, f.signal)).cli).toBe(cli)
+      const accepted = f.runtime.submit('parent', f.project, 'Synthetic isolation', 'Synthetic no-model',
+        { cli, model: 'fixture', effort: 'low' }, 'accept-edits')
+      await f.runtime.stop('parent', accepted.worker.id)
+      expect((await accepted.done).status).toBe('interrupted')
+    }
+    expect(f.backend.spawn).not.toHaveBeenCalled()
+    await f.runtime.close()
+    const restored = new WorkerRuntime(new WorkerStorage(f.storage.directory), f.backend, DEFAULT_CONFIG)
+    cleanups.push(() => restored.close())
+    expect(() => restored.assertCliEnabled(failedCli)).toThrow('此 CLI')
+    for (const cli of others) {
+      expect(() => restored.assertCliEnabled(cli)).not.toThrow()
+      expect(() => restored.assertAccountIdle(cli)).not.toThrow()
+    }
+  })
+})
+it('rejects an already queued quarantined CLI without rejecting another CLI queued behind it', async () => {
+  const f = fixture()
+  const queued = f.runtime.submit('parent', f.project, 'Synthetic Grok', 'Synthetic no-model',
+    { cli: 'grok', model: 'fixture', effort: 'low' }, 'accept-edits')
+  const other = f.runtime.submit('parent', f.project, 'Synthetic Pi', 'Synthetic no-model',
+    { cli: 'pi', model: 'fixture', effort: 'low' }, 'accept-edits')
+  f.runtime.blockCatalogOnCleanup('grok', new ProcessCleanupUnconfirmedError())
+  await f.runtime.stop('parent', other.worker.id)
+  expect(await queued.done).toMatchObject({ status: 'failed', error: expect.stringContaining('此 CLI') })
+  expect(await other.done).toMatchObject({ status: 'interrupted' })
+  expect(f.storage.cleanupBlockState()).toBe('none')
+  expect(f.backend.spawn).not.toHaveBeenCalled()
+})
+it('keeps a corrupt scoped marker confined to its CLI and rejects unrecognized storage scopes', async () => {
+  const f = fixture()
+  writeFileSync(join(f.storage.directory, 'cleanup-blocked-grok.json'), '{"policy":999}')
+  await f.runtime.close()
+  const storage = new WorkerStorage(f.storage.directory)
+  const runtime = new WorkerRuntime(storage, f.backend, DEFAULT_CONFIG)
+  cleanups.push(() => runtime.close())
+  expect(() => runtime.assertCliEnabled('grok')).toThrow('无法核验')
+  for (const cli of CLI_IDS.filter(cli => cli !== 'grok')) expect(() => runtime.assertCliEnabled(cli)).not.toThrow()
+  expect(() => storage.blockCleanup('../outside' as any)).toThrow()
+  expect(() => storage.cleanupBlockState('../outside' as any)).toThrow()
 })
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -245,7 +374,7 @@ describe('profile-wide CLI enablement', () => {
     const { service, runtime, storage, project, worker, signal, start, backend, accounts } = fixture()
     const settings = JSON.parse(await service.setCliEnabled('parent', 'antigravity', false, signal))
     expect(settings.enabled.antigravity).toBe(false)
-    expect(JSON.parse(await service.cliSettings('parent', signal))).toEqual(settings)
+    expect(JSON.parse(await service.cliSettings('parent', signal))).toMatchObject(settings)
     await expect(start()).rejects.toThrow('已关闭')
     await expect(service.followup('parent', worker.id, 'Next', signal)).rejects.toThrow('已关闭')
     await expect(service.catalogForCli('parent', 'antigravity', signal)).rejects.toThrow('已关闭')

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { LlmRuntime, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionStore, SessionId, Session } from '@deepseek-ai/dsh-session'
@@ -56,6 +56,12 @@ async function fixture(initialSteering: 'ready' | 'pending' | 'unsupported' = 'u
   ])
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'cwn-official-inbox-')))
   const ctx = new Context()
+  // Synthetic admission service; fixtures supply durable refs, never real uploads.
+  await ctx.plugin(class extends Service {
+    constructor(ctx: Context) { super(ctx, 'attachments') }
+    async admitPromptContent(content: unknown) { return content }
+    fileHostPath() { return undefined }
+  })
   await ctx.plugin(SessionStore)
   await ctx.plugin(Projections)
   await ctx.plugin(AgentRegistry)
@@ -193,7 +199,7 @@ async function fixture(initialSteering: 'ready' | 'pending' | 'unsupported' = 'u
     },
     directory,
   )
-  const prompt = async (value: string, delivery: 'queue' | 'steer' = 'queue', requestId = randomUUID()) => {
+  const prompt = async (value: string | UserMessage['content'], delivery: 'queue' | 'steer' = 'queue', requestId = randomUUID()) => {
     await ctx.subagents.prompt(
       {
         requestId: requestId as never,
@@ -201,7 +207,7 @@ async function fixture(initialSteering: 'ready' | 'pending' | 'unsupported' = 'u
         childSessionId: child.id,
         mode: 'continuable',
         delivery,
-        content: [{ type: 'text', text: value }],
+        content: typeof value === 'string' ? [{ type: 'text', text: value }] : value,
       },
       new AbortController().signal,
     )
@@ -267,6 +273,29 @@ async function fixture(initialSteering: 'ready' | 'pending' | 'unsupported' = 'u
     restartBridge,
   }
 }
+
+it('keeps uploaded files queued during native steering, forwards references once and deduplicates cold retries', async () => {
+  const f = await fixture('ready')
+  const requestId = randomUUID()
+  const content = [{ type: 'file', attachment: { attachmentId: 'a'.repeat(64), name: 'synthetic-upload.txt', bytes: 4 } }] as unknown as UserMessage['content']
+  await f.prompt(content, 'steer', requestId)
+  expect(f.child.inbox.nextStep).toHaveLength(1)
+  expect(f.steer).not.toHaveBeenCalled()
+  f.complete()
+  await vi.waitFor(() => expect(f.run).toHaveBeenCalledOnce())
+  expect((f.run.mock.calls[0] as unknown[])[4]).toEqual([expect.objectContaining({ content })])
+  f.complete()
+  await f.child.whenIdle()
+  await f.restartBridge()
+  await f.prompt(content, 'queue', requestId)
+  await f.child.whenIdle()
+  expect(f.run).toHaveBeenCalledOnce()
+  const changed = structuredClone(content) as any; changed[0].attachment.attachmentId = 'b'.repeat(64)
+  await f.prompt(changed, 'queue', requestId)
+  await f.child.whenIdle()
+  expect(f.run).toHaveBeenCalledOnce()
+  expect(f.child.inbox.nextStep).toHaveLength(1)
+})
 
 it('keeps native next-turn FIFO, edits and removes pending messages, and never projects an internally started run twice', async () => {
   const f = await fixture()

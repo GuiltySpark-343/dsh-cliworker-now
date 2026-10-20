@@ -9,6 +9,9 @@ import {
   chmodSync,
   linkSync,
   symlinkSync,
+  mkdirSync,
+  readdirSync,
+  writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -863,7 +866,9 @@ it('blocks further execution if a steering account query cannot confirm its proc
     f.runtime.sendRunningMessage('parent', f.worker.id, 'not delivered', f.worker.runId, randomUUID()),
   ).rejects.toThrow('quiescence')
   expect((await task.done).status).toBe('failed')
-  expect(f.storage.cleanupBlockState()).not.toBe('none')
+  expect(f.storage.cleanupBlockState()).toBe('none')
+  expect(f.storage.cleanupBlockState(f.worker.preference.cli ?? 'antigravity')).toBe('blocked')
+  expect(() => f.runtime.assertCliEnabled('codex')).not.toThrow()
   expect(() => f.runtime.assertAccountIdle('pi')).toThrow('清理')
   expect(steer).not.toHaveBeenCalled()
   expect(f.calls).toHaveLength(1)
@@ -1373,7 +1378,9 @@ it('keeps later priority blocked when superseded metadata cannot confirm cleanup
         ?.deliveryState,
     ).toBe('failed'),
   )
-  expect(f.storage.cleanupBlockState()).not.toBe('none')
+  expect(f.storage.cleanupBlockState()).toBe('none')
+  expect(f.storage.cleanupBlockState(f.worker.preference.cli ?? 'antigravity')).toBe('blocked')
+  expect(() => f.runtime.assertCliEnabled('codex')).not.toThrow()
   expect(f.calls).toHaveLength(1)
   expect(
     f.runtime.snapshot('parent', f.worker.id).timeline.find((row) => row.queuedFollowupId === a)
@@ -1998,4 +2005,61 @@ it('rejects a dedicated steering Remote that loses its target during parent look
   expect(steer).not.toHaveBeenCalled()
   expect(f.items()).toEqual([])
   expect(f.calls).toHaveLength(1)
+})
+
+// Simulated disk failure: the outbox path is replaced by a non-empty directory,
+// so only follow-up queue writes fail (atomic rename onto a directory).
+function breakQueueWrites(directory: string, workerId: string) {
+  const path = join(directory, `${workerId}.followups.json`)
+  rmSync(path, { force: true })
+  mkdirSync(path)
+  writeFileSync(join(path, 'occupied'), 'simulated')
+  return () => rmSync(path, { recursive: true, force: true })
+}
+
+it('cancels the run and earlier reservations even when the Stop outbox write fails', async () => {
+  const f = fixture(),
+    task = f.start()
+  const first = await f.ready(1)
+  f.queue('must not be sent after stop')
+  const reservation = f.runtime.reserveSubmission('parent', f.worker.id, randomUUID())
+  cleanups.push(() => reservation.release())
+  cleanups.push(breakQueueWrites(f.directory, f.worker.id))
+  const stopping = Promise.resolve().then(() => f.runtime.stop('parent', f.worker.id))
+  const rejected = expect(stopping).rejects.toThrow('待发送消息状态持久化失败')
+  await vi.waitFor(() => expect(first.spec.signal?.aborted).toBe(true))
+  expect(reservation.signal.aborted).toBe(true)
+  await rejected
+  expect((await task.done).status).toBe('failed')
+  expect(f.runtime.snapshot('parent', f.worker.id).queuedFollowups).toMatchObject([
+    { prompt: 'must not be sent after stop' },
+  ])
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(f.calls).toHaveLength(1)
+})
+
+it('still releases launch resources after Stop when only the outbox write fails', async () => {
+  const f = fixture({ cli: 'pi' }),
+    cleanup = vi.fn(async () => {})
+  vi.mocked(extendedLaunch).mockResolvedValue({ argv: ['/synthetic/native-rpc'], env: {}, cleanup })
+  const task = f.start()
+  await f.ready(1)
+  cleanups.push(breakQueueWrites(f.directory, f.worker.id))
+  await expect(f.runtime.stop('parent', f.worker.id)).rejects.toThrow('待发送消息状态持久化失败')
+  expect((await task.done).status).toBe('interrupted')
+  expect(cleanup).toHaveBeenCalledOnce()
+})
+
+it('finishes Host close and releases the store when one stop throws synchronously', async () => {
+  const f = fixture(),
+    task = f.start()
+  await f.ready(1)
+  const stop = vi.spyOn(f.runtime, 'stop').mockImplementationOnce(() => {
+    throw new Error('Simulated synchronous stop failure')
+  })
+  await expect(f.runtime.close()).resolves.toBeUndefined()
+  expect(stop).toHaveBeenCalledTimes(1)
+  expect(readdirSync(f.directory).filter((name) => name.startsWith('host.lock'))).toEqual([])
+  f.calls[0]!.finish()
+  await task.done
 })

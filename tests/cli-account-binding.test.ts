@@ -309,6 +309,7 @@ function own(cli: CliId) {
       own: { type: 'api', key: 'synthetic-opencode-key' },
     })
   else if (cli === 'qoder') vi.stubEnv('QODER_PERSONAL_ACCESS_TOKEN', 'synthetic-own-qoder-pat')
+  else if (cli === 'qodercn') vi.stubEnv('QODERCN_PERSONAL_ACCESS_TOKEN', 'synthetic-own-qodercn-pat')
   else if (cli === 'zcode') zcode()
   else if (cli === 'grok')
     write(join(fixture.home, '.grok/auth.json'), {

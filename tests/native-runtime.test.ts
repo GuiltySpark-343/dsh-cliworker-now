@@ -16,6 +16,7 @@ import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-sub
 import { WorkerRuntime } from '../src/host/runtime.ts'
 import { WorkerStorage } from '../src/host/storage.ts'
 import { DEFAULT_CONFIG, type ProcessBackend } from '../src/host/process.ts'
+import { CLI_IDS } from '../src/shared/types.ts'
 import { NATIVE_TRANSPORTS, usesNativeBridge } from '../src/host/native-worker.ts'
 import { extractTelemetry } from '../src/host/telemetry.ts'
 
@@ -102,11 +103,25 @@ function setup(status = 'SUCCESS') {
     },
   }
   const storage = new WorkerStorage(join(project, 'state'))
-  const runtime = new WorkerRuntime(storage, backend, DEFAULT_CONFIG)
+  // The simulated script is an explicit test entry, never an auto-discovered
+  // Windows Qoder PE/npm installation. Do not read the user's real install.
+  const runtime = new WorkerRuntime(storage, backend, { ...DEFAULT_CONFIG, qoderExecutable: executable })
   closes.push(() => runtime.close())
   return { project, storage, runtime, requests, calls, executable }
 }
 const pref = { cli: 'antigravity' as const, model: 'synthetic-model', effort: 'low' as const }
+it('carries Host-resolved uploads only in the exact native request and removes the request after cleanup', async () => {
+  const f = setup(), path = join(f.project, '上传.txt')
+  writeFileSync(path, 'synthetic')
+  const attachments = [{ kind: 'file' as const, path, name: '上传.txt', bytes: 9 }]
+  const result = await f.runtime.submit('parent', f.project, 'attachment', '读取附件', pref, 'accept-edits',
+    undefined, undefined, undefined, undefined, undefined, undefined, attachments).done
+  expect(result.status).toBe('completed')
+  expect(f.requests[0].attachments).toEqual(attachments)
+  expect(JSON.stringify(f.runtime.get('parent', result.id))).not.toContain(path)
+  expect(readdirSync(join(f.storage.directory, 'native', result.id)).filter(name => name.startsWith('native-request-'))).toEqual([])
+  expect(readFileSync(path, 'utf8')).toBe('synthetic')
+})
 it('defaults new work to the native bridge, pins it on resume, and removes private per-run requests', async () => {
   const f = setup()
   const first = await f.runtime.submit('parent', f.project, 'synthetic', 'first', pref, 'accept-edits').done
@@ -133,6 +148,24 @@ it('defaults new work to the native bridge, pins it on resume, and removes priva
   ).toEqual([])
   const saved = JSON.parse(readFileSync(join(f.storage.directory, `${first.id}.worker.json`), 'utf8'))
   expect(saved.transport).toBe('agy-stream-v1')
+})
+it('模拟：活动目标进入原生请求与实际 argv，Harness 用户显示保持原文；暂停后不再注入', async () => {
+  const f = setup()
+  const first = await f.runtime.submit('parent', f.project, '模拟目标', '首轮原文', pref, 'accept-edits').done
+  f.runtime.setWorkerGoal('parent', first.id, '持续目标', 0)
+  expect(f.calls).toHaveLength(1)
+  const injected = '【当前目标】\n持续目标\n【目标结束】\n\n续聊原文'
+  const second = await f.runtime.submit('parent', f.project, '模拟目标', '续聊原文', pref, 'accept-edits', first.id).done
+  expect(second.status).toBe('completed')
+  expect(f.requests[1].prompt).toBe(injected)
+  expect(f.requests[1].argv.at(-1)).toBe(`任务：\n${injected}`)
+  expect(f.storage.history(first.id).filter(event => event.kind === 'user').map(event => event.text))
+    .toEqual(['首轮原文', '续聊原文'])
+  f.runtime.setWorkerGoalStatus('parent', first.id, 'paused', 1)
+  await f.runtime.submit('parent', f.project, '模拟目标', '暂停原文', pref, 'accept-edits', first.id).done
+  expect(f.requests[2].prompt).toBe('暂停原文')
+  expect(f.requests[2].argv.at(-1)).toBe('任务：\n暂停原文')
+  expect(f.calls).toHaveLength(3)
 })
 it('keeps pre-migration sessions on legacy wire without silently changing their transport', async () => {
   const f = setup()
@@ -173,8 +206,8 @@ it('retains the uncertain outcome and actual native text without marking it comp
   expect(worker.lastResult).toBe('本轮正文')
   expect(worker.error).toContain('不要自动重试')
 })
-it('has an explicit mapping for all twelve live CLIs while Pi and OMP retain their existing RPC bridge', () => {
-  expect(Object.keys(NATIVE_TRANSPORTS)).toHaveLength(12)
+it('has an explicit mapping for every active CLI while Pi and OMP retain their existing RPC bridge', () => {
+  expect(Object.keys(NATIVE_TRANSPORTS)).toEqual([...CLI_IDS])
   for (const [cli, transport] of Object.entries(NATIVE_TRANSPORTS))
     expect(usesNativeBridge({ transport, preference: { ...pref, cli: cli as any } })).toBe(
       !['pi', 'omp'].includes(cli),
@@ -184,7 +217,7 @@ it('keeps a Qoder worker on its ACP session for follow-up and refuses unsupporte
   const f = setup()
   const qoder = { ...pref, cli: 'qoder' as const, effort: 'default' as const }
   const first = await f.runtime.submit('parent', f.project, 'synthetic Qoder', 'first', qoder, 'accept-edits').done
-  expect(first.status).toBe('completed')
+  expect(first.status, first.error).toBe('completed')
   expect(first.transport).toBe('qoder-acp-v1')
   expect(f.requests[0].argv).toEqual([f.executable, '--acp', '--permission-mode', 'accept_edits', '--model', qoder.model])
   const second = await f.runtime.submit('parent', f.project, 'synthetic Qoder', 'next', qoder, 'accept-edits', first.id).done

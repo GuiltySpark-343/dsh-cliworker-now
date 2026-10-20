@@ -75,6 +75,19 @@ function fixture() {
 const token = { uncachedInputTokens: 20, outputTokens: 10, cacheReadTokens: 80, cacheWriteTokens: 0 }
 
 describe('native session telemetry sources', () => {
+  it('clears disconnected per-turn credits while retaining the exact turn and billing unit', async () => {
+    const f = fixture()
+    f.manager.attach(f.reference(f.generation()), binding)
+    const sources = f.registrations[0]!.sources
+    const next = snapshot(); next.selected!.preference.cli = 'qoder'
+    f.streams[0]!.push({ ...next, externalTurnUsage: { '2': { basis: 'external-run', runIds: ['SIMULATED-run'], usageUnit: 'credits', credits: 0.25 } } })
+    await vi.waitFor(() => expect(sources.externalTurnUsage.getSnapshot()?.['2']).toMatchObject({ credits: 0.25 }))
+    f.streams[0]!.end()
+    await vi.waitFor(() => expect(sources.externalTurnUsage.getSnapshot()).toEqual({ '2': {
+      basis: 'external-run', runIds: ['SIMULATED-run'], usageUnit: 'credits',
+    } }))
+    expect(sources.telemetryAvailability.getSnapshot()?.usageUnit).toBe('credits')
+  })
   it('uses the explicitly injected Cordis uiSession face and cleans up when the consumer unloads', async () => {
     const f = fixture(), root = new Context()
     cleanup.push(() => root.fiber.dispose())
@@ -227,6 +240,23 @@ describe('native session telemetry sources', () => {
     f.streams[0]!.push(snapshot())
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(sources.tokenUsage.getSnapshot()).toBeUndefined()
+  })
+
+  it('keeps the known credit unit on disconnect and clears it on generation release', async () => {
+    const f = fixture(), release = f.manager.attach(f.reference(f.generation()), binding)
+    const { sources } = f.registrations[0]!
+    const value = snapshot()
+    value.selected!.preference.cli = 'qoder'
+    value.telemetry = { providerCredits: 0.252595 }
+    f.streams[0]!.push(value)
+    await vi.waitFor(() => expect(sources.telemetryAvailability.getSnapshot()?.usageUnit).toBe('credits'))
+    f.streams[0]!.end()
+    await vi.waitFor(() => expect(sources.tokenUsage.getSnapshot()).toBeUndefined())
+    expect(sources.telemetryAvailability.getSnapshot()?.usageUnit).toBe('credits')
+    expect(sources.telemetryAvailability.getSnapshot()?.tokenUsage.reason).toBe('disconnected')
+    release()
+    expect(sources.telemetryAvailability.getSnapshot()?.usageUnit).toBeUndefined()
+    expect(f.registrations[0]!.dispose).toHaveBeenCalledTimes(1)
   })
 
   it('rejects incorrect references before registering and clears an owner whose registry binding changes', async () => {

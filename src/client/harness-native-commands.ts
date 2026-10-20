@@ -22,8 +22,17 @@ import type { WorkerPermissionState } from '../shared/worker-permissions.ts'
 import { visibleModelChoices } from '../shared/model-presentation.ts'
 import type { HarnessBindingRegistry, HarnessNativeBinding } from './harness-binding-registry.ts'
 import { value, type API, type Snapshot } from './workers.ts'
+import type { installHarnessNativeAttachments } from './harness-native-attachments.ts'
+import { harnessFeatureReason, harnessPermissionReason } from './harness-feature-support.ts'
+import { openHarnessWorkerGoal } from './harness-goal-editor.ts'
 
-type Command = 'model' | 'permission' | 'plan'
+type Command = 'model' | 'permission' | 'plan' | 'goal' | 'feedback' | 'fork'
+type SettingCommand = 'model' | 'permission' | 'plan'
+export interface HarnessCommandFeatures {
+  openFeedback?: (sessionId: string) => void
+  fork?: (sessionId: string) => void
+  forkReason?: (sessionId: string) => string | undefined
+}
 type OwnedBinding = HarnessNativeBinding & { workerId: string }
 type CommandContext = Pick<Context, 'sessions' | 'inputTriggers' | 'commandUi'>
 export const HARNESS_COMMAND_SOURCE = 'cliworker-settings'
@@ -50,10 +59,13 @@ function publishCommandServices(bindings: HarnessBindingRegistry, services?: Har
 const commands = [
   { name: 'model', label: '模型', description: '选择当前 CLI 的模型和思考强度' },
   { name: 'permission', label: '权限', description: '选择当前 CLI 的权限模式' },
-  { name: 'plan', label: '计划', description: '切换当前 CLI 的规划模式' },
+  { name: 'plan', label: '规划', description: '切换当前 CLI 的规划模式' },
+  { name: 'goal', label: '目标', description: '设置或编辑当前 CLI 的目标' },
+  { name: 'feedback', label: '反馈', description: '向当前 Harness 子会话提交反馈' },
+  { name: 'fork', label: '分支', description: '从最新完成轮创建 CLI 子会话分支' },
 ] as const
 const commandOf = (text: string) =>
-  commands.find((command) => command.name === text || command.label === text)
+  commands.find((command) => command.name === text || command.label === text || (text === '计划' && command.name === 'plan'))
 const sameBinding = (left: HarnessNativeBinding | undefined, right: OwnedBinding) =>
   left?.sessionId === right.sessionId &&
   left.parentSessionId === right.parentSessionId &&
@@ -111,6 +123,8 @@ export function installHarnessNativeCommands(
   ctx: CommandContext,
   bindings: HarnessBindingRegistry,
   api: API,
+  attachments?: ReturnType<typeof installHarnessNativeAttachments>,
+  features: HarnessCommandFeatures = {},
 ): () => void {
   let disposed = false
   const openings = new Map<string, { binding: OwnedBinding; command: Command; close: () => void }>()
@@ -124,9 +138,13 @@ export function installHarnessNativeCommands(
     if (!ctx.sessions.binding(session.sessionId)) return
     return binding as OwnedBinding
   }
-  const open = (session: ClientSessionContext, command: Command, segment: TokenSegment) => {
+  const reasonFor = (binding: OwnedBinding, command: Command) =>
+    harnessFeatureReason(binding, command) || (command === 'permission' ? harnessPermissionReason(binding) : undefined) ||
+    (command === 'feedback' && !features.openFeedback ? 'Harness 反馈服务尚未就绪' : undefined) ||
+    (command === 'fork' ? features.forkReason?.(binding.sessionId) || (!features.fork ? 'CLI 分支入口尚未就绪' : undefined) : undefined)
+  const open = (session: ClientSessionContext, command: SettingCommand, segment: TokenSegment) => {
     const binding = owned(session)
-    if (!binding || !binding.capabilities[command]) throw new Error('当前 CLI 子会话不支持此设置')
+    if (!binding || reasonFor(binding, command)) return
     const scope = ctx.sessions.binding(session.sessionId)!
     const popup: PopupSelectController<ClientSessionContext> = ctx.commandUi.popupFor(scope.ctx)
     openings.get(session.sessionId)?.close()
@@ -305,6 +323,14 @@ export function installHarnessNativeCommands(
       segment,
     )
   }
+  const execute = (session: ClientSessionContext, command: Command, segment: TokenSegment) => {
+    const binding = owned(session)
+    if (!binding || reasonFor(binding, command)) return
+    if (command === 'goal') openHarnessWorkerGoal(bindings, binding.sessionId)
+    else if (command === 'feedback') features.openFeedback?.(binding.sessionId)
+    else if (command === 'fork') features.fork?.(binding.sessionId)
+    else open(session, command, segment)
+  }
   const source: InputTriggerSource = {
     trigger: '/',
     name: HARNESS_COMMAND_SOURCE,
@@ -314,29 +340,31 @@ export function installHarnessNativeCommands(
       const binding = owned(session)
       if (!binding) return []
       const query = req.query.toLowerCase()
-      return commands.filter(
+      return [...(attachments?.candidates(session.sessionId, query) ?? []), ...commands.filter(
         (command) =>
-          binding.capabilities[command.name] &&
           (!query || command.name.includes(query) || command.label.includes(query)),
-      )
+      ).map((command) => ({ ...command, description: reasonFor(binding, command.name) || command.description }))]
     },
     onPick: (pick) => {
       if (!owned(pick.session)) return
+      if (attachments?.pick(pick)) return 'handled'
       const command = commandOf(pick.candidate.name)
       if (!command) return
-      open(pick.session, command.name, { via: 'menu', span: pick.span })
+      execute(pick.session, command.name, { via: 'menu', span: pick.span })
       return 'handled'
     },
     matchEnter: async (session, line, signal, envelope) => {
-      if (!owned(session)) return
+      const binding = owned(session)
+      if (!binding) return
       const [token, ...args] = line.trim().split(/\s+/u)
       if (!token?.startsWith('/')) return
       const command = commandOf(token.slice(1))
       if (!command) return
       signal.throwIfAborted()
+      if (reasonFor(binding, command.name)) return 'handled'
       if (args.length) throw new Error(`请通过 /${command.name} 的原生选项修改设置`)
       if (envelope.attachments) throw new Error('设置命令不接受附件，请保留附件并单独打开设置')
-      open(session, command.name, { via: 'enter', token })
+      execute(session, command.name, { via: 'enter', token })
       return 'handled'
     },
   }

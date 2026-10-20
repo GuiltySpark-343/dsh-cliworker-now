@@ -9,24 +9,31 @@ interface Saved {
   title: string | null
   ariaDisabled: string | null
   ariaLabel: string | null
+  unavailable: string | null
+  describedBy: string | null
 }
 export interface GuardedNativeControl {
   element: HTMLButtonElement
   feature: GuardedFeature
   reason: string
 }
+export interface HarnessDomForkActions {
+  reason(button: HTMLButtonElement): string | undefined
+  fork(button: HTMLButtonElement): void
+}
 /** Guard only one verified CLI child occurrence, never another Session or body portals. */
 export function installHarnessDomGuard(
   root: HTMLElement,
   binding: HarnessConversationBinding,
   onTargets?: (targets: readonly GuardedNativeControl[]) => void,
+  forks?: HarnessDomForkActions,
 ): () => void {
   const saved = new Map<HTMLButtonElement, Saved>()
   const feature = (button: Element): GuardedFeature | undefined => {
     const held = saved.get(button as HTMLButtonElement)
     if (held) return held.feature
     const label = button.getAttribute('aria-label') ?? ''
-    if (!binding.capabilities.fork && ['在新对话中分支', 'Branch into a new conversation'].includes(label))
+    if (['在新对话中分支', 'Branch into a new conversation'].includes(label))
       return 'fork'
     if (
       !binding.capabilities.attachments &&
@@ -41,6 +48,10 @@ export function installHarnessDomGuard(
       ['title', previous.title],
       ...(previous.feature !== 'attachments' ? [['aria-disabled', previous.ariaDisabled] as const] : []),
       ['aria-label', previous.ariaLabel],
+      ...(previous.feature !== 'attachments' ? [
+        ['data-unavailable', previous.unavailable] as const,
+        ['aria-describedby', previous.describedBy] as const,
+      ] : []),
     ] as const)
       if (old === null) button.removeAttribute(name)
       else button.setAttribute(name, old)
@@ -57,19 +68,26 @@ export function installHarnessDomGuard(
           title: button.getAttribute('title'),
           ariaDisabled: button.getAttribute('aria-disabled'),
           ariaLabel: button.getAttribute('aria-label'),
+          unavailable: button.getAttribute('data-unavailable'),
+          describedBy: button.getAttribute('aria-describedby'),
         })
-      if (capability !== 'attachments') {
-        if (!button.disabled) button.disabled = true
-        button.setAttribute('aria-disabled', 'true')
-      }
       const reason =
         capability === 'fork'
-          ? binding.reasons?.fork || 'CLI 子会话尚未接通原生分支，操作不可用。'
+          ? forks ? forks.reason(button) : binding.reasons?.fork || 'CLI 子会话尚未接通原生分支，操作不可用。'
           : `${binding.reasons?.attachments || '此 CLI 子会话尚未接通文件和图片附件'}。仍可打开此菜单调用可用指令。`
-      button.setAttribute('title', reason)
+      if (capability !== 'attachments') {
+        if (button.disabled !== !!reason) button.disabled = !!reason
+        if (button.getAttribute('aria-disabled') !== String(!!reason)) button.setAttribute('aria-disabled', String(!!reason))
+        if (reason) {
+          if (button.getAttribute('data-unavailable') === null) button.setAttribute('data-unavailable', '')
+        } else button.removeAttribute('data-unavailable')
+        button.removeAttribute('aria-describedby')
+      }
+      if (reason) button.setAttribute('title', reason)
+      else button.removeAttribute('title')
       if (capability === 'attachments' && button.getAttribute('aria-label') !== '调用指令（附件不可用）')
         button.setAttribute('aria-label', '调用指令（附件不可用）')
-      targets.push({ element: button, feature: capability, reason })
+      if (reason || capability === 'fork') targets.push({ element: button, feature: capability, reason: reason || '在新对话中分支' })
     }
     onTargets?.(targets)
   }
@@ -78,8 +96,10 @@ export function installHarnessDomGuard(
     const button = target?.closest?.('button[aria-label]')
     const capability = button && root.contains(button) ? feature(button) : undefined
     if (capability && capability !== 'attachments') {
+      if (event.type === 'keydown' && !['Enter', ' '].includes((event as KeyboardEvent).key)) return
       event.preventDefault()
       event.stopImmediatePropagation()
+      if (forks && !forks.reason(button as HTMLButtonElement)) forks.fork(button as HTMLButtonElement)
     }
   }
   const Observer = root.ownerDocument.defaultView?.MutationObserver
@@ -89,7 +109,7 @@ export function installHarnessDomGuard(
     childList: true,
     characterData: true,
     attributes: true,
-    attributeFilter: ['aria-label', 'disabled'],
+    attributeFilter: ['aria-label', 'disabled', 'aria-disabled', 'data-unavailable', 'aria-describedby'],
   })
   root.addEventListener('click', capture, true)
   root.addEventListener('keydown', capture, true)
@@ -108,6 +128,7 @@ export function installHarnessSessionDomGuard(
   document: Document,
   binding: HarnessConversationBinding,
   onTargets: (targets: readonly GuardedNativeControl[]) => void,
+  forks?: HarnessDomForkActions,
 ): () => void {
   const roots = new Map<HTMLElement, { release: () => void; targets: readonly GuardedNativeControl[] }>()
   const publish = () => onTargets([...roots.values()].flatMap((entry) => entry.targets))
@@ -129,7 +150,7 @@ export function installHarnessSessionDomGuard(
         entry.release = installHarnessDomGuard(root, binding, (targets) => {
           entry.targets = targets
           publish()
-        })
+        }, forks)
       }
     publish()
   }

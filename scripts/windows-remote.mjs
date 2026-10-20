@@ -5,7 +5,7 @@ import { createWriteStream } from 'node:fs'
 import { chmod, mkdir, lstat, readFile, writeFile, cp, readdir, open, rm } from 'node:fs/promises'
 import { resolve, join, relative, dirname, isAbsolute, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { OWNER, MARKER, WINDOWS_TESTS, sha256, validateRemoteRoot, createSnapshot, validateSnapshot, validateArchiveEntries, strictSshArgs, encodedPowerShell, assertNoLinksWithin } from './windows-remote-common.mjs'
+import { OWNER, MARKER, WINDOWS_TESTS, sha256, validateRemoteRoot, createSnapshot, validateSnapshot, validateArchiveEntries, runtimeManifestFromSnapshot, strictSshArgs, encodedPowerShell, assertNoLinksWithin } from './windows-remote-common.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const projectRoot = resolve(scriptDirectory, '..')
@@ -88,7 +88,10 @@ export async function verifyPreviewSnapshot(preview, snapshot) {
   }
   await visit('src')
   for (const file of snapshot.files) if (file.path.startsWith('src/') && !seen.has(file.path)) throw new Error(`Source added since preview build: ${file.path}`)
-  for (const file of ['package.json', 'tsconfig.base.json', 'tsconfig.host-build.json', 'tsconfig.client.json', 'cordis.patch.yml', 'scripts/build.mjs']) await visit(file)
+  await visit('runtime-host')
+  for (const file of snapshot.files) if (file.path.startsWith('runtime-host/') && !seen.has(file.path)) throw new Error(`Source added since preview build: ${file.path}`)
+  for (const file of ['package.json', 'tsconfig.base.json', 'tsconfig.host-build.json', 'tsconfig.client.json', 'cordis.patch.yml',
+    'scripts/build.mjs', 'scripts/build-dependencies.mjs', 'scripts/host-runtime.mjs', 'scripts/host-extension-guard.mjs']) await visit(file)
 }
 
 export function verifyRemoteReport(report, testBytes, state) {
@@ -178,8 +181,8 @@ Verify the Windows SSH fingerprint before creating knownHosts. Never paste keys 
     await run('mac-preview-pack', 'pnpm', ['--config.verifyDepsBeforeRun=false', 'pack', '--out', packagePath], { cwd: join(projectRoot, '.cache', 'preview-package') })
     const listing = await run('mac-package-list', 'tar', ['-tzf', packagePath], { capture: true })
     const verbose = await run('mac-package-entries', 'tar', ['-tvzf', packagePath], { capture: true })
-    validateArchiveEntries(listing, verbose)
     const snapshot = validateSnapshot(await createSnapshot(projectRoot))
+    validateArchiveEntries(listing, verbose, runtimeManifestFromSnapshot(snapshot))
     await verifyPreviewSnapshot(join(projectRoot, '.cache', 'preview-package'), snapshot)
     state.sourceSnapshotVsPreviewVerified = true
     const snapshotBytes = Buffer.from(JSON.stringify(snapshot))

@@ -77,8 +77,8 @@ it.each(['file-symlink', 'directory-symlink', 'public-file', 'public-directory',
     const f = fixture()
     if (kind === 'file-symlink') { const copy = f.file + '.copy'; writeFileSync(copy, readFileSync(f.file), { mode: 0o600 }); rmSync(f.file); symlinkSync(copy, f.file) }
     if (kind === 'directory-symlink') { const original = f.paths[2]!; const moved = original + '-moved'; mkdirSync(moved, { mode: 0o700 }); writeFileSync(join(moved, 'session-SIMULATED.jsonl'), readFileSync(f.file), { mode: 0o600 }); rmSync(original, { recursive: true }); symlinkSync(moved, original) }
-    if (kind === 'public-file') exposeSyntheticNativePath(f.file)
-    if (kind === 'public-directory') exposeSyntheticNativePath(f.paths[2]!)
+    if (kind === 'public-file') process.platform === 'win32' ? syntheticNativeAcl([{ path: f.file, public: true, write: true }]) : exposeSyntheticNativePath(f.file)
+    if (kind === 'public-directory') process.platform === 'win32' ? syntheticNativeAcl([{ path: f.paths[2]!, public: true, write: true }]) : exposeSyntheticNativePath(f.paths[2]!)
     if (kind === 'oversized') writeFileSync(f.file, ' '.repeat(16 * 1024 * 1024 + 1))
     if (kind === 'torn') writeFileSync(f.file, JSON.stringify(f.rows[0]))
     if (kind === 'malformed') writeFileSync(f.file, 'malformed\n')

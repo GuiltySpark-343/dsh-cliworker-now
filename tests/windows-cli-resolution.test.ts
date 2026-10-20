@@ -6,6 +6,7 @@ import { PassThrough } from 'node:stream'
 import { SubprocessExecutableNotFoundError } from '@deepseek-ai/dsh-subprocess'
 import { DEFAULT_CONFIG, ProcessCleanupUnconfirmedError, type ProcessBackend } from '../src/host/process.ts'
 import { executableFor, resolveCliExecutable } from '../src/host/adapters.ts'
+import { findWindowsPathCommand } from '../src/host/windows-cli-path.ts'
 import { findWindowsCodexAppx } from '../src/host/windows-cli-installation.ts'
 import { managedZCodeEntry } from '../src/host/zcode-adapter.ts'
 import {
@@ -17,6 +18,10 @@ const state = vi.hoisted(() => ({ home: '' }))
 vi.mock('node:os', async (actual) => ({
   ...(await actual<typeof import('node:os')>()),
   homedir: () => state.home,
+}))
+vi.mock('../src/host/windows-cli-path.ts', async (actual) => ({
+  ...(await actual<typeof import('../src/host/windows-cli-path.ts')>()),
+  findWindowsPathCommand: vi.fn(),
 }))
 vi.mock('../src/host/windows-cli-installation.ts', async (actual) => ({
   ...(await actual<typeof import('../src/host/windows-cli-installation.ts')>()),
@@ -39,6 +44,7 @@ beforeEach(() => {
   vi.stubEnv('LOCALAPPDATA', join(state.home, 'Local'))
   vi.stubEnv('ProgramFiles', join(state.home, 'Programs'))
   Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+  vi.mocked(findWindowsPathCommand).mockReset()
   appx.mockReset()
   desktop.mockReset()
   desktopGui.mockReset()
@@ -478,4 +484,90 @@ describe('Windows default executable fallback without changing other platforms',
       expect(process.resolveExecutable).toHaveBeenCalledOnce()
     },
   )
+})
+
+
+describe('synthetic shared latest Windows PATH resolution', () => {
+  it.each(['antigravity', 'claude', 'kimi', 'mimo', 'grok', 'hermes'] as const)(
+    'reuses the common PATH refresh for %s after an inherited PATH miss', async cli => {
+      const command = cli === 'antigravity' ? 'agy' : cli, entry = join(state.home, 'new bin', command + '.exe')
+      const bytes = Buffer.alloc(80); bytes.write('MZ'); bytes.writeUInt32LE(64, 0x3c); bytes.write('PE\0\0', 64)
+      mkdirSync(dirname(entry), { recursive: true }); writeFileSync(entry, bytes)
+      vi.mocked(findWindowsPathCommand).mockResolvedValue(entry)
+      const lookup = backend(async value => {
+        if (value === command) throw new SubprocessExecutableNotFoundError('Synthetic stale inherited PATH')
+        return value
+      })
+      await expect(resolveCliExecutable(cli, lookup, DEFAULT_CONFIG)).resolves.toBe(entry)
+      expect(vi.mocked(findWindowsPathCommand).mock.calls[0]?.[0]).toEqual([command])
+      expect(vi.mocked(lookup.resolveExecutable).mock.calls.map(call => call[0])).toEqual([command, entry])
+    },
+  )
+  it('normalizes a freshly discovered Qoder CN npm dispatcher without resolving or executing the script as a program', async () => {
+    const root = join(state.home, 'custom npm'), packageRoot = join(root, 'node_modules/@qodercn-ai/qoderclicn')
+    const script = join(packageRoot, 'bundle/qoderclicn.js'), dispatcher = join(packageRoot, 'bundle/qodercn-npm-dispatcher.cjs')
+    mkdirSync(dirname(script), { recursive: true })
+    writeFileSync(script, '#!/usr/bin/env node\n// Synthetic standalone entry; never executed.\n')
+    writeFileSync(dispatcher, '#!/usr/bin/env node\n// Synthetic dispatcher; never executed.\n')
+    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: '@qodercn-ai/qoderclicn', bin: {
+      qoderclicn: 'bundle/qoderclicn.js', qodercn: 'bundle/qodercn-npm-dispatcher.cjs',
+    } }))
+    const shim = join(root, 'qodercn.cmd')
+    writeFileSync(shim, '@echo off\r\nnode "%~dp0node_modules\\@qodercn-ai\\qoderclicn\\bundle\\qodercn-npm-dispatcher.cjs" %*\r\n')
+    vi.mocked(findWindowsPathCommand).mockResolvedValue(shim)
+    const lookup = backend(async value => {
+      expect(value).toBe('qoderclicn')
+      throw new SubprocessExecutableNotFoundError('Synthetic stale inherited PATH')
+    })
+    await expect(resolveCliExecutable('qodercn', lookup, DEFAULT_CONFIG)).resolves.toBe(realpathSync(script))
+    expect(lookup.resolveExecutable).toHaveBeenCalledOnce()
+  })
+  it('preserves explicit Antigravity configuration and never refreshes a missing manual path', async () => {
+    const custom = 'D:\\custom\\agy.exe', missing = new SubprocessExecutableNotFoundError('Synthetic manual missing')
+    const lookup = backend(async () => { throw missing })
+    await expect(resolveCliExecutable('antigravity', lookup, { ...DEFAULT_CONFIG, executable: custom })).rejects.toBe(missing)
+    expect(findWindowsPathCommand).not.toHaveBeenCalled()
+  })
+  it('rejects a broken newly discovered shim instead of trying another CLI or desktop runtime', async () => {
+    const entry = join(state.home, 'new bin/opencode.cmd')
+    mkdirSync(dirname(entry), { recursive: true }); writeFileSync(entry, '@echo off\r\nstart evil.exe\r\n')
+    vi.mocked(findWindowsPathCommand).mockResolvedValue(entry)
+    const lookup = backend(async () => { throw new SubprocessExecutableNotFoundError('Synthetic missing') })
+    await expect(resolveCliExecutable('opencode', lookup, DEFAULT_CONFIG)).rejects.toThrow('CLI 启动入口无法确认')
+    expect(desktop).not.toHaveBeenCalled()
+    expect(lookup.resolveExecutable).toHaveBeenCalledOnce()
+  })
+  it('does not refresh after a working inherited PATH, explicit configuration, or access failure', async () => {
+    await resolveCliExecutable('claude', backend(async () => 'D:\\native\\claude.exe'), DEFAULT_CONFIG)
+    const denied = Object.assign(new Error('Synthetic denied'), { code: 'EACCES' })
+    await expect(resolveCliExecutable('claude', backend(async () => { throw denied }), DEFAULT_CONFIG)).rejects.toBe(denied)
+    expect(findWindowsPathCommand).not.toHaveBeenCalled()
+  })
+  it('rejects a late refreshed path after cancellation without running a follow-up lookup', async () => {
+    const controller = new AbortController(), reason = new Error('Synthetic cancelled')
+    vi.mocked(findWindowsPathCommand).mockImplementation(async () => { controller.abort(reason); return 'D:\\late.exe' })
+    const lookup = backend(async () => { throw new SubprocessExecutableNotFoundError('Synthetic missing') })
+    await expect(resolveCliExecutable('claude', lookup, DEFAULT_CONFIG, controller.signal)).rejects.toBe(reason)
+    expect(lookup.resolveExecutable).toHaveBeenCalledOnce()
+  })
+  it('requires process-tree cleanup before accepting refreshed PATH metadata', async () => {
+    vi.mocked(findWindowsPathCommand).mockImplementation(async (_commands, capture) => capture(['synthetic powershell'], state.home))
+    const stdout = new PassThrough(), stderr = new PassThrough()
+    stdout.end('{"user":"","machine":""}'); stderr.end()
+    const terminate = vi.fn(), waitForExit = vi.fn(async () => false)
+    const lookup: ProcessBackend = {
+      resolveExecutable: async () => { throw new SubprocessExecutableNotFoundError('Synthetic missing') },
+      spawn: () => ({ stdout, stderr, done: Promise.resolve({ exitCode: 0 }), terminate, waitForExit }) as never,
+    }
+    await expect(resolveCliExecutable('claude', lookup, DEFAULT_CONFIG)).rejects.toBeInstanceOf(ProcessCleanupUnconfirmedError)
+    expect(terminate).toHaveBeenCalledOnce(); expect(waitForExit).toHaveBeenCalledOnce()
+  })
+  it('keeps explicit known Qoder CN and international native entries isolated', async () => {
+    for (const [cli, other] of [['qoder', 'qoderclicn'], ['qodercn', 'qodercli']] as const) {
+      const entry = `D:\\other brand\\${other}-1.1.74.exe`
+      await expect(resolveCliExecutable(cli, backend(async () => entry), { ...DEFAULT_CONFIG, [`${cli}Executable`]: entry }))
+        .rejects.toThrow('另一版本')
+    }
+    expect(findWindowsPathCommand).not.toHaveBeenCalled()
+  })
 })

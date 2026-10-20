@@ -30,4 +30,16 @@ node scripts/build-host-extension.mjs --target 0.2.1-rc.2 --verify
 
 ## Qoder 统计回归补充（2026-10-17）
 
-当前 source.patch SHA256 为 `c6e406fa80f64e2e44de903308725f4a0eae1dc9ffafae635a0ec4271d86b6bd`，仍仅涉及既有四包及其文档范围。ContextMeter 接受可选原生比例，token 数和容量可同时未知；ActivityPill 说明 Harness 调 CLI 的统计口径；外部用量新增中性的 `reported` 输入口径，不推断缓存。未提供外部元数据的普通会话沿用原生行为。新候选输出在 `artifacts/dsh-host-extension-021rc2-regressions`，完成预览后才按空闲门禁更新已链接产物，实际安装状态见 `doc/tasks.md`。
+该轮 source.patch SHA256 为 `c6e406fa80f64e2e44de903308725f4a0eae1dc9ffafae635a0ec4271d86b6bd`，仍仅涉及既有四包及其文档范围。ContextMeter 接受可选原生比例，token 数和容量可同时未知；ActivityPill 说明 Harness 调 CLI 的统计口径；外部用量新增中性的 `reported` 输入口径，不推断缓存。未提供外部元数据的普通会话沿用原生行为。新候选输出在 `artifacts/dsh-host-extension-021rc2-regressions`，完成预览后才按空闲门禁更新已链接产物，实际安装状态见 `doc/tasks.md`。
+
+## Qoder 积分及未公开 Token（2026-10-18）
+
+该轮 source.patch SHA256 为 `f7457fd6a115a49331aace0045ef03ec24dc2574f5bb004c09a418a964b04c51`。原生用量投影增加可选 `externalCredits`，积分可独立于 token 桶显示；没有公开 token 时，入口及详情标明“Token 未公开”。零积分保留为有效数值，普通原生会话继续使用原有路径。
+
+隔离构建位于 `artifacts/dsh-host-extension-021rc2-qoder-metering`，四包 220 文件校验通过，仓库 runtime-host 冻结 203 文件。完成 `build:preview` 后，Windows 正式 Desktop 在无活动任务时通过官方 CLI 安装同版本候选；真实历史入口及两个弹层实际点验，显示积分 0.252595、上下文 15.7% 和未公开 token。已加入原生渲染用例，但本轮没有执行该扩展源码的独立 Vitest 文件；Windows 插件关联回归及实际桌面证据见 `doc/tasks.md`。未在 Mac 执行测试，未新增模型调用。
+
+后续按用户要求改为纯积分文案：当前 source.patch SHA256 为 `c4be999c2ad18ba2e7d6a49a311295344e904022eeebf6727c1e56444564b89c`，候选 `artifacts/dsh-host-extension-021rc2-credits-hermes`。可用性来源的可选 `usageUnit: credits` 使缺失积分仍使用“积分用量”，有效积分入口只显示积分，弹层也不并列 Token；其他来源沿原路径。四包220文件校验及runtime-host203文件冻结通过，更新原生组件回归源码；本轮该独立 Vitest 文件仍未执行，以 Windows 关联投影回归及正式 Desktop 点验记录对应证据。
+
+## CLI 子会话图片入口（2026-10-18）
+
+原生 rc.2 的 InputBar 已接受 continuable 子会话图片，但隐藏文件输入仍统一 disabled。新增显式、默认关闭的 `childImageUploads`，从 SidebarChat 到共享 ConversationContent 传递；仅 CLI Worker 的实际附件能力为真时开启。`composerPresentation` 继续只控制呈现，不用于授予能力；子会话非图片回执的拒绝保持。120 项 InputBar 与18项 Sidebar 回归、四包类型检查和220文件隔离构建通过。顺带修正原有积分可选参数的显式 undefined 类型声明，无统计行为变更。最终 Windows 实际证据见 doc/tasks.md。

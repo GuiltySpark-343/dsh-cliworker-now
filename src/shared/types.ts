@@ -24,6 +24,7 @@ export const CLI_IDS = [
   'hermes',
   'opencode',
   'qoder',
+  'qodercn',
 ] as const
 export type ActiveCliId = (typeof CLI_IDS)[number]
 /** Retired IDs remain readable in existing worker history, never selectable for execution. */
@@ -45,6 +46,7 @@ export const CLI_LABELS: Record<CliId, string> = {
   harness: 'Harness（已移除）',
   opencode: 'OpenCode',
   qoder: 'Qoder CLI',
+  qodercn: 'Qoder CN CLI',
 }
 /** Short CLI stems used for automatic Worker names; protocol IDs remain unchanged. */
 export const CLI_SHORT_NAMES: Record<CliId, string> = {
@@ -61,6 +63,7 @@ export const CLI_SHORT_NAMES: Record<CliId, string> = {
   harness: 'harness',
   opencode: 'opencode',
   qoder: 'qoder',
+  qodercn: 'qodercn',
 }
 export const cliOf = (preference: Preference): CliId => preference.cli ?? 'antigravity'
 export const effortLabel = (effort: string) =>
@@ -135,6 +138,10 @@ export interface Worker {
   harnessConversation?: HarnessConversationBinding
   /** Native transport is pinned per Worker; missing values retain legacy sessions. */
   transport?: string
+  /** Plugin-owned persistent objective, injected into each turn (see conversation-features.ts). */
+  goal?: import('./conversation-features.ts').WorkerGoal
+  /** Last goal revision; kept after clearing so a stale request cannot match a new goal. */
+  goalRevision?: number
   status: WorkerStatus
   createdAt: string
   updatedAt: string
@@ -146,7 +153,7 @@ export interface Worker {
   observedModel?: string
   lastResult?: string
 }
-export type HarnessConversationFeature = 'send' | 'queue' | 'steer' | 'stop' | 'model' | 'permission' | 'plan' | 'attachments' | 'fork' | 'skills' | 'tools'
+export type HarnessConversationFeature = 'send' | 'queue' | 'steer' | 'stop' | 'model' | 'permission' | 'plan' | 'attachments' | 'fork' | 'forkEarlier' | 'goal' | 'feedback' | 'skills' | 'tools'
 export interface HarnessConversationBinding {
   sessionId: string
   parentSessionId: string
@@ -222,6 +229,8 @@ export interface WorkerEvent {
 }
 export interface TimelineItem {
   response?: NativeResponseIdentity
+  /** Exact run credits appear only on its final reply. */
+  providerCredits?: number
   usage?: TokenUsage
   /** Duration reported for this individual response step; never added to session totals. */
   durationSeconds?: number

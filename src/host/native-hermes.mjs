@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, open } from 'node:fs/promises'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   commandPrefix,
   closeServer,
@@ -69,7 +70,11 @@ function selected(config) {
 export async function startHermesServer(config, io, home, port, key, limit) {
   const ready = deferred(),
     listening = deferred()
-  let startupOutput = ''
+  const prefix = commandPrefix(config.argv, config.argv.includes('--in') ? '--in' : 'chat')
+  const ownEntry = prefix[1] === '-I' && prefix[2] === fileURLToPath(new URL('./hermes-native-entry.py', import.meta.url))
+  const pidNonce = ownEntry ? randomBytes(16).toString('hex') : undefined
+  const pidPrefix = pidNonce && `CLIWORKER_HERMES_GATEWAY_PID ${pidNonce} `
+  let startupOutput = '', nativePid
   const observe = (chunk) => {
     if (startupOutput === null) return
     startupOutput += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk)
@@ -78,6 +83,20 @@ export async function startHermesServer(config, io, home, port, key, limit) {
       return
     }
     const marker = `API server listening on http://127.0.0.1:${port}`
+    // Windows venv python.exe is a redirector: the gateway runs in its child.
+    // Only our verified entry can name that interpreter through this owned pipe,
+    // using a per-start nonce. A PID read from disk alone is never sufficient.
+    for (const line of startupOutput.split(String.fromCharCode(10)).slice(0, -1)) {
+      const text = line.trimEnd()
+      if (!pidPrefix || !text.startsWith(pidPrefix)) continue
+      const value = text.slice(pidPrefix.length), pid = Number(value)
+      if (!/^[1-9]\d{0,9}$/.test(value) || !Number.isSafeInteger(pid) || pid > 0xffffffff ||
+          (nativePid !== undefined && nativePid !== pid)) {
+        listening.reject(new Error('Hermes API 网关进程回执无效'))
+        return
+      }
+      nativePid = pid
+    }
     if (
       startupOutput
         .split(String.fromCharCode(10))
@@ -88,9 +107,8 @@ export async function startHermesServer(config, io, home, port, key, limit) {
       listening.resolve()
     }
   }
-  const prefix = commandPrefix(config.argv, config.argv.includes('--in') ? '--in' : 'chat')
   const managed = io.spawn([...prefix, 'gateway', 'run', '--external-supervisor', '--no-supervise'], {
-    env: home.env,
+    env: { ...home.env, ...(pidNonce ? { CLIWORKER_HERMES_GATEWAY_NONCE: pidNonce } : {}) },
     cwd: config.project,
     // Hermes treats SIGINT as a planned operator stop. An unmarked SIGTERM
     // deliberately exits 1 so service managers restart it, even after a completed run.
@@ -126,8 +144,8 @@ export async function startHermesServer(config, io, home, port, key, limit) {
         const state = await readHermesGatewayBinding(join(home.home, 'gateway_state.json'), limit),
           api = state?.platforms?.api_server
         if (
-          state?.pid === managed.process.pid &&
-          api?.writer_pid === managed.process.pid &&
+          state?.pid === (nativePid ?? managed.process.pid) &&
+          api?.writer_pid === (nativePid ?? managed.process.pid) &&
           api.state === 'connected' &&
           api.listener_base === base &&
           Date.parse(api.updated_at) >= startedAt - 1000
@@ -293,7 +311,7 @@ export async function runNativeHermes(config, io) {
     io.signal?.throwIfAborted()
     // Do not retry after an ambiguous acceptance, even with the same input.
     const accepted = await request('/v1/runs', 'POST', {
-      input: config.prompt,
+      input: await nativeAttachmentInput('text', config.prompt, config.attachments, io.signal),
       session_id: sessionID,
       ...selection,
       model_options,
@@ -471,3 +489,4 @@ export async function runNativeHermes(config, io) {
     }
   }
 }
+import { nativeAttachmentInput } from './native-attachments.mjs'

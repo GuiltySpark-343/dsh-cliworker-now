@@ -15,7 +15,8 @@ export interface NativeTelemetryProjections {
   tokenUsage:
     | { uncachedInputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number;
         externalScope?: 'run' | 'reported'; externalRunId?: string; externalIsPrevious?: boolean }
-    | { externalUsage: NativeUsageReport; externalScope?: 'run' | 'reported' | 'session'; externalRunId?: string; externalIsPrevious?: boolean }
+    | { externalUsage: NativeUsageReport; externalCredits?: number; externalScope?: 'run' | 'reported' | 'session'; externalRunId?: string; externalIsPrevious?: boolean }
+    | { externalUsage: undefined; externalCredits: number; externalScope: 'run'; externalRunId?: string; externalIsPrevious?: boolean }
     | undefined
   contextPressure: { pressureTokens?: number; contextWindow?: number; externalContext?: {
     ratio?: number;
@@ -48,21 +49,25 @@ export function nativeTelemetryProjections(cli: CliId, telemetry?: Telemetry, ex
   const buckets = nativeTokenUsage(cli, telemetry?.usage)
   const scope = telemetry?.usage?.scope
   const report = buckets ? undefined : nativeUsageReport(cli, telemetry?.usage)
+  const credits = (cli === 'qoder' || cli === 'qodercn') && typeof telemetry?.providerCredits === 'number' &&
+    Number.isFinite(telemetry.providerCredits) && telemetry.providerCredits >= 0 ? telemetry.providerCredits : undefined
   return {
-    telemetryAvailability: lifecycle ? { ...telemetryAvailability(lifecycle.busy),
-      ...(cli === 'qoder' ? { statisticsBasis: 'harness-cli-adapter' as const } : {}) } : undefined,
+    telemetryAvailability: lifecycle || (cli === 'qoder' || cli === 'qodercn') ? { ...telemetryAvailability(lifecycle?.busy ?? false),
+      ...((cli === 'qoder' || cli === 'qodercn') ? { statisticsBasis: 'harness-cli-adapter' as const, usageUnit: 'credits' as const } : {}) } : undefined,
     externalRequestState: lifecycle?.busy && lifecycle.externalRequestState?.runId === activeRunId
       ? lifecycle.externalRequestState : undefined,
     externalTurnUsage,
     externalTurnAnswer: lifecycle?.externalTurnAnswer,
     tokenUsage: (buckets || report) ? {
       ...(buckets ?? { externalUsage: report! }),
+      ...(credits === undefined ? {} : { externalCredits: credits }),
       ...(scope === 'run' || scope === 'reported' ? {
         externalScope: scope,
         ...(telemetry?.usageRunId || activeRunId ? { externalRunId: telemetry?.usageRunId ?? activeRunId } : {}),
         externalIsPrevious: !!activeRunId && !!telemetry?.usageRunId && activeRunId !== telemetry.usageRunId,
       } : {}),
-    } : undefined,
+    } : credits !== undefined ? { externalUsage: undefined, externalCredits: credits, externalScope: 'run',
+      ...(activeRunId ? { externalRunId: activeRunId } : {}), externalIsPrevious: false } : undefined,
     contextPressure:
       pressureTokens === undefined && contextWindow === undefined && contextRatio === undefined
         ? undefined

@@ -121,7 +121,7 @@ export function ConversationTimeline({
                     {item.kind === 'assistant' && item.text && (
                       <CopyText text={item.text} label="复制回复" iconOnly />
                     )}
-                    {item.kind === 'assistant' && <UsageIndicator usage={item.usage} reply />}
+                    {item.kind === 'assistant' && <UsageIndicator usage={item.usage} providerCredits={item.providerCredits} creditsBased={worker?.preference.cli === 'qoder' || worker?.preference.cli === 'qodercn'} reply />}
                     <time dateTime={item.time} title={new Date(item.time).toLocaleString('zh-CN')}>
                       {messageClock(item.time)}
                     </time>

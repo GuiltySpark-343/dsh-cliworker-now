@@ -486,7 +486,7 @@ export async function runNativeZcode(config, io) {
       'session/send',
       {
         sessionId,
-        content: config.prompt,
+        content: await nativeAttachmentInput('text', config.prompt, config.attachments, io.signal),
         inputId,
         queryId: inputId,
         modelSelection: selection,
@@ -543,4 +543,51 @@ export async function runNativeZcode(config, io) {
       await peer.close()
     }
   }
+}
+import { nativeAttachmentInput } from './native-attachments.mjs'
+
+/** ZCode 0.16.9 message targets include the assistant turn and need no checkpoint. */
+export async function forkNativeZcode(config, io) {
+  const slash = config.preference.model.indexOf('/')
+  const model = { providerId: config.preference.model.slice(0, slash), modelId: config.preference.model.slice(slash + 1) }
+  const account = nativeAccount(config, model)
+  const peer = await io.openStdio(zcodeAppServerArgv(config), { env: config.env, cwd: config.project })
+  const unsubscribe = peer.onMessage((message) => {
+    if (message.id !== undefined && message.method)
+      return peer.send({ id: message.id, ...(message.method === 'session/requestRuntimePreferences'
+        ? { result: { nativeSearchEnhancementsEnabled: false, memoryEnabled: false, askUserQuestionAutoResolutionEnabled: false } }
+        : { error: { code: -32601, message: '分支不接受交互请求' } }) })
+  })
+  try {
+    if (config.forkOperation === 'delete') {
+      // session/close releases runtime ownership, not durable history.
+      throw new Error('ZCode 未公开永久删除会话接口，原生分支资源保留待人工清理')
+    }
+    await peer.request('runtime/capabilities', {}, { jsonrpc: false })
+    if (account) {
+      await confirmAccount(account, { ...config, signal: io.signal })
+      await peer.request('provider/updateAccountConfig', account.snapshot, { jsonrpc: false })
+    }
+    const source = await peer.request('session/resume', { sessionId: config.conversationId, mcpServers: [], offPeakToolEnabled: false, dynamicWorkflowEnabled: false }, { jsonrpc: false })
+    readIdentity(source, config.conversationId, config.project)
+    let messageId = config.forkAt?.messageId
+    if (!messageId) {
+      // session/messages returns the active conversation chain in order. Native
+      // forkWorkspaceAtMessage -> forkConversationFromMessage copies through the
+      // assistant (including sibling responses), even with no workspace edits.
+      const history = await peer.request('session/messages', { sessionId: config.conversationId }, { jsonrpc: false })
+      messageId = Array.isArray(history?.messages)
+        ? history.messages.findLast((message) => message?.info?.role === 'assistant')?.info?.id : undefined
+      if (!nonempty(messageId)) throw new Error('ZCode 当前会话没有可分支的原生助手消息，暂无法分支')
+    }
+    const result = await peer.request('session/fork', {
+      sessionId: config.conversationId,
+      target: { kind: 'message', messageId },
+    }, { jsonrpc: false })
+    if (!nonempty(result?.forkedSessionId) || result.forkedSessionId === config.conversationId)
+      throw new Error('ZCode 分支回执没有新的原生会话 ID')
+    io.native({ type: 'cliworker.fork_created', id: result.forkedSessionId })
+    await peer.request('session/close', { sessionId: result.forkedSessionId }, { jsonrpc: false })
+    io.result('SUCCESS', '')
+  } finally { unsubscribe(); await peer.close() }
 }

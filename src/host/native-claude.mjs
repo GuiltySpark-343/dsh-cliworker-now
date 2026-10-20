@@ -36,10 +36,12 @@ export function nativeClaudeArgv(config) {
   const permission = config.mode === 'plan' ? 'plan' : 'acceptEdits'
   if (args[args.indexOf('--permission-mode') + 1] !== permission) throw fail('原生权限模式与任务不一致')
   if (config.preference.effort === 'default' ? args.includes('--effort') : args[args.indexOf('--effort') + 1] !== config.preference.effort) throw fail('原生思考强度与选型不一致')
-  if (config.conversationId && args[args.indexOf('--resume') + 1] !== config.conversationId) throw fail('恢复参数与会话不一致')
-  if (!config.conversationId && args.includes('--resume')) throw fail('缺少恢复会话绑定')
+  const resumeId = config.conversationId ?? config.forkSource?.conversationId
+  if (resumeId && args[args.indexOf('--resume') + 1] !== resumeId) throw fail('恢复参数与会话不一致')
+  if (!resumeId && args.includes('--resume')) throw fail('缺少恢复会话绑定')
   if (args.includes('--input-format') || args.includes('--permission-prompts')) throw fail('重复的原生输入或权限控制选项')
-  return [...args, '--input-format', 'stream-json', ...(args.includes('--include-partial-messages') ? [] : ['--include-partial-messages']), '--permission-prompts', 'none']
+  if (config.forkSource && (!string(config.forkSource.messageId) || config.conversationId)) throw fail('延迟分支截点无效')
+  return [...args, ...(config.forkSource ? ['--fork-session', '--resume-session-at', config.forkSource.messageId] : []), '--input-format', 'stream-json', ...(args.includes('--include-partial-messages') ? [] : ['--include-partial-messages']), '--permission-prompts', 'none']
 }
 
 export async function runNativeClaude(config, io) {
@@ -62,6 +64,7 @@ export async function runNativeClaude(config, io) {
   const identify = (id, model) => {
     if (id === undefined) return
     if (!string(id) || (sessionId && sessionId !== id) || (config.conversationId && config.conversationId !== id)) throw fail('原生会话身份与绑定不一致')
+    if (config.forkSource?.conversationId === id) throw fail('分支回执仍指向原会话')
     if (!sessionId) { sessionId = id; io.session(id, model) }
   }
   const abort = () => {
@@ -222,7 +225,8 @@ export async function runNativeClaude(config, io) {
     const completion = peer.waitFor((value) => value.type === 'result', { timeoutMs: config.timeoutMs })
     completion.catch(() => {})
     submitted = true
-    await peer.send({ type: 'user', message: { role: 'user', content: `任务：\n${config.prompt}` }, parent_tool_use_id: null, ...(config.conversationId ? { session_id: config.conversationId } : {}) })
+    const content = config.attachments?.length ? await nativeAttachmentInput('claude', `任务：\n${config.prompt}`, config.attachments, io.signal) : `任务：\n${config.prompt}`
+    await peer.send({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, ...(config.conversationId ? { session_id: config.conversationId } : {}) })
     await completion
     if (!result) throw fail('缺少原生终态')
     // Native summary uses the last response and local estimates. Never request
@@ -258,3 +262,4 @@ export async function runNativeClaude(config, io) {
     flushChildren()
   }
 }
+import { nativeAttachmentInput } from './native-attachments.mjs'

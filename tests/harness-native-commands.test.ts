@@ -3,6 +3,8 @@ import * as cordis from '@deepseek-ai/cordis'
 import * as stores from '@deepseek-ai/dsh-client-store'
 import * as react from 'react'
 import * as jsx from 'react/jsx-runtime'
+import { act, create } from 'react-test-renderer'
+import { SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { runInNewContext } from 'node:vm'
@@ -11,6 +13,7 @@ import type { HarnessConversationBinding, Worker } from '../src/shared/types.ts'
 import type { API, Snapshot } from '../src/client/workers.ts'
 import { HarnessBindingRegistry } from '../src/client/harness-binding-registry.ts'
 import { installHarnessNativeCommands } from '../src/client/harness-native-commands.ts'
+import { installHarnessNativeCommandMenu } from '../src/client/harness-native-command-menu.tsx'
 
 // Load unmodified installed rc.2 browser bundles through their public exported
 // factories. Real Trigger/Popup controllers and stores; synthetic Gateway,
@@ -213,6 +216,37 @@ function fixture() {
 }
 
 describe('owned CLI commands through actual native trigger and Popup controllers', () => {
+  it.each(['原生主视图', '原生子会话侧栏'])('模拟：%s 的 composer 菜单源打开实际原生 controller，并能选择规划', async () => {
+    const f = fixture()
+    const core = new SlotCore()
+    core.register({ name: 'root', children: {
+      'conversation.composer.bar': { kind: 'single', scope: 'session-maybe' },
+    } } as any, () => null)
+    const Native = vi.fn((_props: any) => null)
+    core.register({ name: 'conversation.composer.bar' } as any, Native)
+    cleanups.push(installHarnessNativeCommandMenu({ slots: core } as any, f.bindings))
+    const entry = core.entriesOfSlot('conversation.composer.bar')[0]!
+    let tree!: ReturnType<typeof create>
+    await act(async () => { tree = create(react.createElement(entry.component as any, { sessionId: 'child' })) })
+    cleanups.push(() => { act(() => tree.unmount()) })
+    const source = Native.mock.calls.at(-1)![0].commandSource
+    f.trigger.toggleSource(source, {
+      trigger: '/', query: '', quoted: false, position: 'leading', span: { start: 0, end: 0, draftRev: 1 },
+    })
+    await vi.waitFor(() => expect(f.trigger.menu.getSnapshot().groups[0]?.status).toBe('ready'))
+    const menu = f.trigger.menu.getSnapshot()
+    expect(menu.open).toBe(true)
+    expect(f.trigger.launcher.getSnapshot()).toBe(source)
+    expect(menu.groups).toHaveLength(1)
+    const rows = menu.groups[0].items
+    expect(rows.map((row: any) => row.name)).toEqual(['model', 'permission', 'plan', 'goal', 'feedback', 'fork'])
+    f.trigger.pick(source, rows.findIndex((row: any) => row.name === 'plan'))
+    await vi.waitFor(() => expect(f.popup.state.getSnapshot().status).toBe('ready'))
+    expect(f.popup.state.getSnapshot().command).toBe('plan')
+    expect(f.popup.state.getSnapshot().options.map((option: any) => option.id)).toEqual(['plan', 'accept-edits'])
+    expect(f.api.cliworker.permissionForWorker).toHaveBeenCalledOnce()
+    expect(f.api.cliworker.configureWorkerPermission).not.toHaveBeenCalled()
+  })
   it('offers only exact owned child settings and leaves parent/foreign sources untouched', async () => {
     const f = fixture(),
       source = f.sources[0]!
@@ -226,6 +260,9 @@ describe('owned CLI commands through actual native trigger and Popup controllers
       'model',
       'permission',
       'plan',
+      'goal',
+      'feedback',
+      'fork',
     ])
     expect(await source.candidates({ sessionId: 'parent' } as any, req)).toEqual([])
     expect(

@@ -121,13 +121,28 @@ export class FollowupQueue {
     return this.queues.get(workerId)?.items.find((item) => item.id === id)?.generation
   }
   advanceGeneration(workerId: string): number {
+    const { previous, persistenceError } = this.revokeGeneration(workerId)
+    if (persistenceError) throw persistenceError
+    return previous
+  }
+  /**
+   * Stop must not depend on disk. The in-memory generation advances first so
+   * earlier items lose their sending eligibility; a failed write is returned
+   * for the caller to report after cancellation has started.
+   */
+  revokeGeneration(workerId: string): { previous: number; persistenceError?: unknown } {
     const queue = structuredClone(
       this.queues.get(workerId) ?? { policy: 1 as const, generation: 0, items: [], receipts: [] },
     )
     const previous = queue.generation
     queue.generation++
-    this.save(workerId, queue)
-    return previous
+    this.queues.set(workerId, queue)
+    try {
+      atomicJSON(this.path(workerId), queueSchema.parse(queue))
+    } catch (persistenceError) {
+      return { previous, persistenceError }
+    }
+    return { previous }
   }
   receipt(
     workerId: string,

@@ -103,6 +103,12 @@ export class SettingsCatalogCache {
   revision(cli: CliId): number {
     return this.revisions.get(cli) ?? 0
   }
+  /** This Host's last verified display receipt. Never recovers a disk-only identity. */
+  displayBinding(project: string, cli: CliId): string | undefined {
+    const key = this.key(project, cli)
+    if (this.pending.has(key) || this.failed.has(key)) return
+    return this.ready.get(key)?.binding
+  }
   private key(project: string, cli: CliId): string {
     return hash(JSON.stringify([process.platform, hostname(), project, cli]))
   }
@@ -208,7 +214,7 @@ export class SettingsCatalogCache {
       if (input.refresh) this.ready.delete(key)
       const revision = this.revision(cli)
       const current = this.ready.get(key)
-      const binding = cli === 'qoder' && input.selfVerifiedDiscovery && !current ? undefined : await input.binding()
+      const binding = (cli === 'qoder' || cli === 'qodercn') && input.selfVerifiedDiscovery && !current ? undefined : await input.binding()
       signal.throwIfAborted()
       if (current && current.binding === binding) return structuredClone({ catalog: current.catalog, binding })
       this.ready.delete(key)

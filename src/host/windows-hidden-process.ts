@@ -1,4 +1,5 @@
 import { win32 } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { fileURLToPath } from 'node:url'
 import type { SubprocessHandle, SubprocessOutcome, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import type { ProcessBackend } from './process.ts'
@@ -40,17 +41,19 @@ export function spawnWindowsHidden(backend: ProcessBackend, spec: SubprocessSpaw
   if (!channel) inner.terminate()
   // Attach readers immediately so a fast metadata process cannot fill a pipe.
   const reading = channel ? new Promise<void>((resolve) => {
-    channel.on('data', (chunk: Buffer | string) => {
+    const decoder = new StringDecoder('utf8')
+    const finish = () => { raw += decoder.end(); resolve() }
+    channel.on('data', (chunk: Buffer) => {
       bytes += Buffer.byteLength(chunk)
       if (bytes > 1024) {
         invalid = true
         channel.destroy()
         inner.terminate()
-      } else raw += String(chunk)
+      } else raw += decoder.write(chunk)
     })
     channel.once('error', () => { invalid = true; inner.terminate(); resolve() })
-    channel.once('end', resolve)
-    channel.once('close', resolve)
+    channel.once('end', finish)
+    channel.once('close', finish)
   }) : Promise.resolve()
   // A native parent can exit while its descendants retain stdout/stderr. The
   // GUI relay must remain alive to forward those bytes, so its exit cannot be

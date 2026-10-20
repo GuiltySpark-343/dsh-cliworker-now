@@ -34,9 +34,13 @@ const featureLabels: Record<HarnessConversationFeature, string> = {
   plan: '规划模式',
   attachments: '附件',
   fork: '分支',
+  forkEarlier: '从较早消息分支',
+  goal: '目标',
+  feedback: '反馈',
   skills: '技能共享',
   tools: '工具共享',
 }
+const bridgedFeatures = new Set<HarnessConversationFeature>(['goal', 'feedback', 'forkEarlier'])
 const fallbackReason = '当前 CLI 的此项原生操作尚未接通，操作已禁用。'
 const composerHolds = new WeakMap<
   object,
@@ -95,7 +99,9 @@ export function readHarnessConversationBinding(
     candidate.mode !== 'continuable' ||
     !candidate.capabilities ||
     Object.keys(featureLabels).some(
-      (feature) => typeof candidate.capabilities?.[feature as HarnessConversationFeature] !== 'boolean',
+      (feature) =>
+        !bridgedFeatures.has(feature as HarnessConversationFeature) &&
+        typeof candidate.capabilities?.[feature as HarnessConversationFeature] !== 'boolean',
     )
   )
     throw new Error('原生会话身份或能力与当前子 Agent 不一致')
@@ -106,7 +112,10 @@ export function readHarnessConversationBinding(
       Object.values(candidate.reasons).some((reason) => typeof reason !== 'string'))
   )
     throw new Error('原生会话能力说明无效')
-  return candidate as HarnessConversationBinding
+  // An older Host omits the bridged features; treat them as unavailable rather than invalid.
+  const capabilities = { ...candidate.capabilities } as HarnessConversationBinding['capabilities']
+  for (const feature of bridgedFeatures) capabilities[feature as HarnessConversationFeature] ||= false
+  return { ...candidate, capabilities } as HarnessConversationBinding
 }
 
 export function harnessComposerBlock(binding: HarnessConversationBinding): string | undefined {

@@ -5972,6 +5972,12 @@ window.__ModuleLoader__.load({
 			"duration.milliseconds": "{milliseconds}毫秒",
 			"stats.unknown.statistics": "会话统计 —",
 			"stats.unknown.tokenUsage": "Token 用量 —",
+			"stats.providerCredits": "{credits} 积分",
+			"stats.unknown.creditUsage": "积分用量 —",
+			"stats.dialog.creditUsageTitle": "积分用量",
+			"stats.dialog.credits": "积分",
+			"stats.dialog.creditsSource": "积分来源",
+			"stats.dialog.qoderRunCredits": "Qoder 本轮原生请求",
 			"stats.availability.pending": "等待数据",
 			"stats.availability.unavailable": "数据不可用",
 			"stats.availability.awaiting-data": "等待首个已确认的数据回执。",
@@ -6198,6 +6204,12 @@ window.__ModuleLoader__.load({
 			"duration.milliseconds": "{milliseconds}ms",
 			"stats.unknown.statistics": "Session statistics —",
 			"stats.unknown.tokenUsage": "Token usage —",
+			"stats.providerCredits": "{credits} credits",
+			"stats.unknown.creditUsage": "Credits usage —",
+			"stats.dialog.creditUsageTitle": "Credits usage",
+			"stats.dialog.credits": "Credits",
+			"stats.dialog.creditsSource": "Credits source",
+			"stats.dialog.qoderRunCredits": "Qoder native requests in this run",
 			"stats.availability.pending": "Awaiting data",
 			"stats.availability.unavailable": "Data unavailable",
 			"stats.availability.awaiting-data": "Waiting for the first confirmed data receipt.",
@@ -7060,7 +7072,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:packages/client/ui-chat/src/client/chat/stat-dialog.module.css.mjs
-		const css$5 = ".MqHU5a_panel{z-index:1100;box-sizing:border-box;border-radius:var(--dsw-radius-lg);background:var(--dsw-specific-menu);width:max-content;min-width:min(300px,100vw - 24px);max-width:min(440px,100vw - 24px);backdrop-filter:var(--dsw-menu-backdrop-filter);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);color:var(--dsw-alias-label-secondary);cursor:default;border:0;padding:16px;font-size:12px;line-height:18px;position:fixed}.MqHU5a_title{color:var(--dsw-alias-label-primary);justify-content:space-between;gap:16px;margin-bottom:8px;font-weight:500;display:flex}.MqHU5a_titleRule{border-top:.5px solid var(--dsw-alias-border-l2);margin-bottom:10px}.MqHU5a_titleValue{font-variant-numeric:tabular-nums}.MqHU5a_titleLabel{align-items:center;gap:6px;min-width:0;display:inline-flex}.MqHU5a_titleLabel svg{flex:none;width:14px;height:14px}.MqHU5a_details{color:var(--dsw-alias-label-tertiary);grid-template-columns:minmax(76px,auto) minmax(0,1fr);gap:6px 16px;margin:0;display:grid}.MqHU5a_details dt,.MqHU5a_details dd{min-width:0;margin:0}.MqHU5a_details dd{color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;text-align:right}.MqHU5a_details .MqHU5a_route{overflow-wrap:anywhere}.MqHU5a_reasoning{color:var(--dsw-alias-label-tertiary);white-space:nowrap}";
+		const css$5 = ".MqHU5a_panel{z-index:1100;box-sizing:border-box;border-radius:var(--dsw-radius-lg);background:var(--dsw-specific-menu);width:max-content;min-width:min(300px,100vw - 24px);max-width:min(440px,100vw - 24px);backdrop-filter:var(--dsw-menu-backdrop-filter);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);color:var(--dsw-alias-label-secondary);cursor:default;border:0;padding:12px;font-size:12px;line-height:18px;position:fixed}.MqHU5a_title{color:var(--dsw-alias-label-primary);justify-content:space-between;gap:16px;margin-bottom:8px;font-weight:500;display:flex}.MqHU5a_titleRule{border-top:.5px solid var(--dsw-alias-border-l2);margin-bottom:10px}.MqHU5a_titleValue{font-variant-numeric:tabular-nums}.MqHU5a_titleLabel{align-items:center;gap:6px;min-width:0;display:inline-flex}.MqHU5a_titleLabel svg{flex:none;width:14px;height:14px}.MqHU5a_details{color:var(--dsw-alias-label-tertiary);grid-template-columns:minmax(76px,auto) minmax(0,1fr);gap:6px 16px;margin:0;display:grid}.MqHU5a_details dt,.MqHU5a_details dd{min-width:0;margin:0}.MqHU5a_details dd{color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;text-align:right}.MqHU5a_details .MqHU5a_route{overflow-wrap:anywhere}.MqHU5a_reasoning{color:var(--dsw-alias-label-tertiary);white-space:nowrap}";
 		const tagId$5 = "@deepseek-ai/dsh-client-ui-chat/stat-dialog.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$5) + "]") === null) {
 			const tag = document.createElement("style");
@@ -7197,7 +7209,11 @@ window.__ModuleLoader__.load({
 			const cacheHit = hasReport ? ratio === void 0 ? null : formatCacheHitPercent(ratio.cached, ratio.input, 1) : usage?.cacheReadTokens === void 0 ? null : formatCacheHitPercent(usage.cacheReadTokens, usage.totalTokens - usage.outputTokens, 1);
 			const cacheUnknown = report !== void 0 ? ratio === void 0 : sourceLabel !== void 0 && usage !== void 0 && usage.cacheReadTokens === void 0;
 			const total = totalTokens === void 0 ? void 0 : formatCompactCount(totalTokens, t);
-			const routes = hasReport ? "" : usage?.routes?.map((route) => `${route.provider}/${route.model}`).join(", ") ?? "";
+			const credits = typeof props.credits === "number" && Number.isFinite(props.credits) && props.credits >= 0 ? props.credits : void 0;
+			const creditUsage = props.creditsBased === true;
+			const creditText = t("stats.providerCredits", { credits: credits === void 0 ? "—" : credits > 0 && credits < 1e-4 ? "<0.0001" : credits.toLocaleString(void 0, { maximumFractionDigits: 4 }) });
+			const title = t(creditUsage ? "stats.dialog.creditUsageTitle" : "message.turnUsage.title");
+			const routes = props.displayRoutes?.join(", ") ?? (hasReport ? "" : usage?.routes?.filter((route) => route.provider !== "cliworker-native").map((route) => `${route.provider}/${route.model}`).join(", ") ?? "");
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 				ref: rootRef,
 				className: TurnUsagePanel_module_css_default.root,
@@ -7211,30 +7227,30 @@ window.__ModuleLoader__.load({
 					},
 					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconDatabaseOutlineRegular, {}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 						className: TurnUsagePanel_module_css_default.label,
-						children: unavailable ? t("message.turnUsage.unknown") : t("message.turnUsage.consumed", { total })
+						children: creditUsage ? `${t("stats.dialog.creditUsageTitle")} ${creditText}` : unavailable ? t("message.turnUsage.unknown") : t("message.turnUsage.consumed", { total })
 					})]
 				}), open && (0, react_dom.createPortal)(/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					ref: panelRef,
 					className: stat_dialog_module_css_default.panel,
 					role: "dialog",
-					"aria-label": t("message.turnUsage.title"),
+					"aria-label": title,
 					style: pos ?? MEASURE_STYLE,
 					children: [
 						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							className: stat_dialog_module_css_default.title,
 							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 								className: stat_dialog_module_css_default.titleLabel,
-								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconDatabaseOutlineRegular, {}), t("message.turnUsage.title")]
-							}), totalTokens !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconDatabaseOutlineRegular, {}), title]
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 								className: stat_dialog_module_css_default.titleValue,
-								children: formatExactCount(totalTokens, t)
+								children: creditUsage ? t("stats.providerCredits", { credits: credits?.toLocaleString(void 0, { maximumFractionDigits: 12 }) ?? "—" }) : totalTokens === void 0 ? "—" : formatExactCount(totalTokens, t)
 							})]
 						}),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							className: stat_dialog_module_css_default.titleRule,
 							"aria-hidden": true
 						}),
-						unavailable ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: t("message.turnUsage.unavailable") }) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("dl", {
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("dl", {
 							className: stat_dialog_module_css_default.details,
 							"data-turn-usage-details": true,
 							children: [
@@ -7243,8 +7259,7 @@ window.__ModuleLoader__.load({
 									className: stat_dialog_module_css_default.route,
 									children: routes
 								})] }),
-								(cacheHit !== null || cacheUnknown) && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("dt", { children: t("message.turnUsage.cacheHit") }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("dd", { children: cacheUnknown ? "—" : `${cacheHit}%` })] }),
-								report !== void 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ExternalUsageRows, {
+								creditUsage ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("dt", { children: t("stats.dialog.credits") }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("dd", { children: credits?.toLocaleString(void 0, { maximumFractionDigits: 12 }) ?? "—" })] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(cacheHit !== null || cacheUnknown) && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("dt", { children: t("message.turnUsage.cacheHit") }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("dd", { children: cacheUnknown ? "—" : `${cacheHit}%` })] }), report !== void 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ExternalUsageRows, {
 									usage: report,
 									t
 								}) : usage !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
@@ -7257,9 +7272,9 @@ window.__ModuleLoader__.load({
 										className: stat_dialog_module_css_default.reasoning,
 										children: t("message.turnUsage.reasoning", { tokens: formatExactCount(usage.reasoningTokens, t) })
 									})] })
-								] })
+								] })] })
 							]
-						}), cacheUnknown && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: t("stats.cacheHitUnavailable") })] })
+						})
 					]
 				}), document.body)]
 			});
@@ -7302,7 +7317,22 @@ window.__ModuleLoader__.load({
 				externalUnknown: true
 			};
 			if (supplied === void 0 || supplied.basis !== "external-run" || !Array.isArray(supplied.runIds) || supplied.runIds.length === 0 || supplied.runIds.some((id) => typeof id !== "string" || id.length === 0 || id.length > 512) || new Set(supplied.runIds).size !== supplied.runIds.length) return { usage: void 0 };
+			const displayRoutes = Array.isArray(supplied.displayRoutes) && supplied.displayRoutes.length > 0 && supplied.displayRoutes.length <= 64 && supplied.displayRoutes.every((route) => typeof route === "string" && route.length > 0 && route.length <= 1200 && !/[\x00-\x1f\x7f]/.test(route) && !route.startsWith("cliworker-native/")) ? { displayRoutes: supplied.displayRoutes } : {};
 			const hasUsage = Object.hasOwn(supplied, "usage"), hasReport = Object.hasOwn(supplied, "externalUsage");
+			if ("usageUnit" in supplied && supplied.usageUnit === "credits") {
+				if (hasUsage || hasReport || "nativeUsage" in supplied || supplied.credits !== void 0 && (typeof supplied.credits !== "number" || !Number.isFinite(supplied.credits) || supplied.credits < 0)) return { usage: void 0 };
+				return {
+					usage: void 0,
+					external: true,
+					usageUnit: "credits",
+					...displayRoutes,
+					...supplied.credits === void 0 ? {} : { credits: supplied.credits }
+				};
+			}
+			if ("nativeUsage" in supplied && supplied.nativeUsage === true) return hasUsage || hasReport || !displayRoutes.displayRoutes ? { usage: void 0 } : {
+				usage: native,
+				...displayRoutes
+			};
 			if (hasUsage === hasReport) return { usage: void 0 };
 			const label = typeof supplied.label === "string" && supplied.label.length > 0 && supplied.label.length <= 120 ? { label: supplied.label } : {};
 			if (hasReport) {
@@ -7311,7 +7341,8 @@ window.__ModuleLoader__.load({
 					usage: void 0,
 					external: true,
 					externalUsage: report,
-					...label
+					...label,
+					...displayRoutes
 				};
 			}
 			const usage = supplied.usage;
@@ -7333,7 +7364,8 @@ window.__ModuleLoader__.load({
 					...usage.cacheWriteTokens === void 0 ? {} : { cacheWriteTokens: usage.cacheWriteTokens },
 					...usage.reasoningTokens === void 0 ? {} : { reasoningTokens: usage.reasoningTokens }
 				},
-				...label
+				...label,
+				...displayRoutes
 			};
 		}
 		//#endregion
@@ -7367,6 +7399,7 @@ window.__ModuleLoader__.load({
 			const forkAllowed = useAccess("session/fork");
 			const data = node.data;
 			const externalUsage = useProjection("externalTurnUsage");
+			const creditUsage = useProjection("telemetryAvailability")?.usageUnit === "credits";
 			const accounting = resolveExternalTurnUsage(data.turn, data.tokenUsage, externalUsage);
 			const hasLaterChatNode = useChat((snapshot) => (lastContent(snapshot, data.turn, true)?.anchorSeq ?? -1) > (data.closing?.finalNode.seq ?? data.seq));
 			const endsWithResponse = useChat((snapshot) => {
@@ -7404,8 +7437,11 @@ window.__ModuleLoader__.load({
 					branchUnavailable: data.branchUnavailable || hasLaterChatNode,
 					className: TurnTailNodeView_module_css_default.actions,
 					extraActions: assistantActions,
-					usageAction: detailed && (accounting.externalUnknown || accounting.usage !== void 0 || accounting.externalUsage !== void 0) ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(TurnUsagePanel, {
-						...accounting.externalUnknown ? { unavailable: true } : accounting.externalUsage !== void 0 ? { externalUsage: accounting.externalUsage } : { usage: accounting.usage },
+					usageAction: detailed && (accounting.externalUnknown || accounting.usageUnit === "credits" || accounting.usage !== void 0 || accounting.externalUsage !== void 0) ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(TurnUsagePanel, {
+						...accounting.externalUnknown || accounting.usageUnit === "credits" ? { unavailable: true } : accounting.externalUsage !== void 0 ? { externalUsage: accounting.externalUsage } : { usage: accounting.usage },
+						creditsBased: creditUsage || accounting.usageUnit === "credits",
+						credits: accounting.credits,
+						displayRoutes: accounting.displayRoutes,
 						...accounting.external ? { sourceLabel: accounting.label ?? t("message.turnUsage.externalRun") } : {},
 						t
 					}) : null,
@@ -7963,15 +7999,16 @@ window.__ModuleLoader__.load({
 				}), document.body)]
 			});
 		}
-		function UnknownPill({ kind, availability, t }) {
+		function UnknownPill({ kind, t }) {
 			const title = t(kind === "statistics" ? "stats.dialog.title" : "stats.dialog.usageTitle");
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(DialogPill, {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(DialogPill, {
 				stat: kind === "statistics" ? "activity" : "usage",
 				icon: kind === "statistics" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconGaugeOutlineRegular, {}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconDatabaseOutlineRegular, {}),
 				label: t(`stats.unknown.${kind}`),
 				ariaLabel: t(`stats.unknown.${kind}`),
 				title,
-				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: t(`stats.availability.${availability.state}`) }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: t(`stats.availability.${availability.reason}`) })]
+				titleValue: "—",
+				children: null
 			});
 		}
 		/**
@@ -7981,8 +8018,7 @@ window.__ModuleLoader__.load({
 		const ActivityPill = (0, react.memo)(function ActivityPill({ useChat, useProjection, usePerformanceUsage, t }) {
 			const mode = usePerformanceUsage((value) => value);
 			const stats = useSessionStats(useChat, useProjection);
-			const availability = useProjection("telemetryAvailability");
-			const unknown = telemetryUnavailable(availability?.statistics);
+			const unknown = telemetryUnavailable(useProjection("telemetryAvailability")?.statistics);
 			if (stats.steps === 0 && unknown) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(UnknownPill, {
 				kind: "statistics",
 				availability: unknown,
@@ -8006,11 +8042,11 @@ window.__ModuleLoader__.load({
 				label: joined$1(counts, speed)
 			};
 			if (stats.llmMs <= 0 && stats.toolMs <= 0 && stats.ttftSteps <= 0 && speed === null) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(PlainPill, { ...content });
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(DialogPill, {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(DialogPill, {
 				...content,
 				ariaLabel: speed === null ? counts : `${counts} · ${speed}`,
 				title: t("stats.dialog.title"),
-				children: [availability?.statisticsBasis === "harness-cli-adapter" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: t("stats.dialog.cliCallBasis") }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("dl", {
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("dl", {
 					className: stat_dialog_module_css_default.details,
 					"data-session-stats-details": true,
 					children: [
@@ -8019,16 +8055,44 @@ window.__ModuleLoader__.load({
 						stats.ttftSteps > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("dt", { children: t("stats.dialog.ttft") }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("dd", { children: formatDuration(stats.ttftMs / stats.ttftSteps, t) })] }),
 						speed !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("dt", { children: t("stats.dialog.speed") }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("dd", { children: speed })] })
 					]
-				})]
+				})
 			});
 		});
 		/** Whole-log token total and cache hit; Compact keeps only the cache hit. */
 		const UsagePill = (0, react.memo)(function UsagePill({ useProjection, usePerformanceUsage, t }) {
 			const mode = usePerformanceUsage((value) => value);
 			const usage = useProjection("tokenUsage");
-			const unknown = telemetryUnavailable(useProjection("telemetryAvailability")?.tokenUsage);
+			const availability = useProjection("telemetryAvailability");
+			const unknown = telemetryUnavailable(availability?.tokenUsage);
 			const hasExternal = usage !== void 0 && Object.hasOwn(usage, "externalUsage");
 			const external = hasExternal ? externalUsageReport(usage.externalUsage) : void 0;
+			const credits = typeof usage?.externalCredits === "number" && Number.isFinite(usage.externalCredits) && usage.externalCredits >= 0 ? usage.externalCredits : void 0;
+			const creditsText = credits === void 0 ? void 0 : t("stats.providerCredits", { credits: credits > 0 && credits < 1e-4 ? "<0.0001" : credits.toLocaleString(void 0, { maximumFractionDigits: 4 }) });
+			if (credits !== void 0 || availability?.usageUnit === "credits") {
+				const title = t("stats.dialog.creditUsageTitle");
+				const label = creditsText ?? t("stats.unknown.creditUsage");
+				return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(DialogPill, {
+					stat: "usage",
+					icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconDatabaseOutlineRegular, {}),
+					label,
+					ariaLabel: label,
+					title,
+					titleValue: creditsText,
+					children: credits !== void 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("dl", {
+						className: stat_dialog_module_css_default.details,
+						"data-session-stats-usage": true,
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("dt", { children: t("stats.dialog.creditsSource") }),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("dd", { children: t("stats.dialog.qoderRunCredits") }),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("dt", { children: t("stats.dialog.credits") }),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("dd", { children: credits.toLocaleString(void 0, { maximumFractionDigits: 12 }) })
+						]
+					}) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("dl", {
+						className: stat_dialog_module_css_default.details,
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("dt", { children: t("stats.dialog.credits") }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("dd", { children: "—" })]
+					})
+				});
+			}
 			const hasTokens = usage !== void 0 && (hasExternal ? external !== void 0 && external.totalTokens > 0 : billedInputTokens(usage) > 0 || usage.outputTokens > 0);
 			if (!hasTokens && unknown && (usage === void 0 || hasExternal && external === void 0)) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(UnknownPill, {
 				kind: "tokenUsage",
@@ -8051,14 +8115,14 @@ window.__ModuleLoader__.load({
 			const previousKnown = usage.externalIsPrevious === void 0 || typeof usage.externalIsPrevious === "boolean";
 			const accountingSource = usage.externalScope === "run" && runIdKnown && previousKnown ? t(usage.externalIsPrevious ? "stats.dialog.previousRun" : "stats.dialog.currentRun") : usage.externalScope === "reported" ? t("stats.dialog.reportedResponses") : void 0;
 			const totalText = t("message.turnUsage.count", { count: formatTokens(total, t) });
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(DialogPill, {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(DialogPill, {
 				stat: "usage",
 				icon,
 				label: mode === "compact" && cacheUnknown ? cacheHitText : joined$1(totalText, cacheHitText),
 				ariaLabel: mode === "compact" && cacheUnknown && cacheHitText !== null ? cacheHitText : cacheHitText === null ? totalText : `${totalText} · ${cacheHitText}`,
 				title: t("stats.dialog.usageTitle"),
 				titleValue: exactCount(total, t),
-				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("dl", {
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("dl", {
 					className: stat_dialog_module_css_default.details,
 					"data-session-stats-usage": true,
 					children: [
@@ -8077,7 +8141,7 @@ window.__ModuleLoader__.load({
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("dd", { children: exactCount(usage.outputTokens, t) })
 						] })
 					]
-				}), cacheUnknown && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: t("stats.cacheHitUnavailable") })]
+				})
 			});
 		});
 		//#endregion

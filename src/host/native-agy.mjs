@@ -1,4 +1,5 @@
 import { agyResponseUsage } from './native-response.mjs'
+import { recordAgyHarnessSession } from './native-agy-harness.mjs'
 
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value)
 const string = (value) => typeof value === 'string' && value.trim().length > 0
@@ -26,7 +27,7 @@ export async function runNativeAgy(config, io) {
   const identify = (id, model) => {
     if (id === undefined) return
     if (!string(id) || (sessionId && sessionId !== id) || (config.conversationId && config.conversationId !== id)) throw fail('原生会话身份与绑定不一致')
-    if (!sessionId) { sessionId = id; io.session(id, model) }
+    if (!sessionId) { recordAgyHarnessSession(config, id); sessionId = id; io.session(id, model) }
   }
   const abort = () => { if (!result) { try { peer.kill('SIGINT') } catch {} } }
   io.signal?.addEventListener('abort', abort, { once: true })
@@ -104,7 +105,7 @@ export async function runNativeAgy(config, io) {
     io.signal?.throwIfAborted()
     const completion = peer.waitFor((value) => value.event === 'result', { timeoutMs: config.timeoutMs })
     completion.catch(() => {})
-    await peer.send({ event: 'user', message: { content: `任务：\n${config.prompt}` } })
+    await peer.send({ event: 'user', message: { content: await nativeAttachmentInput('text', `任务：\n${config.prompt}`, config.attachments, io.signal) } })
     await completion
     if (!result || !sessionId) throw fail('缺少原生终态或会话身份')
     peer.end()
@@ -125,3 +126,4 @@ export async function runNativeAgy(config, io) {
     await peer.close()
   }
 }
+import { nativeAttachmentInput } from './native-attachments.mjs'

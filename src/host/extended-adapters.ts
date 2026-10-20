@@ -139,6 +139,7 @@ export async function extendedLaunch(
     preference,
     mode,
     prompt,
+    ...(config.attachments?.length ? { attachments: config.attachments } : {}),
     conversationId,
     stateDirectory: state,
     nativeTransport,
@@ -193,6 +194,7 @@ export async function extendedLaunch(
       launch = await prepareNativeWorker(
         prepared,
         { cli, project, preference, mode, prompt, conversationId, stateDirectory: state,
+          ...(config.attachments?.length ? { attachments: config.attachments } : {}),
           ...(config.harnessTools ? { harnessTools: config.harnessTools } : {}) },
         config,
       )

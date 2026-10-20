@@ -27,6 +27,7 @@ import type { CliId } from '../src/shared/types.ts'
 import type { AccountIdentitySource } from '../src/host/account-identity.ts'
 import * as zcodeAccounts from '../src/host/zcode-grok-accounts.ts'
 import { CODEX_APPX_QUERY, WindowsCliInstallationError, WindowsCliNotFoundError } from '../src/host/windows-cli-installation.ts'
+import { WINDOWS_PATH_QUERY } from '../src/host/windows-cli-path.ts'
 const claudeSettings = vi.hoisted(() => ({ managed: {} as Record<string, unknown> }))
 // Synthetic managed settings only; account tests never read this machine's policy.
 vi.mock('../src/host/first-party-models.ts', async (load) => {
@@ -103,7 +104,7 @@ function deferred<T>() {
   })
   return { promise, resolve, reject }
 }
-function fixture(overrides: Partial<RuntimeConfig> = {}) {
+function fixture(overrides: Partial<RuntimeConfig> = {}, onQueryCleanup?: ConstructorParameters<typeof AccountManager>[3]) {
   const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'cwn-account-test-')))
   roots.push(cwd)
   // Synthetic discovery must never select a real Windows npm/desktop installation.
@@ -200,7 +201,7 @@ function fixture(overrides: Partial<RuntimeConfig> = {}) {
     opencodeExecutable: '/synthetic/opencode',
     ...overrides,
   }
-  const manager = new AccountManager(backend, config, identity)
+  const manager = new AccountManager(backend, config, identity, onQueryCleanup)
   managers.push(manager)
   return {
     cwd,
@@ -298,7 +299,8 @@ describe('account status safety (synthetic CLI output)', () => {
   })
 
   it('blocks task/account admission when native status cleanup cannot be confirmed', async () => {
-    const f = fixture()
+    const onQueryCleanup = vi.fn()
+    const f = fixture({}, onQueryCleanup)
     f.status('Logged in using an API key - SYNTHETIC_KEY')
     const original = f.backend.spawn
     f.backend.spawn = vi.fn((spec) => {
@@ -311,6 +313,9 @@ describe('account status safety (synthetic CLI output)', () => {
       actions: [],
     })
     expect(f.manager.isBusy('codex')).toBe(true)
+    expect(onQueryCleanup).toHaveBeenCalledExactlyOnceWith('codex', expect.objectContaining({
+      name: 'ProcessCleanupUnconfirmedError',
+    }))
     expect(() => f.manager.start('p', 'codex', 'login', f.cwd, f.signal)).toThrow('cleanup')
     expect(await f.manager.status('codex', f.cwd, f.signal)).toMatchObject({ state: 'unavailable' })
     expect(f.backend.spawn).toHaveBeenCalledTimes(1)
@@ -669,9 +674,20 @@ describe('account status safety (synthetic CLI output)', () => {
   it('keeps absent default installations grey but reports explicit executable and read errors', async () => {
     const missing = Object.assign(new Error('synthetic SECRET'), { code: 'ENOENT' })
     const absent = fixture()
-    // Windows falls back to an Appx lookup after missing PATH; the synthetic
-    // lookup must report no package, rather than malformed empty metadata.
+    // Windows refreshes PATH before Appx discovery. Both synthetic metadata
+    // queries report absence, without consulting this machine's installed bins.
     absent.status('null')
+    if (process.platform === 'win32') {
+      vi.stubEnv('PATH', join(absent.cwd, 'synthetic empty PATH'))
+      const spawn = vi.mocked(absent.backend.spawn).getMockImplementation()!
+      vi.mocked(absent.backend.spawn).mockImplementation((spec) => {
+        const encoded = spec.argv[spec.argv.indexOf('-EncodedCommand') + 1]!
+        const query = Buffer.from(encoded, 'base64').toString('utf16le')
+        expect([WINDOWS_PATH_QUERY, CODEX_APPX_QUERY]).toContain(query)
+        absent.status(query === WINDOWS_PATH_QUERY ? JSON.stringify({ user: '', machine: '' }) : 'null')
+        return spawn(spec)
+      })
+    }
     vi.mocked(absent.backend.resolveExecutable).mockRejectedValue(missing)
     expect(await absent.manager.status('codex', absent.cwd, absent.signal)).toMatchObject({
       state: 'unconfigured',
@@ -679,16 +695,18 @@ describe('account status safety (synthetic CLI output)', () => {
       actions: [],
     })
     if (process.platform === 'win32') {
-      expect(absent.backend.spawn).toHaveBeenCalledOnce()
-      const lookup = vi.mocked(absent.backend.spawn).mock.calls[0][0]
-      expect(lookup.argv[0]).toMatch(/[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i)
-      expect(lookup.argv.slice(1)).toEqual([
-        '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand',
-        Buffer.from(CODEX_APPX_QUERY, 'utf16le').toString('base64'),
-      ])
-      expect(lookup.stdio).toEqual({ stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' })
-      expect(absent.statusProcesses[0].terminate).toHaveBeenCalledOnce()
-      expect(absent.statusProcesses[0].waitForExit).toHaveBeenCalledOnce()
+      expect(absent.backend.spawn).toHaveBeenCalledTimes(2)
+      for (const [index, query] of [WINDOWS_PATH_QUERY, CODEX_APPX_QUERY].entries()) {
+        const lookup = vi.mocked(absent.backend.spawn).mock.calls[index][0]
+        expect(lookup.argv[0]).toMatch(/[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i)
+        expect(lookup.argv.slice(1)).toEqual([
+          '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand',
+          Buffer.from(query, 'utf16le').toString('base64'),
+        ])
+        expect(lookup.stdio).toEqual({ stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' })
+        expect(absent.statusProcesses[index].terminate).toHaveBeenCalledOnce()
+        expect(absent.statusProcesses[index].waitForExit).toHaveBeenCalledOnce()
+      }
     } else {
       expect(absent.backend.spawn).not.toHaveBeenCalled()
     }

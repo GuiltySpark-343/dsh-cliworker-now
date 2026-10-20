@@ -1,17 +1,38 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HARNESS_CONNECTION_ENV, readNativeHarnessConnection } from './native-harness-mcp.mjs'
+import { HARNESS_CONNECTION_ENV, readNativeHarnessConnection, createNativeHarnessClient } from './native-harness-mcp.mjs'
 
 const serverName = 'dsh_worker_tools'
 export const HARNESS_MCP_SERVER = serverName
+export const nativeHarnessExecutionReady = cli => ['codex', 'claude', 'opencode', 'mimo', 'pi', 'kimi', 'grok', 'qoder', 'qodercn', 'antigravity'].includes(cli)
+/** Only provider-reported, fully namespaced bridge tools may cross ACP approval.
+ * Titles and rawInput are presentation/model-controlled data, never authority.
+ * The Host still performs its own real approval for every tool execution.
+ */
+export async function nativeHarnessAcpApproval(config, params, signal) {
+  const connection = config.harnessTools ?? readNativeHarnessConnection()
+  if (!connection?.executionReady || connection.binding.cli !== config.cli) return undefined
+  const call = params?.toolCall
+  const candidates = [call?.name, call?._meta?.qoder?.toolName, call?._meta?.kimi?.toolName, call?._meta?.['x.ai']?.toolName]
+    .filter(value => typeof value === 'string' && value.length)
+  if (new Set(candidates).size !== 1) return undefined
+  const selected = params?.options?.find(option => option.kind === 'allow_once' && typeof option.optionId === 'string')
+  if (!selected) return undefined
+  const client = createNativeHarnessClient(connection)
+  const catalog = await client.request('acp-approval-catalogue', 'tools/list', {}, signal)
+  if (!Array.isArray(catalog?.tools)) return undefined
+  const authorized = catalog.tools.some(tool => typeof tool.name === 'string' && [
+    `mcp__${serverName}__${tool.name}`, `${serverName}.${tool.name}`, `${serverName}_${tool.name}`,
+  ].includes(candidates[0]))
+  return authorized ? selected.optionId : undefined
+}
 const reasons = {
   hermes: 'Hermes 当前安全隔离运行尚无已验证的临时 DSH 工具注入入口',
-  antigravity: 'Antigravity 当前运行尚无已验证的隔离 MCP 注入入口',
   omp: 'OMP 当前安装版在 --no-extensions 隔离模式下忽略显式扩展，尚无安全工具注入入口',
 }
 export function nativeHarnessToolCapability(cli, connection) {
   if (reasons[cli]) return { transport: false, ready: false, reason: reasons[cli] }
-  if (!['codex', 'claude', 'opencode', 'mimo', 'kimi', 'grok', 'zcode', 'pi', 'qoder'].includes(cli)) return { transport: false, ready: false, reason: '此 CLI 没有已确认的临时工具接入口' }
+  if (!['codex', 'claude', 'opencode', 'mimo', 'kimi', 'grok', 'zcode', 'pi', 'qoder', 'qodercn', 'antigravity'].includes(cli)) return { transport: false, ready: false, reason: '此 CLI 没有已确认的临时工具接入口' }
   if (!connection) return { transport: true, ready: false, reason: '当前运行尚未建立获准的 DSH 工具桥' }
   return { transport: true, ready: connection.executionReady === true, ...(connection.executionReady === true ? {} : { reason: '临时工具传输可配置，当前原生授权尚未核验' }) }
 }
@@ -23,7 +44,7 @@ export function buildNativeHarnessInjection({ cli, argv, env = {}, connection, n
   const privateEnv = { ...env, [HARNESS_CONNECTION_ENV]: JSON.stringify(connection), ELECTRON_RUN_AS_NODE: '1' }
   // Pi's bridge adds the explicit extension only after fetching its exact
   // tool names; keep this private connection out of its persisted request.
-  if (cli === 'pi') return { ...capability, argv: [...argv], env: privateEnv }
+  if (cli === 'pi' || cli === 'antigravity') return { ...capability, argv: [...argv], env: privateEnv }
   const command = { command: nodeExecutable, args: [mcpEntryPath] }
   const acpMcpServers = [{ name: serverName, ...command, env: [{ name: HARNESS_CONNECTION_ENV, value: JSON.stringify(connection) }, { name: 'ELECTRON_RUN_AS_NODE', value: '1' }] }]
   if (cli === 'codex') return { ...capability, argv: [...argv, '-c', `mcp_servers.${serverName}.command=${JSON.stringify(nodeExecutable)}`, '-c', `mcp_servers.${serverName}.args=${JSON.stringify([mcpEntryPath])}`, '-c', `mcp_servers.${serverName}.env_vars=${JSON.stringify([HARNESS_CONNECTION_ENV, 'ELECTRON_RUN_AS_NODE'])}`, ...(capability.ready ? ['-c', `mcp_servers.${serverName}.default_tools_approval_mode="approve"`] : [])], env: privateEnv }

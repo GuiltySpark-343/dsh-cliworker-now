@@ -4,6 +4,8 @@ interface ExternalRunTurnUsageBase {
   basis: 'external-run'
   runIds: readonly string[]
   label?: string
+  /** Confirmed run-local CLI/provider/model, independent of internal routing. */
+  displayRoutes?: readonly string[]
 }
 export interface NativeRunBuckets {
     uncachedInputTokens: number
@@ -15,7 +17,9 @@ export interface NativeRunBuckets {
 }
 export type ExternalRunTurnUsage = ExternalRunTurnUsageBase & (
   { usage: NativeRunBuckets; externalUsage?: never } |
-  { usage?: never; externalUsage: NativeUsageReport }
+  { usage?: never; externalUsage: NativeUsageReport } |
+  { usage?: never; externalUsage?: never; usageUnit: 'credits'; credits?: number } |
+  { usage?: never; externalUsage?: never; nativeUsage: true }
 )
 /** Missing keys preserve complete native response receipts; null marks known unavailable run totals. */
 export type ExternalTurnUsage = Readonly<Record<string, ExternalRunTurnUsage | null>>

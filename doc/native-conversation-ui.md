@@ -38,7 +38,7 @@ AGY 的 `input_tokens` 是未缓存输入，`cache_read_tokens` 为独立缓存�
 
 AGY 上下文只读当前 CLI conversation 对应本地数据库的原生 `gen_metadata`，取得最近一次请求的 `estimated_tokens_used`、`max_context_tokens` 及可用分类。它是 CLI 原生估算，不是累计计费用量。ContextMeter 需要已用量和正容量；分类是可选信息，缺少分类不会移除已有占用读数。读取失败或元数据不完整时保持缺失，具体 Desktop 验证范围以实施记录为准。
 
-附件和分支仍按真实支持范围限制并说明原因。加号保留原生可用指令菜单，附件尚未接通时显示“调用指令（附件不可用）”，不因此禁用整个菜单。指令弹窗由原生 controller 管理；尚未桥接的命令在 Host 返回具体错误，不调用未知模型路径。能力详情保留在任务选项中，不增加一排不可用按钮。
+附件菜单复用原生输入：macOS / Windows Desktop 普通文件以真实路径引用进入草稿，图片由显式 childImageUploads 开关和原生 File action 上传、保存历史，Host 按 CLI 转换内容块及路径；旧协议或失效附件仍返回真实原因。运行中附件保留原生队列，不转为纯文本引导；重试校验包含附件身份。分支仍受限。加号始终保留可用指令菜单；指令弹窗由原生 controller 管理，尚未桥接的命令在 Host 返回具体错误，不调用未知模型路径。能力详情保留在任务选项中，不增加一排不可用按钮。逐 CLI 接入见 [能力矩阵](cli-harness-capabilities.md)。
 
 ## 响应边界与单次用量
 

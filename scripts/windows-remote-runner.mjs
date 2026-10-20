@@ -4,7 +4,7 @@ import { createWriteStream } from 'node:fs'
 import { mkdir, readFile, writeFile, lstat, open, rm, symlink, readdir } from 'node:fs/promises'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { OWNER, MARKER, PNPM_VERSION, WINDOWS_TESTS, sha256, validRunId, validateRemoteRoot, validateSnapshot, validateArchiveEntries, assertNoLinksWithin, assertNoLinkAncestors } from './windows-remote-common.mjs'
+import { OWNER, MARKER, PNPM_VERSION, WINDOWS_TESTS, sha256, validRunId, validateRemoteRoot, validateSnapshot, validateArchiveEntries, runtimeManifestFromSnapshot, assertNoLinksWithin, assertNoLinkAncestors } from './windows-remote-common.mjs'
 
 export function isolatedEnvironment(base, run) {
   const env = {}
@@ -206,7 +206,7 @@ async function main() {
     const archivePath = join(run, 'plugin.tgz')
     const listing = await stage('package-list', tar, ['-tzf', archivePath], { capture: true })
     const verbose = await stage('package-entries', tar, ['-tvzf', archivePath], { capture: true })
-    validateArchiveEntries(listing, verbose)
+    validateArchiveEntries(listing, verbose, runtimeManifestFromSnapshot(snapshot))
     const artifact = join(run, 'artifact')
     await mkdir(artifact)
     await stage('package-unpack', tar, ['-xzf', archivePath, '-C', artifact])

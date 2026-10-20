@@ -1,6 +1,6 @@
 # 原生 CLI 的 Harness 工具与技能桥
 
-适用开发版本：v0.8.1。更新日期：2026-10-16。CLI 继续运行自己的 Agent、已选模型、思考强度及原生会话；Harness 提供真实子 Agent 身份、工具权限链和完整原生对话页。CLI Worker 通过宿主公开导航打开该直接子会话，保留父绑定和 `origin: subagent`；不在普通会话列表新增根会话。本文区分当前实现、模拟回归及此前冻结预览的真实证据。
+适用开发版本：v0.8.1。更新日期：2026-10-18。CLI 继续运行自己的 Agent、已选模型、思考强度及原生会话；Harness 提供真实子 Agent 身份、工具权限链和完整原生对话页。CLI Worker 通过宿主公开导航打开该直接子会话，保留父绑定和 `origin: subagent`；不在普通会话列表新增根会话。本文区分当前实现、模拟回归及此前冻结预览的真实证据。
 
 ## 能力与验收等级
 
@@ -12,13 +12,16 @@
 | Claude Code | 双向 stream-json / stdio | 临时 `--mcp-config`；`env` 用变量引用，参数不含连接令牌 | 仅 `mcp__dsh_worker_tools__*` 加入 `--allowedTools` | 参数、模拟 MCP 回归；尚需检查原生 init 中 server 状态与实际工具回执 |
 | OpenCode | 私有 serve HTTP + SSE | 合并本轮 `OPENCODE_CONFIG_CONTENT.mcp`，保留其它配置；同名 namespace 冲突拒绝 | 仅 `dsh_worker_tools_*` allow，原有 `* ask` 与原生工具限制保留 | 冻结预览包只读 canary 真实调用一次通过；续聊/工具取消已取证，整体还有父会话通知唤醒边界待修，见下文 |
 | 官方 MiMo Code | 私有 serve HTTP + SSE | 同上，使用其自身 `MIMOCODE_CONFIG_CONTENT`，不套用其它品牌环境变量 | 同 OpenCode 的精确桥 namespace 准入 | 官方 v0.1.15 schema 与模拟桥回归；本轮未新增真实模型调用工具验收 |
-| Kimi | ACP / stdio | `session/new`、`session/load` 的 `mcpServers` stdio 描述符 | 未准入执行；原生额外权限请求继续拒绝 | 已接入配置投影与定向回归；未证明当前原生权限模式允许该桥执行 |
-| Grok Build | ACP / stdio | 同 ACP 的 run 专属 stdio MCP 描述符 | 未准入执行；原生额外权限请求继续拒绝 | 已接入配置投影与定向回归；未做真实模型工具验收 |
+| Kimi | ACP / stdio | `session/new`、`session/load` 的 `mcpServers` stdio 描述符 | 本轮实时目录内精确结构化工具名可选 allow_once，Host 再逐次鉴权 | 配置和准入分支的模拟回归通过；真实模型工具调用待核验 |
+| Grok Build | ACP / stdio | 同 ACP 的 run 专属 stdio MCP 描述符 | 同 Kimi 的精确目录与一次准入 | 配置和准入分支的模拟回归通过；真实模型工具调用待核验 |
+| Qoder | ACP / stdio | 原生 session/new、load 的本轮 stdio MCP 描述符 | 同 Kimi 的精确目录与一次准入 | 结构化工具名及 prompt 附件回归通过；Windows 实际验收见 doc/tasks.md |
 | ZCode | app-server JSON-RPC / stdio | session create/resume 的 `mcpServers`；明确 `isolation=session` | 未准入执行；未知反向请求继续拒绝 | 安装版 schema 与定向回归；未做真实模型工具验收 |
 | Pi | `--mode rpc` | 保留 `--no-extensions`，只显式加载插件扩展；先读取获准 schema，再精确扩展 `--tools` | 只注册 run 目录内工具；每次调用使用原生 toolCallId，经 Host 执行 | 安装版 loader 无模型往返及冻结预览真实只读 canary 一轮均通过；真实 Host 调用 1 次 |
 | OMP | `--mode rpc` | 当前不可用；不移除 `--no-extensions` | 禁用，给出隔离模式忽略显式扩展的原因 | OMP 16.4.4 零 prompt `get_state` 正常退出，但未加载扩展、无桥 schema 请求；见下文 |
 | Hermes | 私有 gateway Runs HTTP + SSE | 当前 `HERMES_SAFE_MODE` 的隔离运行没有已核验的 run 专属注入方案 | 禁用并说明原因 | 不因普通 MCP 配置存在就解除当前隔离；未做真实模型工具验收 |
 | Antigravity | 双向 stream-json / stdio | 尚无已核验、保持当前配置隔离的临时 MCP 注入入口 | 禁用并说明原因 | stream-json 双向能力只证明任务通信，不能证明工具注入 |
+
+2026-10-18 的附件、平台及逐 CLI 当前状态统一见 [能力矩阵](cli-harness-capabilities.md)。下文冻结预览的真实 canary 属此前证据，不等于本次 Windows 已验证所有 CLI。
 
 此矩阵只描述新增 DSH 工具桥。CLI 自己的工具、既有登录、模型路由、严格引导或排队能力继续按各自协议处理；工具桥不会把双向 stdin 解释成当前轮引导。
 

@@ -13,6 +13,7 @@ import { assertPiOmpRefreshSources, assertPiOmpRefreshCache } from './pi-omp-ref
 import { createPiOmpControl, createNativeStopControl } from './pi-omp-control.mjs'
 import { buildNativeHarnessInjection } from './native-harness-injection.mjs'
 import type { NativeHarnessConnection } from './native-harness-tools.ts'
+import type { NativeAttachment } from './native-attachments.mjs'
 
 export type PiOmpCli = 'pi' | 'omp'
 export type PiOmpMetadataPhase = 'native-candidates' | 'account-scope'
@@ -30,6 +31,7 @@ export interface PiOmpInput extends PiOmpNativeOptions {
   preference: { model: string; effort: string }
   mode: TaskMode
   prompt: string
+  attachments?: readonly NativeAttachment[]
   conversationId?: string
   stateDirectory: string
   harnessTools?: NativeHarnessConnection

@@ -66,6 +66,16 @@ const article = (result: ReactTestRenderer, id: string) =>
   result.root.findAllByProps({ 'data-message-id': id })
 const reveal = (result: ReactTestRenderer, id: string) =>
   article(result, id)[0]!.findByProps({ className: 'cwn-message-tail' }).props['data-actions-reveal']
+
+it('shows credit usage on credit-billed replies, including unknown receipts (synthetic)', async () => {
+  const selected = { ...worker, preference: { ...worker.preference, cli: 'qoder' as const } }
+  const result = await render([row('r:assistant:1', 'assistant', '模拟回复', { providerCredits: 0.252595 })], selected)
+  const text = JSON.stringify(result.toJSON())
+  expect(text).toContain('积分用量 0.2526 积分')
+  expect(text).not.toContain('tok')
+  const unknown = await render([row('r:assistant:1', 'assistant', '模拟回复')], selected)
+  expect(JSON.stringify(unknown.toJSON())).toContain('积分用量 — 积分')
+})
 async function expandRows(result: ReactTestRenderer) {
   for (const node of result.root.findAll(
     (node) =>

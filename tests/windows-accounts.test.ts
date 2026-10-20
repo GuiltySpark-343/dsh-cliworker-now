@@ -136,10 +136,11 @@ async function configured(cli: CliId): Promise<boolean> {
       'authenticated'
     )
   if (cli === 'hermes') return (await readHermesAccount(config, signal())).state === 'authenticated'
-  if (cli === 'qoder')
+  if (cli === 'qoder' || cli === 'qodercn')
     return (
-      (await readQoderAccount('/synthetic/qoder.js', signal(), {
-        directory: join(root, '.qoder'),
+      (await readQoderAccount(`/synthetic/${cli}.js`, signal(), {
+        cli,
+        directory: join(root, cli === 'qodercn' ? '.qoder-cn' : '.qoder'),
         project,
         // Simulate only the SDK account_info response; the real reader still
         // checks Qoder's own live encrypted-user file before consulting it.
@@ -190,10 +191,11 @@ async function ownAccount(cli: CliId, identity = 'own'): Promise<string> {
       refresh_token: 'synthetic-refresh',
       expires_at: 4e9,
     })
-  } else if (cli === 'qoder') {
-    path = join(root, '.qoder/.auth/user')
+  } else if (cli === 'qoder' || cli === 'qodercn') {
+    const directory = join(root, cli === 'qodercn' ? '.qoder-cn' : '.qoder')
+    path = join(directory, '.auth/user')
     await write(path, `synthetic-encrypted-${key}`, true)
-    await write(join(root, '.qoder/.auth/machine_id'), 'synthetic-machine-identity', true)
+    await write(join(directory, '.auth/machine_id'), 'synthetic-machine-identity', true)
     qoderAccountInfo = { userId: identity, email: `${identity}@example.invalid` }
   } else if (cli === 'mimo') {
     path = join(root, '.mimocode-native/data/auth.json')

@@ -157,18 +157,19 @@ else{process.stdout.write(JSON.stringify(${JSON.stringify(catalog)}));process.ex
 else {
 if(scenario==='catalog-refresh'&&!existsSync(join(agent,'refreshed-model-registry.json')))process.exit(3);
 mkdirSync(join(agent,'sessions'),{recursive:true});
-const path=join(agent,'sessions','fixture.jsonl');const resumed=process.argv.includes(cli==='pi'?'--session':'--resume');
-if(resumed&&!existsSync(path))process.exit(2);
+let path=join(agent,'sessions','fixture.jsonl'),nativeSessionId='fixture-id';const resumed=process.argv.includes(cli==='pi'?'--session':'--resume');
+if(resumed){const flag=cli==='pi'?'--session':'--resume';path=process.argv[process.argv.indexOf(flag)+1];if(path.endsWith('fixture-fork.jsonl'))nativeSessionId='fixture-fork-id';if(!existsSync(path))process.exit(2);}
 writeFileSync(path,'SIMULATED SESSION\\n',{mode:0o600});
 writeFileSync(join(agent,'observed-argv.json'),JSON.stringify(process.argv.slice(2)),{mode:0o600});
 let model=${JSON.stringify(model)},thinkingLevel=scenario==='no-reasoning'?'off':'low',streaming=false,steers=[],steerIds=[];
 writeFileSync(join(agent,'observed-auth.json'),JSON.stringify({cnPresent:!!process.env.ZAI_CODING_CN_API_KEY,nativeFixture:process.env.ZHIPU_API_KEY==='SYNTHETIC_NATIVE_PROVIDER_ENV',unexpectedNativeKey:!!process.env.ZHIPU_API_KEY&&process.env.ZHIPU_API_KEY!=='SYNTHETIC_NATIVE_PROVIDER_ENV'&&process.env.ZHIPU_API_KEY!==${JSON.stringify(fixtureKey)}}),{mode:0o600});
-const state=()=>({sessionId:scenario==='identity'&&resumed?'changed':'fixture-id',sessionFile:path,model:scenario==='wrong-model'?{...model,id:'changed-native-model'}:model,thinkingLevel,isStreaming:streaming,pendingMessageCount:0});
+const state=()=>({sessionId:scenario==='identity'&&resumed?'changed':nativeSessionId,sessionFile:path,model:scenario==='wrong-model'?{...model,id:'changed-native-model'}:model,thinkingLevel,isStreaming:streaming,pendingMessageCount:0});
 const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
 const finishSteer=()=>{streaming=false;send({type:'message_end',message:{role:'assistant',provider:model.provider,model:model.id,content:[{type:'text',text:'GUIDED'}],stopReason:'stop'}});send({type:'agent_end'});if(cli==='pi')send({type:'agent_settled'})};
 if(cli==='omp')send({type:'ready'});
 const input=createInterface({input:process.stdin});
 input.on('line',line=>{const cmd=JSON.parse(line);if(cmd.type==='get_state'){send({id:cmd.id,type:'response',command:cmd.type,success:true,data:state()});return}
+if(cmd.type==='clone'){nativeSessionId='fixture-fork-id';path=join(agent,'sessions','fixture-fork.jsonl');writeFileSync(path,'SIMULATED CLONED SESSION\\n',{mode:0o600});writeFileSync(join(agent,'clone-observed.json'),'clone');send({id:cmd.id,type:'response',command:'clone',success:true,data:{cancelled:false}});return}
 if(cmd.type==='get_session_stats'){if(scenario==='usage-timeout')return;send({id:cmd.id,type:'response',command:cmd.type,success:scenario!=='usage-unavailable',data:{tokens:{input:7,output:3,cacheRead:2,cacheWrite:1,total:13},contextUsage:{tokens:10,contextWindow:128000,percent:0.0078125},sessionFile:'PRIVATE_PATH_MUST_NOT_LEAK'}});return}
 if(cmd.type==='set_model'){model={provider:cmd.provider,id:cmd.modelId};send({id:cmd.id,type:'response',command:cmd.type,success:true,data:model});return}
 if(cmd.type==='set_thinking_level'){thinkingLevel=cmd.level;send({id:cmd.id,type:'response',command:cmd.type,success:true});return}
@@ -1170,3 +1171,37 @@ probeRead(process.env.PI_CODING_AGENT_DIR+(${JSON.stringify(cli)}==='pi'?'/auth.
     }
   },
 )
+
+// 模拟 Pi clone 原生响应；首个正常运行仅建立模拟会话文件，不访问任何模型。
+it('模拟 Pi clone preserves the source mapping, persists the returned branch ID and rolls back only the clone', async () => {
+  const { input } = await fixture('pi')
+  expect((await launch(input)).code).toBe(0)
+  const prepared = await prepareConfirmed({ ...input, conversationId: 'fixture-id' })
+  const requestPath = prepared.argv.at(-1)!
+  const request = JSON.parse(await readFile(requestPath, 'utf8'))
+  const maps = join(request.stateDirectory, 'sessions')
+  const sourcePath = join(maps, createHash('sha256').update('fixture-id').digest('hex') + '.json')
+  const sourceBefore = await readFile(sourcePath, 'utf8')
+  await writeFile(requestPath, JSON.stringify({ ...request, forkOperation: 'fork' }), { mode: 0o600 })
+  const result = await exec(prepared.argv[0]!, prepared.argv.slice(1), { env: fixtureEnvironment(input.nativeHome, prepared.env), timeout: 10000 })
+  await prepared.cleanup()
+  const frames = result.stdout.trim().split('\n').map(line => JSON.parse(line))
+  expect(frames.find(frame => frame.record?.type === 'cliworker.fork_created')?.record.id).toBe('fixture-fork-id')
+  expect(frames.at(-1)).toMatchObject({ status: 'SUCCESS' })
+  expect(frames.some(frame => frame.type === 'event' && frame.event.kind === 'assistant')).toBe(false)
+  expect(await readFile(sourcePath, 'utf8')).toBe(sourceBefore)
+  const branchMap = join(maps, createHash('sha256').update('fixture-fork-id').digest('hex') + '.json')
+  const mapping = JSON.parse(await readFile(branchMap, 'utf8'))
+  expect(mapping.id).toBe('fixture-fork-id')
+  const rollback = await prepareConfirmed({ ...input, conversationId: 'fixture-fork-id' })
+  const rollbackPath = rollback.argv.at(-1)!
+  const rollbackRequest = JSON.parse(await readFile(rollbackPath, 'utf8'))
+  await writeFile(rollbackPath, JSON.stringify({ ...rollbackRequest, forkOperation: 'delete' }), { mode: 0o600 })
+  const removed = await exec(rollback.argv[0]!, rollback.argv.slice(1), { env: fixtureEnvironment(input.nativeHome, rollback.env), timeout: 10000 })
+  await rollback.cleanup()
+  expect(JSON.parse(removed.stdout.trim().split('\n').at(-1)!)).toMatchObject({ status: 'SUCCESS' })
+  await expect(stat(branchMap)).rejects.toThrow()
+  await expect(stat(mapping.path)).rejects.toThrow()
+  expect(await readFile(sourcePath, 'utf8')).toBe(sourceBefore)
+  expect((await launch({ ...input, conversationId: 'fixture-id' })).code).toBe(0)
+})

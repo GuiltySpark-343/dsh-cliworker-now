@@ -33,6 +33,15 @@ function snapshot(): WorkerSnapshot {
 }
 
 describe('faithful CLI statistics in native projection contracts', () => {
+  it('keeps Qoder credit billing explicit even while credits are missing or zero', () => {
+    for (const providerCredits of [undefined, 0, 0.252595]) {
+      const projection = nativeTelemetryProjections('qoder', { providerCredits }, undefined)
+      expect(projection.telemetryAvailability?.usageUnit).toBe('credits')
+      if (providerCredits === undefined) expect(projection.tokenUsage).toBeUndefined()
+      else expect(projection.tokenUsage).toMatchObject({ externalCredits: providerCredits })
+    }
+    expect(nativeTelemetryProjections('hermes', { providerCredits: 1 }).telemetryAvailability?.usageUnit).toBeUndefined()
+  })
   it('normalizes Codex aggregate input without counting its cache twice', () => {
     expect(nativeTokenUsage('codex', usage)).toEqual({
       uncachedInputTokens: 20,

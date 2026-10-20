@@ -6,6 +6,7 @@ import type { Worker, WorkerEvent } from '../shared/types.ts'
 import { cliOf } from '../shared/types.ts'
 import { nativeUsageReport, type NativeUsageReport } from '../shared/native-usage-report.ts'
 import { nativeTokenUsage } from '../shared/native-token-usage.ts'
+import { nativeModelDisplay } from '../shared/native-model-display.ts'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 
 const count = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
@@ -110,6 +111,7 @@ export function projectExternalTurnUsage(
   busy: boolean,
   events: readonly WorkerEvent[],
   readRunUsage: (runId: string) => TokenUsage | undefined,
+  readRunCredits?: (runId: string) => number | undefined,
 ): ExternalTurnUsage {
   const result: Record<string, ExternalRunTurnUsage | null> = {}
   if (!record || record.workerId !== worker.id || record.parentSessionId !== worker.parentSessionId ||
@@ -130,6 +132,26 @@ export function projectExternalTurnUsage(
   const ended = new Set(events.filter((event) => event.kind === 'status' && terminal(event.state ?? event.text)).map((event) => event.runId))
   for (const [turn, runIds] of groups) {
     if (conflicts.has(turn)) { result[String(turn)] = null; continue }
+    const displayRoutes = [...new Set(events.filter(event => runIds.has(event.runId)).map(event =>
+      nativeModelDisplay(cliOf(worker.preference), event.observedModel)).filter((value): value is string => value !== undefined))]
+    const identity = { basis: 'external-run' as const, runIds: [...runIds], label: 'CLI 运行合计',
+      ...(displayRoutes.length ? { displayRoutes } : {}) }
+    if (['qoder', 'qodercn'].includes(cliOf(worker.preference)) && readRunCredits) {
+      let credits: number | undefined = 0
+      for (const runId of runIds) {
+        if ((worker.runId === runId && busy) || !(ended.has(runId) || (worker.runId === runId && terminal(worker.status)))) {
+          credits = undefined; break
+        }
+        let value: number | undefined
+        try { value = readRunCredits(runId) } catch { /* Unreadable is unknown. */ }
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || !Number.isFinite(credits + value)) {
+          credits = undefined; break
+        }
+        credits += value
+      }
+      result[String(turn)] = { ...identity, usageUnit: 'credits', ...(credits === undefined ? {} : { credits }) }
+      continue
+    }
     const receipts: NativeRunBuckets[] = []
     const reports: NativeUsageReport[] = []
     let partial = false
@@ -141,7 +163,7 @@ export function projectExternalTurnUsage(
       try { receipt = readRunUsage(runId) } catch { invalid = true; continue }
       // Qoder's ACP all-zero triple is a redacted/ambiguous counter. Do not
       // fall back to the native adapter's zero placeholder on older turns.
-      if (!receipt) { if (cliOf(worker.preference) === 'qoder') invalid = true; else missing = true; continue }
+      if (!receipt) { if (['qoder', 'qodercn'].includes(cliOf(worker.preference))) invalid = true; else missing = true; continue }
       if (receipt.scope !== 'run') { invalid = true; continue }
       const buckets = nativeTokenUsage(cliOf(worker.preference), receipt)
       const report = nativeUsageReport(cliOf(worker.preference), receipt)
@@ -157,7 +179,10 @@ export function projectExternalTurnUsage(
       receipts.push({ ...buckets, totalTokens, ...(receipt.reasoning !== undefined ? { reasoningTokens: receipt.reasoning } : {}) })
     }
     if (invalid) { result[String(turn)] = null; continue }
-    if (missing) continue
+    if (missing) {
+      if (displayRoutes.length) result[String(turn)] = { ...identity, nativeUsage: true }
+      continue
+    }
     if (partial) {
       if (reports.length !== runIds.size || reports.some((report) => report.inputBasis !== reports[0]!.inputBasis)) {
         result[String(turn)] = null; continue
@@ -175,7 +200,7 @@ export function projectExternalTurnUsage(
       }
       if (Object.entries(externalUsage).some(([key, value]) => key !== 'inputBasis' && key !== 'orchestration' && !count(value)) ||
         Object.values(externalUsage.orchestration ?? {}).some((value) => !count(value))) { result[String(turn)] = null; continue }
-      result[String(turn)] = { basis: 'external-run', runIds: [...runIds], externalUsage, label: 'CLI 运行合计' }
+      result[String(turn)] = { ...identity, externalUsage }
       continue
     }
     if (receipts.length !== runIds.size) continue
@@ -187,7 +212,7 @@ export function projectExternalTurnUsage(
       if (receipts.every((receipt) => receipt[field] !== undefined))
         usage[field] = receipts.reduce((sum, receipt) => sum + receipt[field]!, 0)
     if (!Object.values(usage).every(count)) { result[String(turn)] = null; continue }
-    result[String(turn)] = { basis: 'external-run', runIds: [...runIds], usage, label: 'CLI 运行合计' }
+    result[String(turn)] = { ...identity, usage }
   }
   return result
 }

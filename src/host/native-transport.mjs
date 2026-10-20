@@ -230,7 +230,7 @@ export function createNativeIO(config, emit, signal, onNativeStderr = () => {}) 
           error: String(error.message ?? error).slice(0, 4096),
         }
       if (!result) result = { type: 'result', status: 'ERROR', response, resultScope: 'run', error: '原生协议结束但没有轮次终态' }
-      if (!sessionId && result.status !== 'ERROR') throw failure('Native result has no session')
+      if (!sessionId && !config.forkOperation && result.status !== 'ERROR') throw failure('Native result has no session')
       output(result)
       closed = true
     },

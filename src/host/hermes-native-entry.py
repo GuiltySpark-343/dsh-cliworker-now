@@ -10,6 +10,7 @@ from pathlib import Path
 import contextlib
 import logging
 import runpy
+import re
 import stat
 import sys
 
@@ -87,6 +88,12 @@ def enter(release_holder):
         except Exception:
             # Unsupported/failed observation must not repeat or fail execution.
             pass
+    # A Windows venv launcher can have a different PID from this interpreter.
+    # Report only to the owning bridge's pipe; the nonce is not an API secret
+    # and is removed before any native plugin/child can inherit it.
+    pid_nonce = os.environ.pop("CLIWORKER_HERMES_GATEWAY_NONCE", "")
+    if arguments[:2] == ["gateway", "run"] and re.fullmatch(r"[0-9a-f]{32}", pid_nonce):
+        print(f"CLIWORKER_HERMES_GATEWAY_PID {pid_nonce} {os.getpid()}", flush=True)
     from hermes_cli.main import main
     raise SystemExit(main())
 

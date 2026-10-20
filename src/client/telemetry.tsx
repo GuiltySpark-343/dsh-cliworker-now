@@ -3,23 +3,29 @@ import { compactTokens, type Telemetry, type TokenUsage } from '../shared/teleme
 import type { Worker } from '../shared/types.ts'
 import { StatPopover } from './stat-popover.tsx'
 
-export function UsageIndicator({ usage, reply = false }: { usage?: TokenUsage; reply?: boolean }) {
+export function UsageIndicator({ usage, reply = false, providerCredits, creditsBased = false }: {
+  usage?: TokenUsage; reply?: boolean; providerCredits?: number; creditsBased?: boolean
+}) {
   const scope = {
     response: '本次回复',
     run: '本轮任务',
     session: 'CLI 会话累计',
     reported: 'CLI 报告值（不跨轮重复相加）',
   }
-  const total = usage ? `${compactTokens(usage.total)} tok` : '— tok'
+  const credits = typeof providerCredits === 'number' && Number.isFinite(providerCredits) && providerCredits >= 0 ? providerCredits : undefined
+  const creditUsage = creditsBased || credits !== undefined
+  const total = creditUsage
+    ? `${credits === undefined ? '—' : credits > 0 && credits < 0.0001 ? '<0.0001' : credits.toLocaleString('zh-CN', { maximumFractionDigits: 4 })} 积分`
+    : usage ? `${compactTokens(usage.total)} tok` : '— tok'
   return (
     <StatPopover
-      label={reply ? `用量 ${total}` : total}
+      label={reply ? `${creditUsage ? '积分用量' : '用量'} ${total}` : total}
       className={`cwn-stat cwn-usage${reply ? ' cwn-reply-usage' : ''}`}
       trigger={
         <>
           <IconDatabaseOutlineRegular size={14} />
           <span>
-            {reply ? '用量 ' : ''}
+            {reply ? creditUsage ? '积分用量 ' : '用量 ' : ''}
             {total}
           </span>
         </>
@@ -28,12 +34,13 @@ export function UsageIndicator({ usage, reply = false }: { usage?: TokenUsage; r
       <div className="cwn-stat-title">
         <span>
           <IconDatabaseOutlineRegular size={14} />
-          Token 用量
+          {creditUsage ? '积分用量' : 'Token 用量'}
         </span>
-        <span>{usage ? `${usage.total.toLocaleString('en-US')} tok` : '—'}</span>
+        <span>{creditUsage ? credits?.toLocaleString('zh-CN', { maximumFractionDigits: 12 }) ?? '—' : usage ? `${usage.total.toLocaleString('en-US')} tok` : '—'}</span>
       </div>
       <div className="cwn-stat-rule" />
-      {usage ? (
+      {credits !== undefined && <dl className="cwn-stat-details"><dt>本轮积分</dt><dd>{credits.toLocaleString('zh-CN', { maximumFractionDigits: 12 })}</dd></dl>}
+      {creditUsage ? null : usage ? (
         <dl className="cwn-stat-details">
           <dt>统计范围</dt>
           <dd>{scope[usage.scope]}</dd>
@@ -57,7 +64,7 @@ export function UsageIndicator({ usage, reply = false }: { usage?: TokenUsage; r
           )}
         </dl>
       ) : (
-        <p>CLI 尚未提供可核验的用量。</p>
+        <dl className="cwn-stat-details"><dt>用量</dt><dd>—</dd></dl>
       )}
     </StatPopover>
   )
@@ -74,8 +81,10 @@ export function contextFigures(telemetry?: Telemetry) {
   const used = count(telemetry?.contextUsed),
     rawCapacity = count(telemetry?.contextCapacity)
   const capacity = rawCapacity !== undefined && rawCapacity > 0 ? rawCapacity : undefined
-  const percent =
-    used !== undefined && capacity !== undefined && capacity > 0
+  const nativeRatio = telemetry?.contextRatio
+  const percent = typeof nativeRatio === 'number' && Number.isFinite(nativeRatio) && nativeRatio >= 0 && nativeRatio <= 1
+    ? Math.round(nativeRatio * 1000) / 10
+    : used !== undefined && capacity !== undefined && capacity > 0
       ? Math.min(100, Math.round((used / capacity) * 100))
       : undefined
   const rows = contextRows.map((row) => ({ ...row, value: count(telemetry?.contextBreakdown?.[row.key]) }))
@@ -93,7 +102,7 @@ export function contextFigures(telemetry?: Telemetry) {
 }
 /** rc.2 ContextMeter presentation, driven exclusively by this Worker's evidence. */
 export function ContextDetails({ telemetry }: { telemetry?: Telemetry }) {
-  const { used, capacity, percent, rows, complete, segments } = contextFigures(telemetry)
+  const { used, capacity, percent, rows, segments } = contextFigures(telemetry)
   const source = [
     telemetry?.contextSource,
     telemetry?.contextCapacitySource,
@@ -101,16 +110,6 @@ export function ContextDetails({ telemetry }: { telemetry?: Telemetry }) {
   ]
     .filter(Boolean)
     .join('；')
-  const missing =
-    used === undefined && capacity === undefined
-      ? 'CLI 未提供上下文占用与容量。'
-      : used === undefined
-        ? 'CLI 未提供上下文占用。'
-        : capacity === undefined
-          ? 'CLI 未提供上下文容量。'
-          : !complete
-            ? 'CLI 未提供完整上下文分项。'
-            : undefined
   return (
     <>
       <div className="cwn-context-header" title={source || undefined}>
@@ -149,7 +148,6 @@ export function ContextDetails({ telemetry }: { telemetry?: Telemetry }) {
           </div>
         ))}
       </dl>
-      {missing && <p className="cwn-context-source">{missing}</p>}
     </>
   )
 }
@@ -170,7 +168,7 @@ export function ComposerTelemetry({
         <span className={`cwn-dot ${worker.status}`} />
         <span>{statusLabel}</span>
       </span>
-      <UsageIndicator usage={telemetry?.usage} />
+      <UsageIndicator usage={telemetry?.usage} providerCredits={telemetry?.providerCredits} creditsBased={worker.preference.cli === 'qoder' || worker.preference.cli === 'qodercn'} />
       <StatPopover
         key={worker.id}
         label={label}

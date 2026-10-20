@@ -1,11 +1,16 @@
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { HarnessConversationApi } from './harness-conversation-types.ts'
+import { forkWorkerConversation, readWorkerForkState, writeWorkerForkState, type NativeForkCut, type ForkHistory, type WorkerForkState } from './worker-fork.ts'
 import { readClaudeOwnRoute, prepareClaudeWorkerLaunch } from './claude-own-route.ts'
 import { extendedLaunch, isExtendedCli } from './extended-adapters.ts'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { StringDecoder } from 'node:string_decoder'
 import { z } from 'zod'
 import type { SubprocessHandle } from '@deepseek-ai/dsh-subprocess'
 import {
   active,
+  CLI_IDS,
   CLI_LABELS,
   CLI_SHORT_NAMES,
   LEGACY_ACCOUNT_RECORD_NOTICE,
@@ -64,9 +69,12 @@ import { AgyProtocol } from './protocol.ts'
 import { FollowupQueue } from './followup-queue.ts'
 import { supportsWorkerNativeSteering, type RunningMessageMode } from '../shared/running-message.ts'
 import type { NativeHarnessConnection } from './native-harness-tools.ts'
+import type { NativeAttachment } from './native-attachments.mjs'
 import { workerPermissionOptions } from '../shared/worker-permissions.ts'
+import { GOAL_OBJECTIVE_LIMIT, type WorkerGoal } from '../shared/conversation-features.ts'
 
 interface Task {
+  attachments?: readonly NativeAttachment[]
   worker: Worker
   prompt: string
   userPrompt: string
@@ -136,12 +144,14 @@ export class WorkerRuntime {
   private telemetryReader = new TelemetryReader()
   private supplementalContextReader = new NativeSupplementalContextReader(() => { if (!this.disposed) this.changed() })
   private nativeTimelineReprojector = new NativeTimelineReprojector()
+  private readonly stagedForks = new Map<string, Worker>()
   private tasks = new Map<string, Task>()
   private queue: Task[] = []
   private running = new Set<Task>()
   private listeners = new Set<() => void>()
   private disposed = false
   private blocked?: string
+  private catalogBlocked = new Map<CliId, string>()
   private followups: FollowupQueue
   private followupDispatches = new Map<
     string,
@@ -222,6 +232,12 @@ export class WorkerRuntime {
         cleanup === 'invalid'
           ? '进程清理隔离记录无法核验，已暂停任务和账号操作'
           : '无法确认 CLI 进程已清理，已暂停后续派遣，请先核查进程退出状态'
+    for (const cli of CLI_IDS) {
+      const state = storage.cleanupBlockState(cli)
+      if (state !== 'none') this.catalogBlocked.set(cli, state === 'invalid'
+        ? `${CLI_LABELS[cli]} 元数据清理记录无法核验，已暂停此 CLI`
+        : `${CLI_LABELS[cli]} 元数据进程清理尚未确认，已暂停此 CLI`)
+    }
   }
   /** Explicit construction policy is overridable by legacy protocol regression fixtures. */
   protected initialTransport(cli: CliId): string | undefined {
@@ -323,8 +339,7 @@ export class WorkerRuntime {
       return await prepare(AbortSignal.any([signal, entry.controller.signal]), entry.id)
     } catch (error) {
       if (error instanceof ProcessCleanupUnconfirmedError) {
-        this.markCleanupBlocked(error)
-        this.drain()
+        this.blockCatalogOnCleanup(cliOf(worker.preference), error)
       }
       throw error
     } finally {
@@ -480,8 +495,14 @@ export class WorkerRuntime {
       if (!submitted || rejected) task.steering.delete(requestId)
       if (submitted && rejected) this.followups.forgetRejectedSteering(worker.id, requestId)
       if (error instanceof ProcessCleanupUnconfirmedError) {
-        this.markCleanupBlocked(error)
-        task.controller.abort(error)
+        if (!submitted) {
+          task.admissionFailure ??= { error }
+          this.blockCatalogOnCleanup(cliOf(worker.preference), error)
+        }
+        else this.markCleanupBlocked(error)
+        // The live task still owns its own range. Its later cleanup must not
+        // reclassify this account-query failure as an unknown task-range fault.
+        task.controller.abort(!submitted ? new Error(error.message, { cause: error }) : error)
         this.drain()
       }
       if (submitted && !rejected)
@@ -841,6 +862,7 @@ export class WorkerRuntime {
   assertCliEnabled(cli: CliId): void {
     if (this.disposed) throw new Error('插件正在关闭')
     if (this.blocked) throw new Error(this.blocked)
+    if (this.catalogBlocked.has(cli)) throw new Error(this.catalogBlocked.get(cli))
     if (isRetiredCli(cli)) throw new Error(RETIRED_HARNESS_NOTICE)
     if (!this.storage.cliSettings().enabled[cli])
       throw new Error(`${CLI_LABELS[cli]} 已关闭，请先在 CLI Worker 设置中开启`)
@@ -848,6 +870,18 @@ export class WorkerRuntime {
   blockOnCleanup(error: ProcessCleanupUnconfirmedError): void {
     this.markCleanupBlocked(error)
     this.drain()
+  }
+  /** Read-only metadata owns one CLI's account/cache, never another CLI's admission. */
+  blockCatalogOnCleanup(cli: CliId, error: ProcessCleanupUnconfirmedError): void {
+    let message = `${CLI_LABELS[cli]} 元数据进程清理尚未确认，已暂停此 CLI：${error.message}`
+    this.catalogBlocked.set(cli, message)
+    try { this.storage.blockCleanup(cli) }
+    catch {
+      message += '；清理隔离记录保存失败'
+      this.catalogBlocked.set(cli, message)
+    }
+    this.drain()
+    this.changed()
   }
   private markCleanupBlocked(error: unknown): void {
     this.blocked = `无法确认 CLI 进程已清理，已暂停后续派遣：${error instanceof Error ? error.message : String(error)}`
@@ -871,6 +905,7 @@ export class WorkerRuntime {
   assertAccountIdle(cli: string): void {
     if (this.disposed) throw new Error('插件正在关闭')
     if (this.blocked) throw new Error(this.blocked)
+    if (this.catalogBlocked.has(cli as CliId)) throw new Error(this.catalogBlocked.get(cli as CliId))
     if (
       [...this.storage.workers.values()].some(
         (worker) => !!this.busyReason(worker) && cliOf(worker.preference) === cli,
@@ -879,7 +914,7 @@ export class WorkerRuntime {
       throw new Error('此 CLI 还有运行或排队中的任务，请等待结束后再修改此 CLI 设置或管理账号')
   }
   get(parent: string, id: string): Worker {
-    const worker = this.storage.workers.get(id)
+    const worker = this.storage.workers.get(id) ?? this.stagedForks.get(id)
     if (!worker || worker.parentSessionId !== parent)
       throw new Error('Worker does not belong to this conversation')
     if (worker.archivedAt) throw new Error('此任务已删除，请先恢复')
@@ -946,10 +981,62 @@ export class WorkerRuntime {
     this.storage.workers.set(id, worker)
     this.changed()
   }
+  private goalWorker(parent: string, id: string, expectedRevision: number): Worker {
+    if (this.disposed) throw new Error('CLI Worker is shutting down')
+    const worker = this.get(parent, id)
+    if ((worker.goal?.revision ?? worker.goalRevision ?? 0) !== expectedRevision)
+      throw new Error('目标已被修改，请刷新后重试')
+    return worker
+  }
+  setWorkerGoal(parent: string, id: string, objective: string, expectedRevision: number): WorkerGoal {
+    const worker = this.goalWorker(parent, id, expectedRevision)
+    const clean = objective.trim()
+    if (!clean.length || clean.length > GOAL_OBJECTIVE_LIMIT)
+      throw new Error(`目标须包含 1–${GOAL_OBJECTIVE_LIMIT} 个字符`)
+    return this.saveWorkerGoal(worker, {
+      objective: clean,
+      status: worker.goal?.status ?? 'active',
+      revision: expectedRevision + 1,
+      updatedAt: new Date().toISOString(),
+    })
+  }
+  setWorkerGoalStatus(parent: string, id: string, status: WorkerGoal['status'], expectedRevision: number): WorkerGoal {
+    const worker = this.goalWorker(parent, id, expectedRevision)
+    if (!worker.goal) throw new Error('当前会话尚未设置目标')
+    if (status !== 'active' && status !== 'paused') throw new Error('目标状态无效')
+    return this.saveWorkerGoal(worker, {
+      ...worker.goal,
+      status,
+      revision: expectedRevision + 1,
+      updatedAt: new Date().toISOString(),
+    })
+  }
+  private saveWorkerGoal(worker: Worker, goal: WorkerGoal): WorkerGoal {
+    this.storage.save({ ...worker, goal, goalRevision: goal.revision })
+    // Keep the in-flight task's shared reference current across process events.
+    worker.goal = goal
+    worker.goalRevision = goal.revision
+    this.storage.workers.set(worker.id, worker)
+    this.changed()
+    return structuredClone(goal)
+  }
+  clearWorkerGoal(parent: string, id: string, expectedRevision: number): void {
+    const worker = this.goalWorker(parent, id, expectedRevision)
+    // Advance past the cleared revision; a new goal never reuses it.
+    const updated = { ...worker, goalRevision: expectedRevision + 1 }
+    delete updated.goal
+    this.storage.save(updated)
+    delete worker.goal
+    worker.goalRevision = updated.goalRevision
+    this.storage.workers.set(worker.id, worker)
+    this.changed()
+  }
   /** Management cannot hide an in-flight task or a process whose cleanup is unresolved. */
   private assertManagedIdle(worker: Worker, priorityId?: string): void {
     if (this.disposed) throw new Error('CLI Worker is shutting down')
     if (this.blocked) throw new Error(this.blocked)
+    const blocked = this.catalogBlocked.get(cliOf(worker.preference))
+    if (blocked) throw new Error(blocked)
     if (
       active(worker.status) ||
       this.tasks.has(worker.id) ||
@@ -983,6 +1070,163 @@ export class WorkerRuntime {
     this.storage.save(restored)
     this.changed()
   }
+  private nativeStateDirectory(worker: Worker): string {
+    const state = readWorkerForkState(this.storage.directory, worker.id)
+    return join(this.storage.directory, 'native', state?.nativeStateWorkerId ?? worker.id)
+  }
+
+  private forkRunSource(worker: Worker, runId: string): { workerId: string; conversationId: string } {
+    let current = worker.id, conversationId = worker.conversationId!
+    const visited = new Set<string>()
+    while (!existsSync(join(this.storage.directory, `${current}.${runId}.raw.jsonl`))) {
+      if (visited.has(current)) throw new Error('分支历史来源循环')
+      visited.add(current)
+      const state = readWorkerForkState(this.storage.directory, current)
+      if (!state?.historySourceWorkerId || !state.historySourceConversationId) throw new Error('原生完成轮日志缺失，无法映射分支截点')
+      current = state.historySourceWorkerId
+      conversationId = state.historySourceConversationId
+    }
+    return { workerId: current, conversationId }
+  }
+
+  /** Metadata only, through the same admitted account, argv builder and owned process backend. */
+  private async forkNative(worker: Worker, cut: NativeForkCut, signal: AbortSignal) {
+    const cli = cliOf(worker.preference)
+    const sourceId = worker.conversationId!
+    const operation = async (conversationId: string, action: 'fork' | 'delete', ownSignal: AbortSignal) => {
+      const executable = await resolveCliExecutable(cli, this.backend, this.config, ownSignal)
+      const nativeState = this.nativeStateDirectory(worker)
+      mkdirSync(nativeState, { recursive: true, mode: 0o700 })
+      const prompt = '分支元数据操作（不发送模型任务）'
+      const launch = isExtendedCli(cli)
+        ? await extendedLaunch(cli, executable, worker.project, worker.preference, worker.mode, prompt, nativeState,
+            this.config, conversationId,
+            (argv, env) => captureCatalogMetadata(this.backend, this.config, argv, worker.project, ownSignal, env),
+            { backend: this.backend, signal: ownSignal, graceMs: this.config.graceMs }, true)
+        : await prepareNativeWorker({ argv: workerArguments(executable, worker.project, worker.preference, worker.mode,
+            prompt, this.config.timeoutMs, conversationId, true),
+            env: { ...firstPartyEnvironment(cli), ...(['qoder', 'qodercn'].includes(cli) ? qoderEnvironment(cli as 'qoder' | 'qodercn') : {}) } },
+            { cli, project: worker.project, preference: worker.preference, mode: worker.mode,
+              prompt, conversationId, stateDirectory: nativeState }, this.config)
+      let output = '', problem: unknown
+      let handle: SubprocessHandle | undefined
+      let createdId: string | undefined
+      let cleanupUnconfirmed = false
+      let readers: Promise<void>[] = []
+      try {
+        const path = launch.argv.at(-1)!
+        const request = JSON.parse(readFileSync(path, 'utf8'))
+        writeFileSync(path, JSON.stringify({ ...request, forkOperation: action, forkAt: cut }), { mode: 0o600 })
+        if ('activate' in launch && typeof launch.activate === 'function') await launch.activate()
+        handle = this.backend.spawn({ argv: launch.argv, cwd: worker.project, env: launch.env,
+          stdio: { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' }, graceMs: this.config.graceMs,
+          signal: AbortSignal.any([ownSignal, AbortSignal.timeout(30000)]) })
+        void handle.done.catch(() => undefined)
+        const decoder = new StringDecoder('utf8')
+        let bytes = 0
+        const consume = async (stream: SubprocessHandle['stdout'], keep: boolean) => {
+          if (!stream) return
+          for await (const chunk of stream) {
+            bytes += Buffer.byteLength(chunk)
+            if (bytes > this.config.maxRunBytes) throw new Error('分支元数据输出超过限制')
+            if (keep) output += decoder.write(chunk)
+          }
+          if (keep) output += decoder.end()
+        }
+        readers = [consume(handle.stdout, true), consume(handle.stderr, false)]
+        await Promise.all(readers)
+        const result = await handle.done
+        if (result.exitCode !== 0) throw new Error('原生分支元数据操作失败')
+        ownSignal.throwIfAborted()
+      } catch (error) { problem = error }
+      finally {
+        if (handle) {
+          try { handle.terminate(); if (!await handle.waitForExit()) throw new ProcessCleanupUnconfirmedError() }
+          catch (error) {
+            cleanupUnconfirmed = true
+            this.blockCatalogOnCleanup(cli, new ProcessCleanupUnconfirmedError())
+            problem = new AggregateError([problem, error].filter(Boolean), '分支元数据进程清理未确认；保留私有准备资源')
+          }
+        }
+        await Promise.allSettled(readers)
+        try { if (!cleanupUnconfirmed) await launch.cleanup() } catch (error) { problem = new AggregateError([problem, error].filter(Boolean), '分支元数据准备资源清理失败') }
+      }
+      const frames: any[] = []
+      for (const line of output.split('\n').filter(Boolean)) {
+        try { frames.push(JSON.parse(line)) } catch (error) { problem ??= error }
+      }
+      const created = frames.filter((frame) => frame.type === 'native' && frame.record?.type === 'cliworker.fork_created')
+      if (created.length === 1 && typeof created[0].record.id === 'string' && created[0].record.id !== sourceId)
+        createdId = created[0].record.id
+      const terminal = frames.filter((frame) => frame.type === 'result').at(-1)
+      if (terminal?.status !== 'SUCCESS') problem ??= new Error(terminal?.error ?? '缺少原生分支完成回执')
+      if (action === 'fork' && !createdId) problem ??= new Error('原生分支没有返回新的会话 ID')
+      if (problem) {
+        if (createdId && action === 'fork' && cleanupUnconfirmed)
+          throw new AggregateError([problem], `分支进程清理未确认；原生资源 ${createdId} 保留待人工核查`)
+        if (createdId && action === 'fork') {
+          try { await operation(createdId, 'delete', AbortSignal.timeout(30000)) }
+          catch (cleanup) { throw new AggregateError([problem, cleanup], `分支失败；原生资源 ${createdId} 清理说明：${String(cleanup)}`) }
+        }
+        throw problem
+      }
+      const notes = frames.filter((frame) => frame.type === 'native' && frame.record?.type === 'cliworker.fork_cleanup')
+      if (notes.length) throw new Error(notes.map((frame) => frame.record.note).join('；'))
+      return createdId
+    }
+    const binding = this.storage.accountBinding(worker.id)
+    if (!binding || binding !== await readCliAccountBinding(cli, this.backend, this.config, worker.project, signal))
+      throw new Error(ACCOUNT_CHANGED)
+    const conversationId = (await operation(sourceId, 'fork', signal))!
+    return { conversationId, rollback: async () => {
+      try { await operation(conversationId, 'delete', AbortSignal.timeout(30000)) }
+      catch (error) { throw new Error(`原生分支 ${conversationId} 清理说明：${String(error)}`, { cause: error }) }
+    } }
+  }
+
+  async forkWorker(parent: Agent, id: string, atMessageId: string, bridge: HarnessConversationApi, signal: AbortSignal) {
+    const source = this.get(parent.id, id)
+    // Paused queued followups still belong to this conversation and prohibit a fork.
+    if (this.busyReason(source) || this.followups.list(id).length)
+      throw new Error('请等待当前运行结束后再分支')
+    return this.prepareFollowup(parent.id, id, signal, async (ownSignal) => {
+      const created: string[] = []
+      try {
+        return await forkWorkerConversation({
+          worker: source, workers: () => [...this.storage.workers.values(), ...this.stagedForks.values()],
+          assertIdle: () => { ownSignal.throwIfAborted() },
+          history: (at) => bridge.forkHistory(source, at, ownSignal),
+          raw: (runId) => readFileSync(join(this.storage.directory, `${this.forkRunSource(source, runId).workerId}.${runId}.raw.jsonl`), 'utf8'),
+          rawSourceId: (runId) => this.forkRunSource(source, runId).conversationId,
+          native: (cut) => this.forkNative(source, cut, ownSignal),
+          stage: (worker) => { this.stagedForks.set(worker.id, worker); created.push(worker.id) },
+          child: (worker, history) => bridge.createFork(parent, worker, history, ownSignal),
+          publish: (worker, history, state) => this.publishFork(source, worker, history, state),
+          remove: (worker) => {
+            this.storage.workers.delete(worker.id)
+            this.stagedForks.delete(worker.id)
+            for (const suffix of ['.worker.json', '.events.jsonl', '.account-binding.json', '.fork.json'])
+              rmSync(join(this.storage.directory, worker.id + suffix), { force: true })
+          },
+          changed: () => this.changed(),
+          nativeStateWorkerId: readWorkerForkState(this.storage.directory, id)?.nativeStateWorkerId,
+        }, atMessageId, ownSignal)
+      } finally { for (const workerId of created) this.stagedForks.delete(workerId) }
+    })
+  }
+
+  private publishFork(source: Worker, worker: Worker, history: ForkHistory, state?: WorkerForkState) {
+    const events = this.storage.history(source.id)
+    const cutoff = events.findLastIndex((event) => event.runId === history.runId && event.kind !== 'submission')
+    if (cutoff < 0) throw new Error('分支运行历史缺失')
+    writeFileSync(join(this.storage.directory, `${worker.id}.events.jsonl`), events.slice(0, cutoff + 1)
+      .map((event) => JSON.stringify(event)).join('\n') + '\n', { mode: 0o600, flag: 'wx' })
+    const binding = this.storage.accountBinding(source.id)
+    if (binding) this.storage.bindAccount(worker.id, binding)
+    writeWorkerForkState(this.storage.directory, worker.id, state)
+    this.storage.save(worker)
+  }
+
   snapshot(parent: string, selected?: string): WorkerSnapshot {
     const owned = [...this.storage.workers.values()]
       .filter((w) => w.parentSessionId === parent)
@@ -1107,6 +1351,15 @@ export class WorkerRuntime {
     ).runUsage
     return receipt?.scope === 'run' ? receipt : undefined
   }
+  /** Independent exact-run credits, using the same bounded native identity checks. */
+  runCredits(parent: string, id: string, runId: string) {
+    const worker = this.get(parent, id)
+    if (!['qoder', 'qodercn'].includes(cliOf(worker.preference)) || !/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(runId) ||
+      (worker.runId === runId && this.busyReason(worker))) return
+    if (!this.storage.history(id).some(event => event.runId === runId && event.kind === 'status' &&
+      ['completed', 'failed', 'interrupted'].includes(event.state ?? ''))) return
+    return this.runTelemetry(worker, runId).providerCredits
+  }
   history(parent: string, workerId: string, anchor: string, direction: string): HistoryPage {
     const worker = this.get(parent, workerId)
     if (direction !== 'before' && direction !== 'after') throw new Error('Invalid history direction')
@@ -1186,12 +1439,15 @@ export class WorkerRuntime {
     queuedAdmission?: QueuedAdmission,
     preparationId?: string,
     submissionId?: string,
+    attachments?: readonly NativeAttachment[],
   ): Submission {
     if (this.disposed) throw new Error('CLI Worker is shutting down')
     if (this.blocked) throw new Error(this.blocked)
     if (!prompt.trim() || prompt.length > 100_000) throw new Error('Task must contain 1–100000 characters')
     const canonical = projectDirectory(project)
     const previous = previousId ? this.get(parent, previousId) : undefined
+    if (attachments?.length && previous?.transport === 'legacy')
+      throw new Error('旧协议会话尚未接通附件，请使用原生 CLI 会话')
     if (previous && submissionId) {
       z.uuid().parse(submissionId)
       if (this.directMessageReceipt(parent, previous.id, prompt, submissionId))
@@ -1211,7 +1467,7 @@ export class WorkerRuntime {
     if (previous && (active(previous.status) || this.tasks.has(previous.id)))
       throw new Error('This CLI conversation already has a running or queued turn')
     const freshAfterStop = previous && !previous.conversationId && isUserInterrupted(previous)
-    if (previous && !previous.conversationId && !freshAfterStop)
+    if (previous && !previous.conversationId && !readWorkerForkState(this.storage.directory, previous.id)?.sourceConversationId && !freshAfterStop)
       throw new Error('No CLI conversation_id was received; start a new worker')
     if (previous && !this.storage.accountBinding(previous.id) && !freshAfterStop)
       throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
@@ -1225,7 +1481,7 @@ export class WorkerRuntime {
         })
     if (cliOf(effective) === 'kimi' && (previous?.mode ?? mode) === 'plan' && !nativeAdmission)
       throw new Error('Kimi 非交互模式不支持只读派遣')
-    if (cliOf(effective) === 'qoder' && (previous?.mode ?? mode) === 'plan')
+    if (['qoder', 'qodercn'].includes(cliOf(effective)) && (previous?.mode ?? mode) === 'plan')
       throw new Error('Qoder 当前 ACP 未公开只读规划模式，无法安全执行规划任务')
     if (
       previous &&
@@ -1324,9 +1580,16 @@ export class WorkerRuntime {
     const admission = authorizedBinding
       ? Promise.resolve(authorizedBinding)
       : readCliAccountBinding(cliOf(effective), this.backend, this.config, canonical, controller.signal)
+    // Freeze the goal when this turn is admitted, so edits during preparation
+    // or execution affect only later turns. Every CLI shares this prompt.
+    const forkSource = readWorkerForkState(this.storage.directory, worker.id)?.sourceConversationId
+    const cliPrompt = promptForWorker(forkSource ? { ...worker, conversationId: forkSource } : worker, prompt)
     const task: Task = {
       worker,
-      prompt: promptForWorker(worker, prompt),
+      ...(attachments?.length ? { attachments: structuredClone(attachments) } : {}),
+      prompt: worker.goal?.status === 'active'
+        ? `【当前目标】\n${worker.goal.objective}\n【目标结束】\n\n${cliPrompt}`
+        : cliPrompt,
       userPrompt: prompt,
       controller,
       done,
@@ -1346,8 +1609,8 @@ export class WorkerRuntime {
     void admission.catch((error) => {
       if (!controller.signal.aborted) task.admissionFailure = { error }
       if (error instanceof ProcessCleanupUnconfirmedError) {
-        this.markCleanupBlocked(error)
-        this.drain()
+        task.admissionFailure ??= { error }
+        this.blockCatalogOnCleanup(cliOf(worker.preference), error)
       }
     })
     if (task.priority) {
@@ -1381,7 +1644,7 @@ export class WorkerRuntime {
   }
   stop(parent: string, id: string): Promise<Worker> {
     this.get(parent, id)
-    const throughGeneration = this.followups.advanceGeneration(id)
+    const { previous: throughGeneration, persistenceError } = this.followups.revokeGeneration(id)
     for (const reservation of this.reservations.get(id)?.values() ?? [])
       if (reservation.generation <= throughGeneration) reservation.controller.abort(new UserStoppedError())
     const message = this.latestPriority.get(id)
@@ -1395,7 +1658,15 @@ export class WorkerRuntime {
       operations = this.stopOperations.get(id) ?? new Set<symbol>()
     operations.add(token)
     this.stopOperations.set(id, operations)
-    const stopped = this.stopCurrent(parent, id, false, throughGeneration)
+    let stopped = this.stopCurrent(parent, id, false, throughGeneration)
+    if (persistenceError)
+      // Cancellation has already started. The in-memory generation already
+      // revokes earlier items, so only this Stop reports the failed write.
+      stopped = stopped.then(() => {
+        throw new Error(`任务已完成停止清理，但待发送消息状态持久化失败：${String(persistenceError)}`, {
+          cause: persistenceError,
+        })
+      })
     this.changed()
     return stopped.finally(() => {
       operations.delete(token)
@@ -1426,7 +1697,8 @@ export class WorkerRuntime {
     const task = this.tasks.get(id)
     if (!task)
       return Promise.all([preparation?.done, dispatch]).then(() => {
-        if (preparation && this.blocked) throw new Error(this.blocked)
+        const blocked = this.blocked ?? this.catalogBlocked.get(cliOf(worker.preference))
+        if (preparation && blocked) throw new Error(blocked)
         return before
       })
     let persistenceError: unknown
@@ -1470,16 +1742,20 @@ export class WorkerRuntime {
     try {
       await task.admission
     } catch (error) {
-      if (error instanceof ProcessCleanupUnconfirmedError) this.markCleanupBlocked(error)
+      if (error instanceof ProcessCleanupUnconfirmedError) {
+        task.admissionFailure ??= { error }
+        this.blockCatalogOnCleanup(cliOf(task.worker.preference), error)
+      }
     }
     const priorFailure = task.admissionFailure
+    const blocked = this.blocked ?? this.catalogBlocked.get(cliOf(task.worker.preference))
     const stopped =
       status === 'interrupted' && !priorFailure && task.controller.signal.reason instanceof UserStoppedError
     this.finish(
       task,
-      this.blocked || priorFailure ? 'failed' : status,
-      this.blocked ?? (priorFailure ? String(priorFailure.error) : stopped ? undefined : reason),
-      stopped && !this.blocked ? 'user' : undefined,
+      blocked || priorFailure ? 'failed' : status,
+      blocked ?? (priorFailure ? String(priorFailure.error) : stopped ? undefined : reason),
+      stopped && !blocked ? 'user' : undefined,
     )
   }
   private drain(): void {
@@ -1493,6 +1769,13 @@ export class WorkerRuntime {
       return
     }
     for (const task of [...this.queue]) {
+      const blocked = this.catalogBlocked.get(cliOf(task.worker.preference))
+      if (blocked) {
+        this.queue.splice(this.queue.indexOf(task), 1)
+        task.worker.status = 'stopping'
+        void this.finishQueued(task, 'failed', blocked)
+        continue
+      }
       if (this.running.size >= this.config.maxConcurrent) break
       const conflicts = (other: Task) =>
         other.worker.project === task.worker.project &&
@@ -1578,6 +1861,8 @@ export class WorkerRuntime {
     let stderr = ''
     let totalBytes = 0
     const timeout = setTimeout(() => controller.abort(new Error('任务超时')), this.config.timeoutMs)
+    const pendingFork = readWorkerForkState(this.storage.directory, worker.id)
+    const resumeConversation = worker.conversationId ?? pendingFork?.sourceConversationId
     const expectedConversation = worker.conversationId
     const nativeTransport = usesNativeBridge(worker)
     const createProtocol = nativeTransport
@@ -1601,8 +1886,13 @@ export class WorkerRuntime {
       (id) => {
         if (expectedConversation && id !== expectedConversation)
           throw new Error('Resume conversation_id does not match the requested conversation')
+        if (pendingFork?.sourceConversationId === id) throw new Error('原生分支没有创建新的会话 ID')
         worker.conversationId = id
         this.storage.save(worker)
+        if (pendingFork?.sourceConversationId) {
+          const { sourceConversationId: _source, sourceMessageId: _cut, ...settled } = pendingFork
+          writeWorkerForkState(this.storage.directory, worker.id, settled)
+        }
       },
       this.config.maxLineBytes,
       worker.preference.model,
@@ -1613,6 +1903,7 @@ export class WorkerRuntime {
     let summaryConflict: string | undefined
     let release: (() => void | Promise<void>) | undefined
     let quiescent = false
+    let metadataReady = false
     try {
       const admitted = await task.admission
       controller.signal.throwIfAborted()
@@ -1638,10 +1929,12 @@ export class WorkerRuntime {
       )
       controller.signal.throwIfAborted()
       await assertFirstPartyConfiguration(cliOf(worker.preference), worker.project, controller.signal)
+      metadataReady = true
       harnessLease = await this.harnessPreparation?.(worker, controller.signal, { submissionId: task.submissionId })
-      const executionConfig = harnessLease?.connection
-        ? { ...this.config, harnessTools: harnessLease.connection }
-        : this.config
+      const executionConfig = { ...this.config,
+        ...(task.attachments?.length ? { attachments: task.attachments } : {}),
+        ...(harnessLease?.connection ? { harnessTools: harnessLease.connection } : {}),
+      }
       worker.status = 'running'
       this.storage.save(worker)
       this.changed()
@@ -1672,9 +1965,9 @@ export class WorkerRuntime {
             worker.preference,
             worker.mode,
             task.prompt,
-            join(this.storage.directory, 'native', worker.id),
+            this.nativeStateDirectory(worker),
             executionConfig,
-            expectedConversation,
+            resumeConversation,
             (argv, env) =>
               captureCatalogMetadata(this.backend, this.config, argv, worker.project, controller.signal, env),
             {
@@ -1694,7 +1987,7 @@ export class WorkerRuntime {
                 worker.mode,
                 task.prompt,
                 this.config.timeoutMs,
-                expectedConversation,
+                resumeConversation,
                 nativeTransport,
               ),
               this.storage.directory,
@@ -1704,7 +1997,7 @@ export class WorkerRuntime {
               env: {
                 ...firstPartyEnvironment(cliOf(worker.preference)),
                 ...agyBackgroundEnvironment(cliOf(worker.preference)),
-                ...(cliOf(worker.preference) === 'qoder' ? qoderEnvironment() : {}),
+                ...(['qoder', 'qodercn'].includes(cliOf(worker.preference)) ? qoderEnvironment(cliOf(worker.preference) as 'qoder' | 'qodercn') : {}),
               },
               argv: workerArguments(
                 executable,
@@ -1713,14 +2006,14 @@ export class WorkerRuntime {
                 worker.mode,
                 task.prompt,
                 this.config.timeoutMs,
-                expectedConversation,
+                resumeConversation,
                 nativeTransport,
               ),
             }
       // Preparation can already own a private credential snapshot. Retain its
       // cleanup before any later filesystem or native-bridge setup can fail.
       release = 'cleanup' in launch ? launch.cleanup : undefined
-      const nativeState = join(this.storage.directory, 'native', worker.id)
+      const nativeState = this.nativeStateDirectory(worker)
       if (nativeTransport) mkdirSync(nativeState, { recursive: true, mode: 0o700 })
       const execution =
         nativeTransport && !isExtendedCli(cliOf(worker.preference))
@@ -1733,7 +2026,9 @@ export class WorkerRuntime {
                 mode: worker.mode,
                 prompt: task.prompt,
                 conversationId: expectedConversation,
+                ...(pendingFork?.sourceConversationId ? { forkSource: { conversationId: pendingFork.sourceConversationId, messageId: pendingFork.sourceMessageId! } } : {}),
                 stateDirectory: nativeState,
+                ...(task.attachments?.length ? { attachments: task.attachments } : {}),
                 ...(harnessLease?.connection ? { harnessTools: harnessLease.connection } : {}),
                 ...(selectedClaudeRoute?.source
                   ? {
@@ -1818,14 +2113,16 @@ export class WorkerRuntime {
       // permission check must leave the original outbox message recoverable.
       const capture = async (stream: SubprocessHandle['stdout'], isError: boolean) => {
         if (!stream) throw new Error('CLI pipe unavailable')
+        const decoder = new StringDecoder('utf8')
         for await (const chunk of stream) {
           totalBytes += Buffer.byteLength(chunk)
           if (totalBytes > this.config.maxRunBytes)
             throw new Error('CLI output exceeded the configured per-run limit')
           appendFileSync(this.storage.rawPath(worker) + (isError ? '.stderr' : ''), chunk, { mode: 0o600 })
-          if (isError) stderr = (stderr + String(chunk)).slice(-8192)
+          if (isError) stderr = (stderr + decoder.write(chunk)).slice(-8192)
           else protocol.feed(chunk)
         }
+        if (isError) stderr = (stderr + decoder.end()).slice(-8192)
       }
       readers = [capture(handle.stdout, false), capture(handle.stderr, true)]
       await Promise.all(readers)
@@ -1870,7 +2167,10 @@ export class WorkerRuntime {
             task.nativeStopRequested &&
             (error instanceof UserStoppedError || String(error).includes('任务已停止'))
           ))
-      if (error instanceof ProcessCleanupUnconfirmedError) this.markCleanupBlocked(error)
+      if (error instanceof ProcessCleanupUnconfirmedError) {
+        if (!metadataReady) this.blockCatalogOnCleanup(cliOf(worker.preference), error)
+        else this.markCleanupBlocked(error)
+      }
     } finally {
       clearTimeout(timeout)
       task.steer = undefined
@@ -1954,10 +2254,14 @@ export class WorkerRuntime {
     ])
     const interruptions = [...this.priorityRunners.values()]
     await Promise.allSettled(
-      [...workers].map((id) => {
-        const worker = this.storage.workers.get(id)!
-        return this.stop(worker.parentSessionId, id)
-      }),
+      // A synchronous failure in one stop must not abort the others or skip
+      // releasing the store below.
+      [...workers].map((id) =>
+        Promise.resolve().then(() => {
+          const worker = this.storage.workers.get(id)!
+          return this.stop(worker.parentSessionId, id)
+        }),
+      ),
     )
     await Promise.allSettled(interruptions)
     await Promise.allSettled([...this.followupRuns])

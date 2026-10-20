@@ -108,16 +108,19 @@ describe('run-owned native provider context relay', () => {
     expect(JSON.stringify(f.records)).not.toMatch(/private-|malformed JSON|transformed main/)
   })
   it('rejects an unowned loopback path and closes upstream work on caller abort', async () => {
-    let forwarded = 0, closed = false
-    const upstream = await provider((req, _res) => { forwarded++; req.on('close', () => { closed = true }) })
+    let forwarded = 0, notifyForwarded!: () => void, notifyClosed!: () => void
+    const forwardedRequest = new Promise<void>(resolve => { notifyForwarded = resolve })
+    const upstreamClosed = new Promise<void>(resolve => { notifyClosed = resolve })
+    const upstream = await provider((req, _res) => { forwarded++; req.once('close', notifyClosed); notifyForwarded() })
     const f = await relay(upstream.base)
     const unowned = new URL(f.value.baseURL); unowned.pathname = '/SIMULATED-unowned'
     const rejected = await rawRequest(unowned.href, body)
     expect(rejected.status).toBe(404); expect(forwarded).toBe(0)
     const request = httpRequest(f.value.baseURL + '/chat/completions', { method: 'POST', headers }, () => {})
     request.on('error', () => {}); request.write('{"SIMULATED":"partial request"}')
-    await new Promise(resolve => setTimeout(resolve, 20)); request.destroy()
-    await new Promise(resolve => setTimeout(resolve, 20))
-    expect(forwarded).toBe(1); expect(closed).toBe(true)
+    await forwardedRequest
+    request.destroy()
+    await upstreamClosed
+    expect(forwarded).toBe(1)
   })
 })

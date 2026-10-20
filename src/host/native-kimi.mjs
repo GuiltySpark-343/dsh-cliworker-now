@@ -23,3 +23,8 @@ export const runNativeKimi = (config, io) => {
     onResult: (result, sessionId, nativeIo) => usage.finish(result, sessionId, nativeIo),
   })
 }
+
+export async function forkNativeKimi(config, io) {
+  const { forkNativeAcp } = await import('./native-acp.mjs')
+  return forkNativeAcp(config, io, kimiAcpArgv(config))
+}

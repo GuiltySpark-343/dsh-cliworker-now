@@ -17841,6 +17841,7 @@ window.__ModuleLoader__.load({
 				variant: hero ? "hero" : "composer",
 				...props.composerPresentation === void 0 ? {} : { composerPresentation: props.composerPresentation },
 				...props.commandSource === void 0 ? {} : { commandSource: props.commandSource },
+				...props.childImageUploads === void 0 ? {} : { childImageUploads: props.childImageUploads },
 				...inert ? {
 					disabled: true,
 					placeholder: t("placeholder.workspace"),
@@ -18488,7 +18489,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:packages/client/ui-conversation/src/client/skeleton/ContextMeter.module.css.mjs
-		const css$2 = ".nTfM7W_root{flex:none;display:inline-flex}.nTfM7W_trigger{border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-tertiary);font-family:inherit;font-size:var(--dsh-content-font-size-secondary,13px);font-variant-numeric:tabular-nums;line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));white-space:nowrap;cursor:pointer;background:0 0;border:none;flex:none;align-items:center;gap:6px;padding:1px 8px;display:inline-flex}.nTfM7W_trigger:hover,.nTfM7W_trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.nTfM7W_track{fill:none;stroke:var(--dsw-alias-border-l3);stroke-width:2px}.nTfM7W_fill{fill:none;stroke:var(--dsw-alias-label-tertiary);stroke-width:2px;stroke-linecap:round}.nTfM7W_panel{z-index:1100;box-sizing:border-box;border-radius:var(--dsw-radius-lg);background:var(--dsw-specific-menu);width:min(264px,100vw - 24px);backdrop-filter:var(--dsw-menu-backdrop-filter);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);color:var(--dsw-alias-label-secondary);cursor:default;border:0;padding:12px;font-size:12px;line-height:20px;position:fixed}.nTfM7W_header{align-items:center;gap:6px;display:flex}.nTfM7W_figures{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary);margin-left:auto;font-weight:500}.nTfM7W_percent{color:var(--dsw-alias-label-primary);font-weight:500}.nTfM7W_headline{color:var(--dsw-alias-label-tertiary)}.nTfM7W_headline:empty{display:none}.nTfM7W_bar{corner-shape:round;background:var(--dsw-alias-interactive-bg-hover);border-radius:999px;gap:1px;height:4px;margin:10px 0 12px;display:flex;overflow:hidden}.nTfM7W_segment{background:var(--meter-tint,var(--dsw-alias-label-tertiary));border-radius:1px;flex:none;min-width:2px;height:100%}.nTfM7W_swatch{background:var(--meter-tint);vertical-align:baseline;border-radius:2px;width:8px;height:8px;margin-right:6px;display:inline-block}.nTfM7W_colorSystem{--meter-tint:var(--dsw-static-neutral-bluish-400)}.nTfM7W_colorTools{--meter-tint:#a78bfa}.nTfM7W_colorMessages{--meter-tint:var(--dsw-static-blue-450)}.nTfM7W_rows{margin:6px 0 0}.nTfM7W_row{justify-content:space-between;align-items:center;gap:12px;padding:2px 0;display:flex}.nTfM7W_row dt{color:var(--dsw-alias-label-secondary)}.nTfM7W_row dd{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary);margin:0}";
+		const css$2 = ".nTfM7W_root{flex:none;display:inline-flex}.nTfM7W_trigger{border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-tertiary);font-family:inherit;font-size:var(--dsh-content-font-size-secondary,13px);font-variant-numeric:tabular-nums;line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));white-space:nowrap;cursor:pointer;background:0 0;border:none;flex:none;align-items:center;gap:6px;padding:1px 8px;display:inline-flex}.nTfM7W_trigger:hover,.nTfM7W_trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.nTfM7W_track{fill:none;stroke:var(--dsw-alias-border-l3);stroke-width:2px}.nTfM7W_fill{fill:none;stroke:var(--dsw-alias-label-tertiary);stroke-width:2px;stroke-linecap:round}.nTfM7W_panel{z-index:1100;box-sizing:border-box;border-radius:var(--dsw-radius-lg);background:var(--dsw-specific-menu);width:min(264px,100vw - 24px);backdrop-filter:var(--dsw-menu-backdrop-filter);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);color:var(--dsw-alias-label-secondary);cursor:default;border:0;padding:12px;font-size:12px;line-height:20px;position:fixed}.nTfM7W_header{align-items:center;gap:6px;display:flex}.nTfM7W_figures{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary);margin-left:auto;font-weight:500}.nTfM7W_percent{color:var(--dsw-alias-label-primary);font-weight:500}.nTfM7W_headline{color:var(--dsw-alias-label-tertiary)}.nTfM7W_headline:empty{display:none}.nTfM7W_bar{corner-shape:round;background:var(--dsw-alias-interactive-bg-hover);border-radius:999px;gap:1px;height:4px;margin:10px 0 8px;display:flex;overflow:hidden}.nTfM7W_segment{background:var(--meter-tint,var(--dsw-alias-label-tertiary));border-radius:1px;flex:none;min-width:2px;height:100%}.nTfM7W_swatch{background:var(--meter-tint);vertical-align:baseline;border-radius:2px;width:8px;height:8px;margin-right:6px;display:inline-block}.nTfM7W_colorSystem{--meter-tint:var(--dsw-static-neutral-bluish-400)}.nTfM7W_colorTools{--meter-tint:#a78bfa}.nTfM7W_colorMessages{--meter-tint:var(--dsw-static-blue-450)}.nTfM7W_rows{margin:0}.nTfM7W_row{justify-content:space-between;align-items:center;gap:12px;padding:2px 0;display:flex}.nTfM7W_row dt{color:var(--dsw-alias-label-secondary)}.nTfM7W_row dd{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary);margin:0}";
 		const tagId$2 = "@deepseek-ai/dsh-client-ui-conversation/ContextMeter.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$2) + "]") === null) {
 			const tag = document.createElement("style");
@@ -18622,7 +18623,7 @@ window.__ModuleLoader__.load({
 								r: RADIUS
 							})
 						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("context.unknown") })]
-					}), open && (0, react_dom.createPortal)(/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					}), open && (0, react_dom.createPortal)(/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						ref: panelRef,
 						className: ContextMeter_module_css_default.panel,
 						role: "dialog",
@@ -18632,17 +18633,13 @@ window.__ModuleLoader__.load({
 							left: 0,
 							top: 0
 						},
-						children: [
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-								className: ContextMeter_module_css_default.header,
-								children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-									className: ContextMeter_module_css_default.headline,
-									children: t("context.unknown")
-								})
-							}),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: t(`context.availability.${availability.state}`) }),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: t(`context.availability.${availability.reason}`) })
-						]
+						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							className: ContextMeter_module_css_default.header,
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								className: ContextMeter_module_css_default.headline,
+								children: t("context.unknown")
+							})
+						})
 					}), document.body)]
 				});
 			}
@@ -18654,8 +18651,7 @@ window.__ModuleLoader__.load({
 				...row,
 				tokens: tokenCount(composition?.[row.key]) ? composition[row.key] : void 0
 			}));
-			const knownRows = rows.filter((row) => row.tokens !== void 0).length;
-			const breakdownTotal = knownRows === ROWS.length ? rows.reduce((sum, row) => sum + row.tokens, 0) : void 0;
+			const breakdownTotal = rows.filter((row) => row.tokens !== void 0).length === ROWS.length ? rows.reduce((sum, row) => sum + row.tokens, 0) : void 0;
 			const complete = breakdownTotal !== void 0 && Number.isSafeInteger(breakdownTotal);
 			const compositionApproximate = external?.breakdown?.estimated === false ? "" : "~";
 			const segments = (!complete || breakdownTotal === 0 ? [{
@@ -18743,7 +18739,6 @@ window.__ModuleLoader__.load({
 								style: { width: `${segment.width}%` }
 							}, segment.key))
 						}),
-						context === null && nativeRatio !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: t("context.ratioOnly") }),
 						(breakdown !== void 0 || external !== void 0) && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("dl", {
 							className: ContextMeter_module_css_default.rows,
 							children: rows.map((row) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -18753,8 +18748,7 @@ window.__ModuleLoader__.load({
 									"aria-hidden": true
 								}), t(row.label)] }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("dd", { children: row.tokens === void 0 ? "—" : `${compositionApproximate}${formatTokens(row.tokens, t)}` })]
 							}, row.key))
-						}),
-						external !== void 0 && !complete && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: t(knownRows === 0 ? "context.compositionMissing" : knownRows === ROWS.length ? "context.compositionInvalid" : "context.compositionPartial") })
+						})
 					]
 				}), document.body)]
 			});
@@ -18854,7 +18848,7 @@ window.__ModuleLoader__.load({
 		* The no-session state renders the SAME div inert as the Workspace-picker
 		* trigger instead of a parallel tree.
 		*/
-		const InputBar = (0, react.memo)(function InputBar({ useSession, useInput, inputActions, keyboard, addFiles, removeAttachment, resolveDraftAttachments, retryFileUpload, toggleCommandMenu, stop, t, renderSlot, useBusyEnter, useFileUploads, useNotices, useLexicon, useMenuLauncher, useStopShortcut, useProjection, sessionId, variant, disabled: inert = false, blocked, composerPresentation = "default", commandSource, workspacePickerOpen = false, onRequestWorkspace, placeholder, accessory }) {
+		const InputBar = (0, react.memo)(function InputBar({ useSession, useInput, inputActions, keyboard, addFiles, removeAttachment, resolveDraftAttachments, retryFileUpload, toggleCommandMenu, stop, t, renderSlot, useBusyEnter, useFileUploads, useNotices, useLexicon, useMenuLauncher, useStopShortcut, useProjection, sessionId, variant, disabled: inert = false, blocked, composerPresentation = "default", commandSource, childImageUploads = false, workspacePickerOpen = false, onRequestWorkspace, placeholder, accessory }) {
 			const input = useInput((s) => s);
 			const notice = useNotices((s) => s);
 			const busyEnter = useBusyEnter((s) => s);
@@ -19162,7 +19156,7 @@ window.__ModuleLoader__.load({
 											ref: fileInputRef,
 											type: "file",
 											multiple: true,
-											disabled: subagent !== null,
+											disabled: subagent !== null && !(continuable && childImageUploads),
 											hidden: true,
 											onChange: onPickFiles
 										}),

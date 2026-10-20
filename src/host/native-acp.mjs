@@ -1,7 +1,18 @@
 // ACP is JSON-RPC 2.0 over NDJSON. Kimi and Grok retain their own config wire.
-import { nativeHarnessMcpServers } from './native-harness-injection.mjs'
+import { nativeHarnessMcpServers, nativeHarnessAcpApproval } from './native-harness-injection.mjs'
+import { nativeAttachmentInput } from './native-attachments.mjs'
 export const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 export const nonempty = (value) => typeof value === 'string' && value.trim().length > 0
+
+/** ACP image blocks require the agent's advertised prompt capability. Other
+ * agents receive validated local image paths, without a claim of model vision. */
+export async function nativeAcpAttachmentPrompt(config, agentCapabilities, signal) {
+  const attachments = config.attachments ?? []
+  if (agentCapabilities?.promptCapabilities?.image === true || !attachments.some(item => item.kind === 'image'))
+    return nativeAttachmentInput('acp', config.prompt, attachments, signal)
+  const text = await nativeAttachmentInput('text', config.prompt, attachments.filter(item => item.kind === 'image'), signal)
+  return nativeAttachmentInput('acp', text, attachments.filter(item => item.kind !== 'image'), signal)
+}
 
 /** Remove only known per-turn arguments; retain executable/launcher and other global options. */
 export function replaceNativeArguments(argv, pairs, switches, tail) {
@@ -74,7 +85,7 @@ export async function runNativeAcp(config, io, settings) {
       detail: thought, state: 'COMPLETED' })
     thought = ''
   }
-  const receive = (message) => {
+  const receive = async (message) => {
     io.native(message)
     if (!isRecord(message) || message.jsonrpc !== '2.0') {
       fail('Invalid ACP JSON-RPC envelope')
@@ -87,6 +98,11 @@ export async function runNativeAcp(config, io, settings) {
     }
     if (message.id !== undefined) {
       if (message.method === 'session/request_permission') {
+        if (active && !ended && message.params?.sessionId === sessionId) {
+          const approved = await nativeHarnessAcpApproval(config, message.params, io.signal)
+          if (approved) return peer.send({ jsonrpc: '2.0', id: message.id,
+            result: { outcome: { outcome: 'selected', optionId: approved } } })
+        }
         if (active && message.params?.sessionId === sessionId) {
           fail('CLI 请求的额外权限已拒绝')
           io.event({ kind: 'diagnostic', text: 'CLI 额外权限请求已拒绝' })
@@ -217,6 +233,8 @@ export async function runNativeAcp(config, io, settings) {
       { jsonrpc: true },
     )
     if (initialized?.protocolVersion !== 1) throw new Error('Unsupported ACP protocol version')
+    if (settings.agentName && initialized.agentInfo?.name !== settings.agentName)
+      throw new Error(`${settings.name} 原生程序身份不匹配，请检查 CLI 路径`)
     let state
     if (config.conversationId) {
       if (initialized.agentCapabilities?.loadSession !== true)
@@ -262,7 +280,7 @@ export async function runNativeAcp(config, io, settings) {
       'session/prompt',
       {
         sessionId,
-        prompt: [{ type: 'text', text: config.prompt }],
+        prompt: await nativeAcpAttachmentPrompt(config, initialized.agentCapabilities, io.signal),
       },
       { jsonrpc: true, timeoutMs: config.timeoutMs },
     )
@@ -298,4 +316,32 @@ export async function runNativeAcp(config, io, settings) {
       await peer.close()
     }
   }
+}
+
+/** Standard ACP session/fork, confirmed against Kimi and Qoder implementations. */
+export async function forkNativeAcp(config, io, argv) {
+  const peer = await io.openStdio(argv, { env: config.env, cwd: config.project })
+  const unsubscribe = peer.onMessage((message) => {
+    if (message.id !== undefined && message.method)
+      return peer.send({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: '分支不接受交互请求' } })
+  })
+  try {
+    const initialized = await peer.request('initialize', { protocolVersion: 1,
+      clientCapabilities: {}, clientInfo: { name: 'dsh-cliworker-now', version: '0.8.1' } }, { jsonrpc: true })
+    const capabilities = initialized?.agentCapabilities?.sessionCapabilities
+    const operation = config.forkOperation === 'delete' ? 'delete' : 'fork'
+    if (!capabilities || !Object.hasOwn(capabilities, operation))
+      throw new Error(`当前 CLI 未确认原生 session/${operation} 能力`)
+    const result = await peer.request(`session/${operation}`, {
+      sessionId: config.conversationId, cwd: config.project, mcpServers: [],
+    }, { jsonrpc: true })
+    if (operation === 'fork') {
+      if (typeof result?.sessionId !== 'string' || !result.sessionId.trim() || result.sessionId === config.conversationId)
+        throw new Error('ACP 分支回执没有新的原生会话 ID')
+      io.native({ type: 'cliworker.fork_created', id: result.sessionId })
+      if (Object.hasOwn(capabilities, 'close'))
+        await peer.request('session/close', { sessionId: result.sessionId }, { jsonrpc: true })
+    }
+    io.result('SUCCESS', '')
+  } finally { unsubscribe(); await peer.close() }
 }

@@ -297,9 +297,9 @@ async function material(
   selectedClaudeRoute?: ClaudeOwnRoute,
 ): Promise<BindingMaterial> {
   const home = homedir()
-  if (cli === 'qoder') {
+  if ((cli === 'qoder' || cli === 'qodercn')) {
     const executable = await resolveCliExecutable(cli, backend, config, signal)
-    return readQoderAccountBindingMaterial(executable, signal, { backend, config, project })
+    return readQoderAccountBindingMaterial(executable, signal, { cli, backend, config, project })
   }
   if (cli === 'antigravity') {
     await assertAgyNativeAccountRoute(signal, home)

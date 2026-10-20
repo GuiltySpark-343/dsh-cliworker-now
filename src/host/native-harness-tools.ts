@@ -278,3 +278,33 @@ export async function createNativeHarnessTools(options: NativeHarnessToolsOption
   if (options.signal?.aborted) await close()
   return { connection, capabilities: { transport: true, ready: options.executionReady === true, toolCount: initialTools.size, skills: !!options.skills, ...(options.executionReady === true ? {} : { reason: '已具备临时工具桥入口，原生工具授权尚未核验' }) }, close }
 }
+
+/**
+ * A lease is owned from the moment it is created. Until the caller receives the
+ * returned handle, any publication failure closes the listening bridge and
+ * restores the child presentation before the original error is reported.
+ */
+export async function adoptNativeHarnessLease<T extends { connection: unknown; close(): Promise<void> }>(
+  lease: T,
+  resetPresentation: () => void,
+  publish: () => void,
+): Promise<{ connection: T['connection']; close(): Promise<void> }> {
+  const release = async () => {
+    try {
+      await lease.close()
+    } finally {
+      resetPresentation()
+    }
+  }
+  try {
+    publish()
+  } catch (error) {
+    try {
+      await release()
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], '工具桥发布失败，且清理未确认')
+    }
+    throw error
+  }
+  return { connection: lease.connection, close: release }
+}

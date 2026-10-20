@@ -28,6 +28,7 @@ const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
 })
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -37,6 +38,9 @@ function deferred<T>() {
 function fixture() {
   const project = realpathSync(mkdtempSync(join(tmpdir(), 'synthetic-cli-management-')))
   environment.home = project
+  vi.stubEnv('APPDATA', join(project, 'AppData', 'Roaming'))
+  vi.stubEnv('LOCALAPPDATA', join(project, 'AppData', 'Local'))
+  vi.stubEnv('PNPM_HOME', join(project, 'pnpm'))
   cleanups.push(() => rmSync(project, { recursive: true, force: true }))
   const storage = new WorkerStorage(join(project, 'state'))
   const store = new CliExecutablePathStore(storage.directory)
@@ -403,11 +407,11 @@ describe('guarded Host CLI executable path endpoints', () => {
 
   it('blocks later mutations after an unconfirmed metadata process cleanup', async () => {
     const f = fixture(),
-      block = vi.spyOn(f.runtime, 'blockOnCleanup')
+      block = vi.spyOn(f.runtime, 'blockCatalogOnCleanup')
     const error = new ProcessCleanupUnconfirmedError()
     f.resolve.mockRejectedValueOnce(error)
     await expect(f.read()).rejects.toThrow('cleanup')
-    expect(block).toHaveBeenCalledExactlyOnceWith(error)
+    expect(block).toHaveBeenCalledExactlyOnceWith('opencode', error)
     await expect(f.update(f.initialPath, 'manual')).rejects.toThrow('清理')
     expect(f.store.read('opencode')).toBeUndefined()
     expect(f.resolve).toHaveBeenCalledOnce()

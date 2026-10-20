@@ -67,6 +67,8 @@ it('uses real continuable child identity, preserves ordered native history and r
   await ctx.plugin(Commands)
   const nativeCommand = vi.fn(() => ({ kind: 'success', text: 'native parent command' }))
   ctx.commands.register({ name: 'plan', description: 'Synthetic native command', handler: nativeCommand })
+  const nativeGoal = vi.fn(() => ({ kind: 'success', text: '模拟父会话目标命令' }))
+  ctx.commands.register({ name: 'goal', description: '模拟原生目标命令', input: { hint: '[goal]' }, handler: nativeGoal })
   const nativePermission = vi.fn(() => ({ kind: 'success', text: 'synthetic DSH preset only' }))
   ctx.commands.register({
     name: 'permission',
@@ -180,6 +182,12 @@ it('uses real continuable child identity, preserves ordered native history and r
       return `CLI 权限已保存：${mode}`
     },
   )
+  const goal = vi.fn(async (record: HarnessConversationRecord, input: string, signal: AbortSignal) => {
+    signal.throwIfAborted()
+    expect(record.workerId).toBe(worker.id)
+    expect(record.parentSessionId).toBe(worker.parentSessionId)
+    return `模拟桥接目标命令：${input || '查询'}`
+  })
   const deps: HarnessConversationDependencies = {
     bindings: () => records,
     bind: async (record) => {
@@ -212,6 +220,7 @@ it('uses real continuable child identity, preserves ordered native history and r
     wait: async () => ({ ...worker }),
     stop: async () => {},
     permission,
+    goal,
   }
   bridge = new HarnessConversationBridge(ctx, deps)
   const binding = await bridge.ensure(parent.agent, worker)
@@ -239,9 +248,26 @@ it('uses real continuable child identity, preserves ordered native history and r
   ])
   expect(run).not.toHaveBeenCalled()
   expect(execute).not.toHaveBeenCalled()
-  expect((await ctx.commands.execute(child, '/plan', [], new AbortController().signal))?.result.kind).toBe(
-    'error',
-  )
+  expect((await ctx.commands.execute(child, '/plan', [], new AbortController().signal))?.result)
+    .toEqual({ kind: 'success', text: 'CLI 权限已保存：plan' })
+  expect(worker.mode).toBe('plan')
+  // 模拟 CLI 能力切换；不支持时返回成功提示且不调用权限 API。
+  const previousPreference = worker.preference
+  worker.preference = { cli: 'qoder', model: '模拟模型', effort: 'default' }
+  expect((await ctx.commands.execute(child, '/plan', [], new AbortController().signal))?.result)
+    .toEqual({ kind: 'success', text: '当前 CLI 不支持规划模式' })
+  expect(permission).toHaveBeenCalledTimes(1)
+  worker.preference = previousPreference
+  for (const input of ['', '新目标', 'pause', 'resume', 'clear']) {
+    expect((await ctx.commands.execute(child, `/goal ${input}`, [], new AbortController().signal))?.result)
+      .toEqual({ kind: 'success', text: `模拟桥接目标命令：${input || '查询'}` })
+  }
+  expect(goal.mock.calls.map(call => call[1])).toEqual(['', '新目标', 'pause', 'resume', 'clear'])
+  expect(nativeGoal).not.toHaveBeenCalled()
+  expect((await ctx.commands.execute(parent.agent, '/goal', [], new AbortController().signal))?.result)
+    .toEqual({ kind: 'success', text: '模拟父会话目标命令' })
+  expect(goal).toHaveBeenCalledTimes(5)
+  expect(run).not.toHaveBeenCalled()
   expect(nativeCommand).not.toHaveBeenCalled()
   expect(
     (await ctx.commands.execute(parent.agent, '/plan', [], new AbortController().signal))?.result.kind,
@@ -265,6 +291,7 @@ it('uses real continuable child identity, preserves ordered native history and r
   ).toBe('success')
   expect(nativePermission).not.toHaveBeenCalled()
   expect(permission.mock.calls.map((call) => call[1])).toEqual([
+    'plan',
     undefined,
     'plan',
     'full-access',
