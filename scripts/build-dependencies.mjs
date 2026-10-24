@@ -51,10 +51,19 @@ export function buildTypeConfig(root, dependencies, project, noEmit = false) {
 export function clientBundleDependencies() {
   return {
     alwaysBundle: ['zod', '@xterm/xterm', '@xterm/addon-fit', 'dsh-cliworker-now/remote',
+      // Per-instance model directory state: official packages inline this dev-only
+      // engine; it is not a host-visible singleton in market installations.
+      '@deepseek-ai/dsh-client-store', 'zustand/vanilla', 'zustand/middleware', 'zustand/shallow', 'immer',
       /^@deepseek-ai\/dsh-typert-protocol(?:\/|$)/],
     neverBundle: ['react', 'react-dom', 'react/jsx-runtime', '@deepseek-ai/cordis',
       '@deepseek-ai/dsh-client-ui-primitives'],
   }
+}
+
+/** Inlined browser state engines must not depend on Node's process global or
+ * Vite's import.meta.env at runtime in the Harness CJS module factory. */
+export function clientBundleDefines() {
+  return { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{"MODE":"production"}' }
 }
 
 /** Resolve generated Typert imports from the selected SDK, even when the entry

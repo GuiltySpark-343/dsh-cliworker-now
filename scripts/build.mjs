@@ -2,7 +2,7 @@ import { cpSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, existsSync
 import { resolve, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
-import { selectBuildDependencies, buildTypeConfig, clientBundleDependencies, selectedTypertResolver } from './build-dependencies.mjs'
+import { selectBuildDependencies, buildTypeConfig, clientBundleDependencies, clientBundleDefines, selectedTypertResolver } from './build-dependencies.mjs'
 import { verifyHostRuntime } from './host-runtime.mjs'
 
 const root = resolve('.')
@@ -229,6 +229,7 @@ await build({
   dts: false,
   sourcemap: true,
   deps: clientBundleDependencies(),
+  define: clientBundleDefines(),
   outputOptions: {
     banner: 'window.__ModuleLoader__.load({ id: "dsh-cliworker-now", factory: (require) => {',
     intro: 'var module = { exports: {} }; var exports = module.exports;',

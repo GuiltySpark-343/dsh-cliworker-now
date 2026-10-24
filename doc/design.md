@@ -1,5 +1,13 @@
 # dsh-cliworker-now — 设计与版本演进
 
+## v0.8.3（未发布）：市场安装的宿主 peer 范围（2026-10-24）
+
+- Desktop 0.12.1 的市场安装器要求必选宿主单例 peer 位于 Harness 安装闭包；`@deepseek-ai/dsh-client-store` 在官方包中仅为开发依赖，不能作为本插件的宿主 peer。
+- 保留官方 snapshot store 和每个模型目录实例的状态、通知与冻结行为，在 Client 内联 store、Zustand vanilla/middleware/shallow 和 Immer；清单仅移除 store peer，构建 devDependency 与锁文件不变。React、React DOM、Cordis 和 UI primitives 仍由宿主提供。
+- Client 构建把 Immer 的 `process.env.NODE_ENV` 和 Zustand 的 `import.meta.env` 固定为 production 常量，防止内联后依赖浏览器中不存在的 Node/Vite 环境。打包回归在无 process 的 VM 中执行模型目录 store，核对同步通知、同引用去重和取消订阅；宿主单例探针使用明确的模拟导出。
+- 回归按 app-boot 的声明者 Node 搜索路径和 dependencies + peerDependencies 计算 npm SDK 闭包。本地 SDK 比用户核实的 Desktop 0.12.1 范围少 React、React DOM、UI primitives、UI slots；只对这四项使用明确注释的断言 allowlist，不修改计算器、不放宽其他 peer，也不把 store 改为可选 peer。
+- OpenSpec：`openspec/changes/fix-market-install-peer-scope/` 保持未归档；实际版本字段仍为 0.8.2。隔离构建与测试结果见 `doc/tasks.md`；本次不执行 Desktop 市场实装或正式构建。
+
 ## 1. 基线与范围
 
 - 本机 macOS；DeepSeek Harness 0.2.0-rc.2（官方标签 `dsh-v0.2.0-rc.2`，提交 `639ed015397290b3745d163aafe02ffee4aa3f84`）；Antigravity CLI 1.2.16。

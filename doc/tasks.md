@@ -1,5 +1,24 @@
 # 实施任务与验证记录
 
+## v0.8.3（未发布）
+
+### 2026-10-24：修复市场安装的宿主 peer 校验
+
+- 根因（依据 Desktop 0.12.1 / Harness 0.2.1-rc.2 安装日志与解包源码核实）：市场安装器安装后检查所有必选 `react`、`react-dom`、`@deepseek-ai/*` peer，要求它们位于从 Harness app manifest 沿 dependencies + peerDependencies 得到的宿主可见范围。官方包把 `@deepseek-ai/dsh-client-store` 放在 devDependencies 并内联，插件却声明为必选 peer，导致 `generation peer validation failed: @deepseek-ai/dsh-client-store does not resolve from the installation closure`。
+- 修复：移除 store peer（不改成可选），保留构建 devDependency；客户端内联官方 store 及 Zustand vanilla/middleware/shallow、Immer。相较重写本地 store，这只改构建配置并保留同步通知、订阅异常隔离与冻结语义；React、React DOM、Cordis、UI primitives 继续 external。Client 编译时将 `process.env.NODE_ENV` 和 `import.meta.env` 固定为 production 常量，避免新内联依赖在浏览器读取 Node/Vite 全局。
+- 闭包差异：本地 `node_modules/@deepseek-ai/dsh@0.2.1-rc.2` 的 npm manifest 闭包另缺 `react`、`react-dom`、`@deepseek-ai/dsh-client-ui-primitives`、`@deepseek-ai/dsh-client-ui-slots`，经解包 Desktop 0.12.1 app.asar、按安装器规则复算宿主可见范围（611 个包），确认这四项在其中，测试据此以显式 allowlist 处理；计算器保持原始闭包，不填种子、不跟随 devDependencies，其他必选单例越界严格失败。store 有独立的闭包缺失负例，且硬性断言不在 peerDependencies/peerDependenciesMeta。
+- 关联测试覆盖真实 npm SDK 闭包、旧 store peer 失败、嵌套声明者/循环/隐藏 package.json/可选 peer，以及实际模型目录打包内联引擎且宿主单例不被打包；无 process 的 VM 内运行实际打包 store，核对快照引用、同步通知、同引用去重与取消订阅，宿主单例探针明确模拟。测试不涉及真实模型。
+- 已执行：`pnpm typecheck` 两次通过；`pnpm test tests/market-install-peers.test.ts tests/build-dependencies.test.ts tests/native-cli-model-directory.test.ts` 最终 3 文件 / 22 测试通过。新增回归在修复前确认失败；编写测试期间修正了闭包解析方式、入口探针与 VM 的宿主模拟。无 process 的 VM 首次暴露 Immer 初始化依赖 Node 全局，加入 production 常量后通过。
+- 全量：沙箱内 `pnpm test` 执行完毕（150.77 秒），204 文件通过、10 失败、3 跳过；4092 测试通过、188 失败、13 跳过、17 个错误，日志包含 `listen EPERM 127.0.0.1` 和超时。单跑 `pnpm test tests/native-harness-lease.test.ts` 复现 2 失败 / 1 通过及 `listen EPERM`。按沙箱规则获准后运行 `pnpm test --bail 1`：第一次在新增 VM 的 process 依赖修复前失败；最终重试完成全部 217 文件（94.14 秒），214 通过 / 3 跳过、4280 测试通过 / 13 跳过、零失败。日志分别为 `.cache/market-peer-full-tests.log`、`.cache/market-peer-full-tests-unsandboxed.log`、`.cache/market-peer-full-tests-unsandboxed-final.log`；不把沙箱失败写成通过。
+- 隔离构建：`pnpm build:preview` 共三次通过（同次修复前基线、初版内联、最终 production 常量版）。初版出现 Zustand `EMPTY_IMPORT_META` 警告；最终该警告及 Node/Vite 环境引用均已消除，仅保留既有 CJS 建议与 onlyBundle 提示，未改变 Harness 的 CJS module factory 封装。
+- 最终 bundle 检查：`.cache/preview-package/lib/client.js` 无 store、Zustand、Immer 的 require/import；React、React DOM、UI primitives 保持外部引用，完整 sourcemap 无这些宿主单例及 Cordis 的打包源码。完整 Client 无 Cordis 运行时引用，内存打包探针另验证其 external 策略。无 `process.env`/`import.meta`，根目录既有 `lib/client.js` SHA-256 与修复前相同。客户端从 8,783,882 到 8,809,386 字节（+25,504，约 +0.29%），gzip 从 5,325,049 到 5,332,652 字节（+7,603）；证据 `.cache/market-peer-baseline.json`、`.cache/market-peer-bundle-verification.json`、`.cache/market-peer-preview-final.log`。
+- 打包：在隔离 preview 执行 `npm pack --dry-run --ignore-scripts --json`，禁用 prepack，未运行正式构建。沙箱首次因 npm 缓存 `EPERM` 失败；获准重试后初版和最终版均通过，不修改缓存所有权。最终清单 845 文件，压缩大小 18,100,421 字节；包含 package.json 与 lib/client.js，待打包 manifest 与根清单 peer 完全一致（38 项），store 无 peer 或 peer meta，版本 0.8.2。dry-run 不生成实际 tgz；证据 `.cache/market-peer-pack-dry-run-final.json`、`.cache/market-peer-pack-verification.json`。
+- OpenSpec：`pnpm spec context --json`、`pnpm spec list --json` / `list --specs`、`show package-distribution --type spec --json --no-scenarios`、`new change fix-market-install-peer-scope`、`status`、各产物 `instructions proposal/specs/design/tasks/apply` 均通过；已读取 package-distribution 完整主规格。`pnpm spec status --change fix-market-install-peer-scope` 为 4/4 规划产物完成；`pnpm spec:check` 严格校验 24 项通过、0 失败，另有其他既存变更 `release-v078-latest-install` 的归档重复需求 INFO，不在本次范围。Git 差异检查通过。
+- 环境：shell 未暴露 pnpm，使用现有 Corepack shim（11.25.0），命令前置 `PATH=/opt/homebrew/lib/node_modules/corepack/shims:$PATH` 并传 `--config.verifyDepsBeforeRun=false`。首次裸 `pnpm spec list --json` 未找到命令；首次 `corepack pnpm spec context --json` 触发依赖自动校验，因无 TTY 中止，另有更新元数据联网失败。后续未重装依赖或改系统配置。
+- 文档：README 中无需要调整的 peer 安装要求，因此中英文均未改。仓库未找到“适用于 … DeepSeek Harness 0.2.0-rc.2”的市场卡片源文案；相近旧基线见 `AGENTS.md:5`、`openspec/config.yaml` context 和 `doc/design.md` 历史基线，均不作为市场卡片来源修改。仓库无独立 CHANGELOG，发布说明流程见 `doc/release-template.md`，本节承载未发布记录。
+- 独立复核：以 `.cache/preview-package/package.json` 对照 Desktop 0.12.1 app.asar 复算的 611 个宿主可见包，全部必选 peer 均在范围内；预览 `lib/client.js` 外部引用仅剩 `react`、`react-dom`、`react/jsx-runtime`、`@deepseek-ai/dsh-client-ui-primitives`，与旧产物相比仅移除 store；旧产物本无 `process.env`/`import.meta`，新增 define 不改变既有代码。
+- 版本与边界：所有实际版本号保持 0.8.2；OpenSpec `fix-market-install-peer-scope` 不归档。本次未执行真实 Desktop 市场安装、Windows 平台实装、真实 CLI/账号/模型调用、正式 `pnpm build`、提交、推送或发布；未触碰 Desktop 安装、用户会话或 Application Support。
+
 ## 阶段 1：基础准备
 - [x] 核验 Harness 0.2.0-rc.2、agy 1.2.16 和真实模型列表（规划阶段只读核验）。
 - [x] 建立 AGENTS.md、设计文档和任务清单。
