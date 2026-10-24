@@ -1059,3 +1059,16 @@ OpenSpec：`openspec/changes/bridge-conversation-features/`。
 - `HarnessWorkerFork.turns()` 原先把任何有 `end` 和 closing 助手消息的轮次当成完成轮。现与 Host `selectForkHistory` 一致，要求 `turn/end.data.reason.kind === 'completed'` 且有助手消息。失败或中断轮不会映射为最新轮空串截点，DOM guard 保持其按钮禁用。
 - 安装包 `dsh-client-ui-workspace/lib/client.js` 的 `openSession` 调用 `replaceMain`，以 `mainView` retain 子会话并 reveal 原生 Conversation；`Panel.openWorker` 只修改面板内部选择，`activeHarnessSessionId` 只是同步选中状态，不会替换原生主视图。原生 Conversation 默认“+”菜单使用 `command`，并未取得插件面板传入的 `cliworker-settings`。
 - 复用随包 runtime 已有的 `commandSource` owner 属性，通过公开 `conversation.composer.bar` 槽位为已绑定 Worker 的 CLI 子会话设置桥接源。主视图、原生侧栏及插件面板共用该槽位；保留原组件、inject、子槽和菜单 controller，普通/无会话保留原始 props。绑定晚到会更新，卸载释放替换。保持现有分支打开方式，不修改 Harness 核心、node_modules 或 runtime-host。
+
+
+## v0.8.3（未发布）：市场行归属与原生设置投影
+
+四个 vendored UI 的 Loader id 使用 `cliworker-ui-*`，浏览器包身份仍为 `@deepseek-ai/dsh-client-ui-*`。bundle 顶层仅禁用四个 stock id；市场按 insert ids 推导归属时不再把 stock 行算作插件所有。市场将该补丁识别为 disable-carrier，切换时移除或恢复整个 bundle；带 inject 的界面不承诺纯热启用，按提示重启。
+
+stock 行保留其官方 name 与 canonical config，作为原生设置的唯一持久化目标。启动预检验证 runtime 摘要、每包唯一来源、独立 id 和 disabled stock 来源，拒绝私有 id 上的第二份设置、跳过的 name 断言以及丢失的 isolate/intercept/inject。chat/conversation 的既存 config 通过下述视图读取，不复制、不迁移；session/subagent 仍保留原先的配置丢失检查。
+
+两个浏览器 UI 的 Host apply 仅注册设置展示策略；客户端偏好实际来自 SettingsForms。因此预检成功后安装可释放的 ConfigEditor.entries 适配，只为 `ui-chat` 和 `ui-conversation` 的 disabled stock 行提供内置 schema 的配置视图，并从该配置编辑清单中隐藏对应私有行。视图的 options/name/id 保持 stock，fiber 的 schema/uid/state 来自活跃 vendored 模块，config 则由宿主 resolveConfig/interpolate 从 stock raw config 解析。实际 Loader fiber、模块注册表、模块包身份与用户文件不被改写。
+
+SettingsForms 本身不修改：describe、update、replace、mutate、revision 和原生事件继续使用 canonical namespace。原 ConfigEditor.edit 继续负责文件锁、层次优先级、验证、原子写入、HMR 与失败回滚；新增设置行使用 stock name，移除插件后不会留下指向 vendored 路径的断言。启动适配不写盘，仅用户原生设置编辑触发宿主写盘。
+
+缓存按 stock entry 与 vendored fiber 身份更新；旧视图的 settings.configure 注册及时释放。预检卸载时恢复原 entries 属性描述符并清理全部展示策略；若后来的扩展已经包装该方法，不覆盖其包装，同时将本适配置为停用并清空缓存。此兼容层限定于随包固定基线的两个纯 UI schema，不能泛化到有 Host 配置副作用的插件。

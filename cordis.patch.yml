@@ -1,18 +1,26 @@
 - insert:
     - id: cliworker-native-preflight
       name: ./lib/native-runtime-guard/index.mjs
-    - id: ui-session
+    - id: cliworker-ui-session
       name: ./runtime-host/dsh-client-ui-session/lib/index.js
       inject: [cliworkerNativeReady]
-    - id: ui-conversation
+    - id: cliworker-ui-conversation
       name: ./runtime-host/dsh-client-ui-conversation/lib/index.js
       inject: [cliworkerNativeReady]
-    - id: ui-subagent
+    - id: cliworker-ui-subagent
       name: ./runtime-host/dsh-client-ui-subagent/lib/index.js
       inject: [cliworkerNativeReady]
-    - id: ui-chat
+    - id: cliworker-ui-chat
       name: ./runtime-host/dsh-client-ui-chat/lib/index.js
       inject: [cliworkerNativeReady]
     - id: cliworker-now
       name: dsh-cliworker-now
       inject: [cliworkerNativeReady]
+- id: ui-session
+  disabled: true
+- id: ui-conversation
+  disabled: true
+- id: ui-subagent
+  disabled: true
+- id: ui-chat
+  disabled: true

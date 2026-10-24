@@ -2,6 +2,45 @@
 
 ## v0.8.3（未发布）
 
+### 2026-10-24：完成市场 UI 行归属修复与 canonical 设置兼容
+
+- 修复：四个 vendored Loader id 改为 `cliworker-ui-*`，四个 stock id 仅在本 bundle 的顶层 disabled rows 出现；官方客户端包名和资源不变。新增可释放的 ConfigEditor.entries 设置视图，让 `ui-chat`／`ui-conversation` 继续使用 stock id/name/raw config，借用经预检的活跃 vendored schema。实际 Loader、SettingsForms、ConfigEditor.edit 与 Harness 文件不改；原生锁、revision、重置、层次校验、原子写入和回滚继续由宿主负责。
+- 配置与清理：原有 canonical profile/home 配置直接读取，不复制、不迁移；新写入的 name 断言仍指向 stock 包，移除插件后可继续使用。预检拒绝 private id 上的第二份 config、外部来源和丢失的 isolate/intercept/inject；session/subagent 保持原配置丢失检查。按 fiber 身份释放旧展示策略；卸载恢复原方法属性描述符，后置包装存在时不覆盖它且旧闭包停用。旧版本写入的 vendored 路径 name 断言仍明确报冲突，不擅自迁移。
+- 方案验证：先在 `ownership-audit/alias-experiment.mjs` 用真实官方服务验证 alias 视图，读取既存 canonical 值并成功 update。原生 configure 仅支持展示策略，没有独立 namespace/schema 注册接口；非 insert name 仍是断言，没有 replace 语义。未采用改客户端 namespace、复制配置或规避市场文本解析的形状。
+- 最终自动检查（均使用指定 PATH 和 `pnpm --config.verifyDepsBeforeRun=false`）：`typecheck` 通过；`test tests/host-runtime-package.test.ts` 最终 **10 项通过**；`build:preview` 通过。测试覆盖包完整性、无 stock-id inserts、市场所有权模型、预检接受/拒绝、真实 Loader 启动/恢复、SettingsForms canonical 值/revision/重置、卸载及后置包装。单元测试中配置编辑持久化投影明确为模拟；以下集成使用真实 ConfigEditor 和 scratch 文件。测试 TMPDIR 均限定指定 scratchpad。
+- 最终隔离集成来自 `.cache/preview-package` 原样复制的包，不再修改副本 guard/patch：① Desktop disabled 副本 stock 四行 ACTIVE、disabled=false，无插件客户端；② Desktop enabled 副本 stock disabled、四个 vendored ACTIVE、ready=true；③ npm 官方 Harness 的新 home 同②。三者原生 `settings.update('ui-chat')` 都成功，旧 revision 被拒绝，mutate/replace 重置有效；最终写入 `transcriptView=verbose`、`busyEnter=steer`。官方宿主随后冷重启与移除 bundle 冷启动，偏好均保留，移除后四个 stock ACTIVE、插件客户端消失。
+- HTTP/模块证据：五次运行均 HTTP 200，解析 `__DSH_BOOT__.entries` 后四个官方包各一次，插件条目仅出现在启用态；Loader registry 的实际 clientPath 在启用态来自 runtime-host，在禁用/移除态来自 stock。正文均无 `Failed to load plugins`。未执行浏览器脚本，不把 HTTP 清单称为完整 GUI 激活证据。五服务均经 SIGINT 退出 130；启动器 finally 清理，无强杀或遗留服务。
+- 主会话独立复核（浏览器，Chromium 内置浏览器，非 Electron 窗口）：从 `home-dd` 新复制 `home-vA`（市场 disabled 含本插件）与 `home-vB`（仅移除本插件），换入当前 `.cache/preview-package`，用 Desktop 提取的 Harness 0.2.1-rc.2 + `desktop-only.patch.yml` 启动。A 页面完整渲染宿主首页，四个 `@deepseek-ai/dsh-client-ui-*` 各一次、无插件入口、无 `Failed to load plugins`；B 同样完整渲染，入口含 `dsh-cliworker-now`，右侧栏出现「CLI Worker」卡片，点击后 CLI Worker 面板（搜索、状态筛选与空态）正常显示，重载后控制台无错误。修复前同一副本复现为 `required client modules failed to activate`，诊断插件显示 stock 四行 disabled。关联 `pnpm test tests/host-runtime-package.test.ts tests/market-install-peers.test.ts` 2 文件 / 13 项通过，typecheck 通过，preview 中 patch 与 guard 与源码一致。
+- 与下方「显示问题调查」的关系：用户反馈的「Desktop 中无法很好展示」实际由本节的市场行归属问题导致整页插件加载失败，而非样式缺陷；当前未观察到额外的 Desktop 专属样式问题。真实 Electron 窗口、Windows 标题栏与深色/窄窗矩阵仍未验收。
+- 私有证据：指定 scratchpad 的 `ownership-final/`，含 `run.py`、诊断插件、五份日志/HTML/JSON 与 `results.json`。另用断言脚本核对所有行状态、模块路径、settings 值、revision 拒绝、HTTP 清单和退出码；当前源码、preview 和三份 scratch 包的 guard/patch 字节一致，package 版本均为 0.8.2。首轮 runner 仍遇沙箱 listen EPERM，获准后完成上述运行。
+- 文档同步 README 中英文、doc/design.md 与 OpenSpec；保留上轮失败候选作为历史证据。正式 `pnpm build` 未执行：生成 guard 仅在 preview 中更新，避免影响可能链接仓库 lib 的真实 Desktop。没有改变版本、用户安装、应用数据、真实 profile 或模型任务；没有提交、推送或发布。真实 Desktop GUI、市场热切换往返、Windows 仍未验证。
+- OpenSpec 收尾：7/7 任务完成，归档前 `spec:check` 25/25 通过；`spec archive fix-desktop-market-row-ownership --yes` 同步 package-distribution 的两条新增要求并归档至 `2026-10-24-fix-desktop-market-row-ownership`，主规格原有标题、Purpose 与要求保持。归档后 `spec:check` 24/24 通过；既有 release-v078-latest-install 的重复 ADDED 提示仍保留，本次未修改。`git diff --check` 通过。
+
+### 2026-10-24：市场 UI 行归属候选调查（设置兼容阻塞，未实施产品修复）
+
+以下为首轮历史记录，设置阻塞已由上节后续实现解决。
+
+- OpenSpec：`fix-desktop-market-row-ownership` 已建立 proposal、规格增量、设计和任务清单，3/7 项完成，严格校验通过；产品实现与最终验收未完成，不归档。版本仍为 0.8.2，没有提交、推送或发布。
+- 候选仅在指定 scratchpad 的 `ownership-audit/` 内修改：四个 insert id 改为 `cliworker-ui-*`，添加四个 stock id 顶层 `disabled: true`，副本 guard 接受新 id。仓库 `cordis.patch.yml`、guard、runtime-host 均未改；README/doc/design.md 未宣称新安装行为。
+- 关键阻塞：两个宿主的原生设置固定使用 `ui-chat`／`ui-conversation`，SettingsForms 又按活跃 Loader id 提供表单并通过 configEditor 写回 profile。候选只提供 `cliworker-ui-chat`／`cliworker-ui-conversation` 表单，实际 `settings.update('ui-chat', {transcriptView:'compact'})` 在 Desktop 启用副本和 npm 官方副本均失败：`No configurable plugin entry "ui-chat"`。复制旧 config 或仅更换 namespace 不能保证实时编辑、重置、重启和卸载后的等价行为，不能合入这份候选。
+- 市场源码与实际函数检查：候选 `bundlePatchInsertedIds` 仅返回六个 `cliworker-*` id；`carrierRowIds` 返回四个 stock id；`parseSimplePatch` 返回 null。市场切换路径会按 disable-carrier 移除／恢复 bundle，boot replay 本身只调用行禁用。给定 asar2 的 app-boot 还包含 `readDisabledProfileBundles`，会先跳过 state 中禁用的 bundle；仓库 npm app-boot 未发现该额外函数，不把两者视为逐字相同。
+- 隔离运行 A：从给定 home-dd 新复制 home-a，重定位副本内 symlink、换入 preview 后施加候选，保留市场 disabled 列表；四个 stock fiber ACTIVE 且 disabled=false，没有插件客户端。B：另建 home-b，只从市场 disabled 列表移除本插件；ready={verified:true}，四个 vendored fiber ACTIVE，stock disabled=true。官方：使用仓库 npm Harness 0.2.1-rc.2、新 home-official、scratch 插件副本及仓库依赖图链接；得到同 B 的模块状态，但同样出现设置写入失败。
+- HTTP 证据：从打印的 token URL 登录并保留重定向 cookie，三页均 HTTP 200；解析 `globalThis["__DSH_BOOT__"]` 的 entries，四个官方客户端包各恰好一次，插件入口 A 为 0、B/官方为 1；响应正文均无 `Failed to load plugins`。这是服务端引导清单证据，未运行浏览器 JavaScript，不代表 GUI 完整激活或设置等价通过。
+- 实际验证命令均使用 `PATH=/opt/homebrew/lib/node_modules/corepack/shims:$PATH pnpm --config.verifyDepsBeforeRun=false`：`typecheck` 通过；`test tests/host-runtime-package.test.ts` 基线 6 项通过，加入真实 Loader/SettingsForms 设置边界回归后 7 项通过（configEditor 投影明确为模拟，模型未调用）；`build:preview` 通过，产物为未改产品实现的 `.cache/preview-package`；`spec validate fix-desktop-market-row-ownership --strict --no-interactive` 通过。测试 TMPDIR 指向指定 scratchpad；未执行全量测试或正式 build。
+- 实验修正记录：首轮服务端口和 HTTP 读取被沙箱 EPERM 阻止，获准后重试；诊断插件最初漏声明注入、随后误用 inject 对象格式，修正为实际 Cordis 注入声明后重跑；官方 scratch 插件最初缺依赖解析链接，补上隔离副本的 node_modules 链接后重跑；首次 HTTP 请求未保留 cookie 得到 401，修正后为上述 200。这些均不作为产品验收失败或成功证据。
+- 收尾：`pnpm spec:check` 为 25 项通过、0 失败；既有 `release-v078-latest-install` 仍提示模型目录 ADDED 与主规格重名，本次未处理。`git diff --check` 通过；格式通过不代表本次行为修复完成。
+- 证据留在指定 scratchpad 的 `ownership-audit/{a,b,official}.log`、对应 HTML、`pages.json`、`shape.json` 和 home 副本；不入 Git。最终三服务均 Ctrl-C 退出（130），此前失败进程退出 1，未留测试服务。未触碰真实 Desktop、官方客户端 home、系统安装或用户 profile，未调用真实模型。待完成：原生设置兼容设计与实现、最终产品 A/B 和官方等价复验；真实 Desktop GUI、市场热切换往返、Windows 均未验证。
+
+
+### 2026-10-24：DSH Desktop 0.12.1 显示问题调查（浏览器验收受阻）
+
+- 范围：先读取 `AGENTS.md`、`doc/settings-ui-design.md`、`doc/openspec.md` 与 `openspec/config.yaml`；只检查提取到 `/private/tmp` 的 Desktop 代码、仓库与指定隔离环境。未操作 `/Applications`、用户 Application Support 或运行中的 Desktop；版本保持 0.8.2，未提交、推送或发布。
+- 静态核实：preload 公开 `window.dshDesktop`；Windows 设置 `html[data-windows-titlebar]`、`--dsh-windows-titlebar-height:40px` 与 `body.dsh-desktop-windows-titlebar-layout`，另有菜单条、no-drag 和弹窗跟踪；main 使用 40px 高透明 titleBarOverlay。preload 的 140px 是 drag-region 的 CSS fallback，不是实测窗口按钮宽度。只加载 client-ui/workbenches 的 Web 环境缺少这些 preload 行为，后续窗口遮挡模拟必须考虑这一层。
+- 尚不能判定缺陷：Desktop client-ui 的 56px padding selector 为 `[data-plugin-panel] > header[data-window-drag]`；插件 `.cwn-head` 没有这两个属性，不能仅凭该全局样式断言列表或设置受影响。宿主侧栏本身已有 Windows/fullscreen/macOS 标题栏规则；须以实际渲染确认额外留白是否必要。
+- 浏览器阻塞：Playwright 的独立 Chromium 启动在沙箱内失败（SIGABRT / kill EPERM），提权请求被拒绝；Tabbit CLI 连接返回 `BROWSER_RUNTIME_CONNECT_DENIED`，其提权请求也被拒绝；CUA in-app browser 返回 `Browser is not available: iab`。本轮没有取得截图、注入 populated 夹具或完成浅深色/900px/宽屏/90%/110% 对照；不能把静态推断记为观察到的显示缺陷，也不能声称无缺陷。
+- 已执行：`PATH=/opt/homebrew/lib/node_modules/corepack/shims:$PATH pnpm --config.verifyDepsBeforeRun=false typecheck` 通过；同前缀 `pnpm --config.verifyDepsBeforeRun=false test tests/client-registration.test.ts tests/panel.test.tsx` 为 2 文件 / 131 测试通过。未修改产品代码，未增加仅猜测检测条件的测试，未重建 preview、重启现有隔离服务、全量测试或创建/归档行为变更。后续观察到实际问题后再建立 `fix-dsh-desktop-display` 并实施。
+- 私有证据：`.test-data/dsh-desktop-ui-0824/investigation.json`；该目录已由 `.gitignore` 忽略，临时安装的 `playwright-core` 仅位于其 `tools/` 下。待完成：双客户端 populated 列表、子会话原生输入框、设置入口与页头按钮截图矩阵；按观察结果修复并比较 native 前后像素/结构。真实 Electron、Windows 与真实账号均未验收。
+
 ### 2026-10-24：修复市场安装的宿主 peer 校验
 
 - 根因（依据 Desktop 0.12.1 / Harness 0.2.1-rc.2 安装日志与解包源码核实）：市场安装器安装后检查所有必选 `react`、`react-dom`、`@deepseek-ai/*` peer，要求它们位于从 Harness app manifest 沿 dependencies + peerDependencies 得到的宿主可见范围。官方包把 `@deepseek-ai/dsh-client-store` 放在 devDependencies 并内联，插件却声明为必选 peer，导致 `generation peer validation failed: @deepseek-ai/dsh-client-store does not resolve from the installation closure`。

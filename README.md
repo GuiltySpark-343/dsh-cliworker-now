@@ -82,6 +82,7 @@ dsh plugin --profile desktop add dsh-cliworker-now@latest
 - 启动 Harness 不会自动更新插件。pnpm 11 默认等待新版本发布满 24 小时，期间可能仍装到旧版，可用 `dsh plugin --profile desktop ls dsh-cliworker-now --depth=0` 核对。
 - 备用安装包：`dsh plugin --profile desktop add https://github.com/SuperWheel/dsh-cliworker-now/releases/download/v0.8.2/dsh-cliworker-now-0.8.2.tgz`，每个 Release 附 `SHA256SUMS.txt`。
 - 安装包自带原生子对话所需的界面扩展，无需手工构建宿主；卸载插件即恢复官方界面。与已有界面覆盖冲突时启动预检会明确拒绝，不改动你的配置，详见 [runtime-host](runtime-host/README.md)。
+- 当前源码的市场兼容修复尚未发布：在市场启用或禁用后按提示重启 Harness；聊天展示和忙时 Enter 等原生偏好仍保存在原设置项中，禁用插件后继续有效。实际验证范围见 [未发布记录](doc/tasks.md)。
 - 卸载：`dsh plugin --profile desktop remove dsh-cliworker-now`，保留本机账号、历史会话和偏好。
 
 <details>
