@@ -2554,3 +2554,13 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - scratch 上游方向原型跳过 live mutation、仅记录下次启动状态；rc.2 两轮 off/on 保持页面和 graph。仅是方向性证据；跨宿主、后续配置刷新、既有 overrides 和分组切换未解决，不是可发布补丁。详细证据索引、失败启动记录、源码行号和后续真实 Desktop 验证清单见 [调查报告](blank-toggle-investigation.md)。
 - 实际命令均使用 `PATH=/opt/homebrew/lib/node_modules/corepack/shims:$PATH pnpm --config.verifyDepsBeforeRun=false …`：`build:preview` 通过；`typecheck` 通过；`test tests/host-runtime-package.test.ts tests/client-registration.test.ts tests/build-dependencies.test.ts` 为 **3 文件、30 项通过**，TMPDIR 指向上述 scratch。原生 SettingsForms 的设置写入、revision/reset/释放沿用真实 Loader 关联测试；未做浏览器设置编辑和真实账号验收。
 - 只更新 README 中英文、设计与调查/验证文档，澄清连续热切换未通过；没有运行行为变更、新行为测试、全量 suite 或 OpenSpec 归档。失败候选保留在 scratch 供主会话审阅，不更新真实 Desktop。
+
+
+## 2026-10-24 v0.8.3：发布验收
+
+- 范围（用户批准以 v0.8.3 发布到 GitHub 与 npm）：市场安装移除 `dsh-client-store` peer、DSH Desktop 下 stock UI 行不再归插件所有、Harness 0.2.1-rc.3 原生会话界面 re-vendor，以及 dshmarket 热切换白屏的已知限制说明（上游 dsh-market/dsh-market#1010）。版本号与 Codex/ACP/MCP/Hermes 客户端标识改为 0.8.3（提交 `9efb086`）。OpenSpec `fix-market-install-peer-scope` 已核对并归档为 `2026-10-24-fix-market-install-peer-scope`，严格校验 23/23。
+- macOS：`typecheck` 通过；全量 `vitest run`（沙箱外）**214 文件通过、3 跳过；4285 通过、0 失败、13 跳过**；`spec:check` 归档前 24/24；`git diff --check` 通过。Codex 子代理在沙箱内的首轮因 `listen EPERM 127.0.0.1` 与 `/bin/ps EPERM` 有 10 文件失败，不计入结果。
+- Windows（x64，Node v24.15.0，pnpm 11.25.0）：`test:windows:remote` 隔离 preview、冻结依赖、typecheck、7 个 Windows CI 文件 **111 通过、1 项 POSIX 跳过**、包检查与 Host 加载均通过，success/cleanup.confirmed/cleanup.lockReleased 为 true。同一源码目录全量 vitest（隔离 HOME/USERPROFILE/TEMP）**210 文件通过、6 失败、1 跳过；4243 通过、11 失败、44 跳过**；失败集中在 Grok/Kimi/Qoder 读取器与 native-zcode 模拟账号 header（共 6 文件），本版未改这些代码；同 6 文件在正常用户环境串行重跑 **123/123 通过**。根因未定位，与 v0.8.2 同类（失败文件集合不同，本次 OMP PTY 未失败、native-zcode 新出现）。远端临时目录已清理，用户运行中的 Harness 进程未受影响。
+- 构建：正式 `build` 与 Windows 远程脚本构建的隔离 preview 相比，`lib/index.js` 与全部原生 helper 逐字节相同，`lib/client.js` 仅打包 region 注释不同；该 Client 与 a9d4017 时在 DSH Desktop 实装验收的 rc.3 构建（忽略注释）一致，runtime-host 与 `cordis.patch.yml` 逐字节相同。构建前确认 Mac 官方 Harness 无运行中的 CLI 子进程。
+- 未执行：v0.8.3 的 Windows Desktop 实机安装与界面；真实模型调用与任务派遣；DSH Desktop 窄窗口/深色/Windows 版；官方 rc.3 的 pin 选项。
+- 安装包：`scripts/package-release.mjs` 生成公开清单（`private:false`、无 scripts/devDependencies/packageManager、无 store peer），系统 npm `--ignore-scripts` 打包为 `dsh-cliworker-now-0.8.3.tgz`，846 文件，18104242 字节，SHA-256 `074ed63ebc11caa7573561670233cbd3a1cff7ad088bb9ee827a37af454ec176`；扫描无私人路径或局域网地址。独立 HOME/DSH_HOME 用官方 0.2.1-rc.3 的 `dsh plugin --profile web add` 安装前一版 tgz（仅 README 已知限制措辞不同，其余文件逐字节相同）exit 0、版本 0.8.3；回环 Web 中插件启用、6 个组件 Running，CLI Worker NOW 面板正常，pageerror/console error 均为 0，进程与端口已清理。安装器有 peer 警告，不阻止加载。

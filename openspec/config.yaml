@@ -16,7 +16,7 @@ context: |
   活跃 CLI 和 retired harness ID 必须区分；外部 Harness 历史不能迁作 Hermes 原生会话或账号。
   项目固定 OpenSpec 开发依赖，通过 pnpm spec 执行（包括技能示例中的裸 openspec 命令），不依赖全局安装。
   不手改 .agents/skills/openspec-* 生成文件；项目规则放本配置与 AGENTS.md。
-  最新发布版本为 v0.8.2；之后的调整在下一次正式提交时使用用户确认的版本号，可本地分阶段提交；GitHub 提交及发布须用户明确批准。
+  最新发布版本为 v0.8.3；之后的调整在下一次正式提交时使用用户确认的版本号，可本地分阶段提交；GitHub 提交及发布须用户明确批准。
   日常只做影响范围对应的最小验收（关联测试、必要 typecheck/preview/平台检查）；全量验收在获准的正式 GitHub 提交之前执行。
   验证入口：pnpm spec:check、pnpm typecheck、pnpm test <关联文件>、pnpm build:preview。
   真实 CLI 调用需已有模型选型授权；检查事件、退出状态和实际产物，模拟或本地目录可读不代表远端成功。
