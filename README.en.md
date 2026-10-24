@@ -81,7 +81,7 @@ Reopen Harness afterwards. Enable the `dsh` command from the Desktop menu "Manag
 - Starting Harness does not update the plugin. pnpm 11 waits 24 hours after a release by default and may keep the previous version; check with `dsh plugin --profile desktop ls dsh-cliworker-now --depth=0`.
 - Fallback package: `dsh plugin --profile desktop add https://github.com/SuperWheel/dsh-cliworker-now/releases/download/v0.8.2/dsh-cliworker-now-0.8.2.tgz`. Each release includes `SHA256SUMS.txt`.
 - The package ships the interface extensions that native child conversations need; no host build is required, and uninstalling restores the official interface. If it conflicts with an existing interface override, the startup check refuses without changing your configuration. See [runtime-host](runtime-host/README.md).
-- The market compatibility fix in current source is not released yet. Restart Harness when prompted after enabling or disabling it in the market. Native chat display and busy-Enter preferences keep their original settings entries and remain available when the plugin is disabled. See the [unreleased verification log](doc/tasks.md).
+- The market compatibility fix in current source is not released yet. Isolated tests confirm that live toggling with dshmarket 1.70.1 can blank the current window; its restart prompt does not make the live transition safe. A cold start after disabling restores the stock UI. The plugin-side recovery prototype failed; see the [investigation and verification limits](doc/blank-toggle-investigation.md). Native chat display and busy-Enter preferences retain their original settings entries.
 - Uninstall with `dsh plugin --profile desktop remove dsh-cliworker-now`; local accounts, history and preferences are kept.
 
 <details>

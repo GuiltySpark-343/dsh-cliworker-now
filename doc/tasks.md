@@ -2544,3 +2544,13 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 两份逐字节校验备份：`~/.dsh/profiles/desktop/package.json.bak-rc3-cliworker-20261024-153635`、`~/.dsh/profiles/desktop/cordis.patch.yml.bak-rc3-cliworker-20261024-153635`。配置变化仅上述恢复及对应说明注释，没有回退。
 - `open -a "DeepSeek Harness"` 后原窗口恢复，CUA 实际点击“打开 CLI Worker”，确认右侧 `CLI Worker Now` 标题、筛选栏及空列表。System Events 窗口标题与截图留于 scratch `rc3-upgrade/official-cliworker.png`；`official-result.json` 与日志前后 inventory 记录 `~/Library/Logs/DeepSeek Harness` **无新增、无修改日志文件**。未触发任务、模型、登录、账号探测或设置修改。
 - 严格规格检查归档前 **25/25**、归档后 **24/24**，`git diff --check` 通过。7/7 任务核对后，同步 package-distribution 的 1 项新增需求并归档至 `openspec/changes/archive/2026-10-24-upgrade-host-rc3/`；其余活动变更和旧待办未变。真实模型、Windows/Linux 与公开分发仍未验证，本次未提交或发布。
+
+
+## 2026-10-24：dshmarket 热切换白屏隔离调查（版本仍为 0.8.2）
+
+- 起点 `codex/release-v081` / `a9d4017`，干净工作树。按用户要求由 gpt-6-astra/high 独立审查生命周期；所有运行实验位于本会话 `scratchpad/blank-toggle/`，只有 preview 和副本，真实 DSH Desktop/官方 app 及其数据未操作；没有正式 build、commit/push、模型调用或任务派遣。
+- 实际经过 dshmarket 1.70.1 `POST /dsh-market/toggle`、登录 cookie 和变更锁；无头 Chromium 保存截图、浏览器异常、Loader/graph/设置状态。rc.2 Desktop 解包（默认 HMR 与 ConfigWatchHmr）和 rc.3 原生 Host 均复现停用白屏，错误为 `SlotAssemblyError: scope 'session-maybe' rendered without an installed adapter`。stock 恢复后页面仍白，rc.2 停用后冷启动正常。
+- scratch guard dispose 恢复 stock 的实际候选在 rc.2/rc.3 都失败，未合入。rc.3 刷新恢复聊天后再启用，HTTP 502 但 bundle 已重新加入，六个 vendor disabled 行继续存在，最终 stock/vendor 全关。rc.2 Desktop 的市场停用列表过滤使该方向保持 stock，未独立复现健康页面启用后的新白屏。
+- scratch 上游方向原型跳过 live mutation、仅记录下次启动状态；rc.2 两轮 off/on 保持页面和 graph。仅是方向性证据；跨宿主、后续配置刷新、既有 overrides 和分组切换未解决，不是可发布补丁。详细证据索引、失败启动记录、源码行号和后续真实 Desktop 验证清单见 [调查报告](blank-toggle-investigation.md)。
+- 实际命令均使用 `PATH=/opt/homebrew/lib/node_modules/corepack/shims:$PATH pnpm --config.verifyDepsBeforeRun=false …`：`build:preview` 通过；`typecheck` 通过；`test tests/host-runtime-package.test.ts tests/client-registration.test.ts tests/build-dependencies.test.ts` 为 **3 文件、30 项通过**，TMPDIR 指向上述 scratch。原生 SettingsForms 的设置写入、revision/reset/释放沿用真实 Loader 关联测试；未做浏览器设置编辑和真实账号验收。
+- 只更新 README 中英文、设计与调查/验证文档，澄清连续热切换未通过；没有运行行为变更、新行为测试、全量 suite 或 OpenSpec 归档。失败候选保留在 scratch 供主会话审阅，不更新真实 Desktop。

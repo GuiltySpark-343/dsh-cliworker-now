@@ -1083,3 +1083,10 @@ SettingsForms 本身不修改：describe、update、replace、mutate、revision 
 继续使用独立 `cliworker-ui-*` Loader 行、官方浏览器包身份及现有 canonical 原生设置适配；不增加版本白名单。rc.3 随包 UI 在隔离 0.2.1-rc.2 与 0.2.1-rc.3 Host 均通过启用/禁用、页面及设置读写验证，因此保留两者兼容。该结论限于本次 UI 与安装验证，不扩大真实 CLI、模型或平台验收。
 
 官方 app 的 client-modules build identity 为 `be72761`；公开 GitHub commit API 无此对象，单独记录为未解析，不与 tag commit 混同。官方 app 只通过已链接插件目录和两个 profile 文件恢复；不改 app.asar、DSH Desktop、凭据、既有会话或 CLI Worker 数据。实际操作、备份及回退证据见 tasks.md。
+
+
+## 2026-10-24：市场热切换白屏调查结论（无运行代码变更）
+
+此前的启用/禁用兼容性记录不能推导为连续热切换安全。本次实际市场 toggle 路由在隔离 rc.2 Desktop Host 与 rc.3 原生 Host 均触发 `session-maybe` adapter 缺失和 React 白屏；stock 模块随后恢复也不能恢复已经崩溃的页面。scratch guard 在 dispose 中停 vendor、等待旧 fiber、恢复 stock 的候选同样失败，未合入。rc.3 还复现失败启用重新加入 bundle、却保留 owned rows disabled 的分裂状态，最终 stock/vendor 同时关闭；rc.2 Desktop 的市场停用列表过滤使该方向表现不同。
+
+保持现有 fail-closed、settings alias 释放及唯一来源契约；不在插件销毁时引入未经保证的跨模块交换，不重新插入 stock id。建议上游在 live mutation 前识别需重启 bundle，延迟完整切换，并修复失败启用的 bundle/patch 一致性。详细源码行号、候选、实测和未验证范围见 [调查报告](blank-toggle-investigation.md)。
