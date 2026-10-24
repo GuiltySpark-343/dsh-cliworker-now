@@ -128,7 +128,7 @@ export declare class SessionInputShell implements SessionInput {
     persistCurrentDraft(): void;
     /**
      * Apply one new-task request to this already-initialized input model.
-     * @param options - replacement content and explicit permission to clear existing text.
+     * @param options - content to adopt and the handling of an existing draft.
      * @returns applied when the requested text is adopted, even if unchanged;
      * preserved when the current draft is kept; blocked after disposal or during a pending submission.
      */

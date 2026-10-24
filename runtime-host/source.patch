@@ -1,8 +1,8 @@
 diff --git a/docs/subsystems/slots.md b/docs/subsystems/slots.md
-index 281d1a61131653d2b82d486b327cbf5920301b13..86a61d7b4c9b6c56a17e3058e0b13428de3ace50 100644
+index fb8ba31f8a1286dceffda387a687e783427bf5aa..66d76e39b10c48777dc5448260c666d6a5d73963 100644
 --- a/docs/subsystems/slots.md
 +++ b/docs/subsystems/slots.md
-@@ -99,6 +99,10 @@ The renderer also creates `useStore` from a declared store and `t` from a declar
+@@ -101,6 +101,10 @@ The renderer also creates `useStore` from a declared store and `t` from a declar
  
  Framework and domain-adapter owners may extend the standard set through `ctx.slots.provideRoot()` or `ctx.uiSession.provide()` together with the corresponding `GlobalStandardProps`, `SessionStandardProps`, or `SessionMaybeStandardProps` declaration merge. A feature component should not create a React hook prop itself or add a global standard prop for entry-private data.
  
@@ -14,10 +14,10 @@ index 281d1a61131653d2b82d486b327cbf5920301b13..86a61d7b4c9b6c56a17e3058e0b13428
  
  The `inject` option on a registration is the ordinary feature-owned injection point. Its factory runs in the plugin's `apply` world, may close over injected Cordis services, and returns only the data and callbacks that the component needs. For a `session` slot it receives `sessionId`; for `session-maybe` it receives `sessionId | undefined`; when a store is declared it also receives the store's bound actions.
 diff --git a/docs/subsystems/slots.zh.md b/docs/subsystems/slots.zh.md
-index 16fccb74960f608f252684b8e0c51d8cefa2cf76..f5115b23eabe047eba822b83fe19ca18c1a3bdfd 100644
+index 1ced4db4fafd0a6b3c86923cf2af3648d098a7b9..c2b431368af2a487e07ef1df9f8ffd5c111e4ae4 100644
 --- a/docs/subsystems/slots.zh.md
 +++ b/docs/subsystems/slots.zh.md
-@@ -101,6 +101,10 @@ Renderer 还会根据声明的 store 创建 `useStore`，并根据声明的 loca
+@@ -103,6 +103,10 @@ Renderer 还会根据声明的 store 创建 `useStore`，并根据声明的 loca
  
  框架与领域 adapter owner 可以通过 `ctx.slots.provideRoot()` 或 `ctx.uiSession.provide()` 扩展标准集合，同时提供对应的 `GlobalStandardProps`、`SessionStandardProps` 或 `SessionMaybeStandardProps` 声明合并。普通功能组件不应自行创建 React hook prop，也不应为 entry 私有数据添加全局标准 prop。
  
@@ -1676,7 +1676,7 @@ index 0000000000000000000000000000000000000000..ea0de0e0a4ee327813cf635691c733cb
 +})
 diff --git a/packages/client/ui-chat/tests/external-usage-report.client.spec.tsx b/packages/client/ui-chat/tests/external-usage-report.client.spec.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..b80bae47448c16daadd0607d3d45eee579c2da2a
+index 0000000000000000000000000000000000000000..f6e8ad07ab2a1497ff2fa217115557dfc971fd73
 --- /dev/null
 +++ b/packages/client/ui-chat/tests/external-usage-report.client.spec.tsx
 @@ -0,0 +1,211 @@
@@ -1737,7 +1737,7 @@ index 0000000000000000000000000000000000000000..b80bae47448c16daadd0607d3d45eee5
 +    const dialog = view.getByRole('dialog')
 +    expect(dialog.textContent).toContain('缓存读取192 tok')
 +    expect(dialog.textContent).toContain('输入（含缓存）4,054 tok')
-+    expect(dialog.textContent).not.toContain('无法计算命中率')
++    expect(dialog.textContent).not.not.toContain('无法计算命中率')
 +    expect(view.queryByText('缓存写入')).toBeNull()
 +  })
 +  it('retains an unknown ratio when the uncached denominator lacks cache writes (synthetic)', () => {
@@ -1764,7 +1764,7 @@ index 0000000000000000000000000000000000000000..b80bae47448c16daadd0607d3d45eee5
 +    expect(text).not.toContain('含缓存')
 +    expect(text).not.toContain('未缓存')
 +    expect(text).toContain('缓存命中—')
-+    expect(text).toContain('无法计算命中率')
++    expect(text).not.toContain('无法计算命中率')
 +  })
 +  it('renders the exact total with known input/output and inspectable unknown cache', () => {
 +    const view = stats(partial, { externalScope: 'run', externalRunId: 'synthetic-run' })
@@ -1780,7 +1780,7 @@ index 0000000000000000000000000000000000000000..b80bae47448c16daadd0607d3d45eee5
 +    expect(view.queryByText('缓存读取')).toBeNull()
 +    expect(view.queryByText('缓存写入')).toBeNull()
 +    expect(dialog.textContent).toContain('缓存命中—')
-+    expect(dialog.textContent).toContain('无法计算命中率')
++    expect(dialog.textContent).not.toContain('无法计算命中率')
 +    expect(dialog.textContent).not.toContain('未缓存输入')
 +    expect(dialog.textContent).not.toContain('43 tok')
 +    expect(dialog.parentElement).toBe(document.body)
@@ -1800,7 +1800,7 @@ index 0000000000000000000000000000000000000000..b80bae47448c16daadd0607d3d45eee5
 +    fireEvent.click(trigger)
 +    const dialog = view.getByRole('dialog')
 +    expect(dialog.textContent).toContain('3,901 tok')
-+    expect(dialog.textContent).toContain('无法计算命中率')
++    expect(dialog.textContent).not.toContain('无法计算命中率')
 +    expect(dialog.textContent).not.toContain('0%')
 +    fireEvent.keyDown(document, { key: 'Escape' })
 +    expect(view.queryByRole('dialog')).toBeNull()
@@ -1814,13 +1814,13 @@ index 0000000000000000000000000000000000000000..b80bae47448c16daadd0607d3d45eee5
 +    fireEvent.click(trigger)
 +    const dialog = view.getByRole('dialog')
 +    expect(dialog.textContent).toContain(`缓存命中${cached}%`)
-+    expect(dialog.textContent).not.toContain('无法计算命中率')
++    expect(dialog.textContent).not.not.toContain('无法计算命中率')
 +  })
 +  it('does not call an observed empty prompt unknown cache (synthetic)', () => {
 +    const view = stats({ totalTokens: 10, inputBasis: 'inclusive', inputTokens: 0,
 +      outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 })
 +    fireEvent.click(view.getByRole('button'))
-+    expect(view.getByRole('dialog').textContent).not.toContain('无法计算命中率')
++    expect(view.getByRole('dialog').textContent).not.not.toContain('无法计算命中率')
 +    expect(view.getByRole('dialog').textContent).not.toContain('缓存命中')
 +  })
 +  it('keeps orchestration disjoint in native details without adding it to the reported bill a second time', () => {
@@ -1887,7 +1887,7 @@ index 0000000000000000000000000000000000000000..b80bae47448c16daadd0607d3d45eee5
 +    expect(dialog.textContent).toContain('3,901 tok')
 +    expect(dialog.textContent).not.toContain('缓存读取')
 +    expect(dialog.textContent).toContain('缓存命中—')
-+    expect(dialog.textContent).toContain('无法计算命中率')
++    expect(dialog.textContent).not.toContain('无法计算命中率')
 +    expect(dialog.textContent).not.toContain('43 tok')
 +  })
 +})
@@ -1941,10 +1941,10 @@ index 0000000000000000000000000000000000000000..bc76a1a42fbc40d4ebf83bbd71b02376
 +  expect(dialog.textContent).toContain('43 tok')
 +})
 diff --git a/packages/client/ui-conversation/src/client/apply.ts b/packages/client/ui-conversation/src/client/apply.ts
-index e567bd1a50b42f4a25cf7795afa5afafeb632e8e..5d0cdefc4fb4d175becdb3f53fcc9df5071990f3 100644
+index 6594c9581210eed5524fa0bbd858362daf5501e3..3e6ab10d127487d23758d72abc7905fb87363e78 100644
 --- a/packages/client/ui-conversation/src/client/apply.ts
 +++ b/packages/client/ui-conversation/src/client/apply.ts
-@@ -533,10 +533,10 @@ export function apply(ctx: Context, config: Config = Config({})): void {
+@@ -541,10 +541,10 @@ export function apply(ctx: Context, config: Config = Config({})): void {
          },
          toggleCommandMenu: inputTriggers === undefined
            ? undefined
@@ -2038,10 +2038,10 @@ index 0000000000000000000000000000000000000000..faaa0610ff5fa5378df1526f97dfa4c6
 +    ? state as TelemetryUnavailable : undefined
 +}
 diff --git a/packages/client/ui-conversation/src/client/contract/slots.ts b/packages/client/ui-conversation/src/client/contract/slots.ts
-index a02f5aa662e47b9de87f424cc6bf54c41502c7c3..10e8ed40bef65654ca21db75f7ea70d04a3f5172 100644
+index 4a0bd3a7391aa72cf215c25cf80ffcb16b434103..f1a0431f13ff0a00e776fbcb73cdbf7918498bc1 100644
 --- a/packages/client/ui-conversation/src/client/contract/slots.ts
 +++ b/packages/client/ui-conversation/src/client/contract/slots.ts
-@@ -436,6 +436,12 @@ export interface ConversationSessionHeaderInjected {
+@@ -481,6 +481,12 @@ export interface ConversationSessionHeaderInjected {
  export interface ComposerBarOwnerProps {
    /** Hero uses centered placement; composer uses the active bottom placement. */
    variant: 'hero' | 'composer'
@@ -2054,7 +2054,7 @@ index a02f5aa662e47b9de87f424cc6bf54c41502c7c3..10e8ed40bef65654ca21db75f7ea70d0
    /** A feature-owned reason that makes message input inert while leaving model selection live. */
    blocked?: { readonly reason: string }
    /** Lock all message actions while preserving the resident composer surface. */
-@@ -464,7 +470,7 @@ export interface ComposerBarInjected {
+@@ -509,7 +515,7 @@ export interface ComposerBarInjected {
    resolveDraftAttachments: ((ids: readonly DraftAttachmentId[]) => readonly ComposerAttachment[]) | undefined
    /** Restart one failed file upload; absent without a session. */
    retryFileUpload: ((id: DraftAttachmentId) => void) | undefined
@@ -2063,7 +2063,7 @@ index a02f5aa662e47b9de87f424cc6bf54c41502c7c3..10e8ed40bef65654ca21db75f7ea70d0
    stop: (() => void) | undefined
    hooks: {
      /** Readable sequence while the fixed Stop command is registered. */
-@@ -536,6 +542,12 @@ export interface ConversationContentInputProps {
+@@ -581,6 +587,12 @@ export interface ConversationContentInputProps {
    variant: 'main' | 'embedded'
    phase: 'settling' | 'hero' | 'active'
    hero: boolean
@@ -2077,17 +2077,17 @@ index a02f5aa662e47b9de87f424cc6bf54c41502c7c3..10e8ed40bef65654ca21db75f7ea70d0
  
  /** Values passed from shared content to its occurrence-selected width controls. */
 diff --git a/packages/client/ui-conversation/src/client/index.ts b/packages/client/ui-conversation/src/client/index.ts
-index 229aea31ccc8a37982ea35c3e0f772c82c3a1c25..70628fca12f5ab1ed37e2d7f78a79fc4463fe635 100644
+index 08a7432e1e5f4fbbd165576ad6887ad264dbc5d3..1037f1ceeaf92bd7f55437aa5f06b78e5f6699fc 100644
 --- a/packages/client/ui-conversation/src/client/index.ts
 +++ b/packages/client/ui-conversation/src/client/index.ts
-@@ -112,3 +112,5 @@ declare module '@deepseek-ai/cordis' {
+@@ -113,3 +113,5 @@ declare module '@deepseek-ai/cordis' {
      uiConversation: import('./conversation/assembly.ts').UiConversation
    }
  }
 +
 +export type { TelemetryUnavailable, TelemetryAvailability, ExternalRequestState } from './contract/external-status.ts'
 diff --git a/packages/client/ui-conversation/src/client/locales.ts b/packages/client/ui-conversation/src/client/locales.ts
-index f1f708073b3264abb603aae371a7cf6ca03ae750..0ccec67c33d1868facfa8a4dd21238ec7196129d 100644
+index 938326df751cc5effa5885db86bb8e6918297377..c747281191dba10c4d9c93bf03e20f7b8211e10e 100644
 --- a/packages/client/ui-conversation/src/client/locales.ts
 +++ b/packages/client/ui-conversation/src/client/locales.ts
 @@ -66,7 +66,19 @@ export const zh = {
@@ -2110,7 +2110,7 @@ index f1f708073b3264abb603aae371a7cf6ca03ae750..0ccec67c33d1868facfa8a4dd21238ec
    'context.system': '系统提示词',
    'context.tools': '工具定义',
    'context.messages': '对话消息',
-@@ -446,7 +458,19 @@ export const en = {
+@@ -448,7 +460,19 @@ export const en = {
    'file.notStaged': 'The file has not finished uploading; re-add it and try again',
    'file.label': 'File',
    'context.aria': '{percent} of context used',
@@ -2789,10 +2789,10 @@ index 4ee04fe8a7d55faf0d278b4954f789704a06e747..ec5343747ec495af16ebb5c9e2878f5c
      const toggleCommandMenu = vi.fn()
      const { view, shell, menuLauncher } = bench({ draft: 'draft text', toggleCommandMenu })
 diff --git a/packages/client/ui-conversation/tests/skeleton.client.spec.tsx b/packages/client/ui-conversation/tests/skeleton.client.spec.tsx
-index bcd1005a30e5c2c78df6f6e130270558eaa68952..bc8abf3a58648b5a642993149dbdb62e2f40444a 100644
+index bda16c8a081e645afc96ba4f0ffff5a60bb96fd6..b496e60df99b3cb36f18f56b559625dc7a152955 100644
 --- a/packages/client/ui-conversation/tests/skeleton.client.spec.tsx
 +++ b/packages/client/ui-conversation/tests/skeleton.client.spec.tsx
-@@ -138,6 +138,9 @@ function mount(
+@@ -139,6 +139,9 @@ function mount(
      nestedSubagent?: boolean
      /** A composer block another plugin raised for this session. */
      composerBlock?: { reason: string }
@@ -2801,9 +2801,9 @@ index bcd1005a30e5c2c78df6f6e130270558eaa68952..bc8abf3a58648b5a642993149dbdb62e
 +    commandSource?: string
      /** Mutable view ledger used by registration-order regressions. */
      viewTabs?: ViewTab[]
-   } = {},
-@@ -195,7 +198,7 @@ function mount(
-   let pickerOwner: unknown
+     /** Persisted ids of unpinned View tabs. */
+@@ -204,7 +207,7 @@ function mount(
+   const setPinned = vi.fn<(id: string, pinned: boolean) => void>()
    const renderSlot = ((key: string, owner: object, opts?: { only?: string; fallback?: ReactNode }) => {
      slotCalls.push(key)
 -    if (key === 'conversation.input.model' || key === 'conversation.input.plan') {
@@ -2811,7 +2811,7 @@ index bcd1005a30e5c2c78df6f6e130270558eaa68952..bc8abf3a58648b5a642993149dbdb62e
        seatOwners.push({ key, owner })
      }
      if (key === 'conversation.hero.workspace') { pickerOwner = owner; return null }
-@@ -356,7 +359,10 @@ function mount(
+@@ -373,7 +376,10 @@ function mount(
      )) as ConversationContentProps['useFactorySlot']
      return (
        <FactoryViewsTestContext.Provider value={common}>
@@ -2823,7 +2823,7 @@ index bcd1005a30e5c2c78df6f6e130270558eaa68952..bc8abf3a58648b5a642993149dbdb62e
        </FactoryViewsTestContext.Provider>
      )
    }) as ConversationSlotProps['renderFactorySlot']
-@@ -385,6 +391,23 @@ function mount(
+@@ -407,6 +413,23 @@ function mount(
    }
  }
  
@@ -2849,10 +2849,10 @@ index bcd1005a30e5c2c78df6f6e130270558eaa68952..bc8abf3a58648b5a642993149dbdb62e
      const renderSlot = vi.fn<HeroShellProps['renderSlot']>(() => null)
 diff --git a/packages/client/ui-conversation/tests/telemetry-availability.client.spec.tsx b/packages/client/ui-conversation/tests/telemetry-availability.client.spec.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..4f6e53feacfb236eff4d0f48f7faf92c46adc3be
+index 0000000000000000000000000000000000000000..a2fbd21b20b9a16bf274cc4d240478096cfb65e7
 --- /dev/null
 +++ b/packages/client/ui-conversation/tests/telemetry-availability.client.spec.tsx
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,47 @@
 +// @vitest-environment jsdom
 +// Synthetic explicit availability snapshots; no context/token estimates.
 +import { afterEach, expect, it } from 'vitest'
@@ -2871,16 +2871,17 @@ index 0000000000000000000000000000000000000000..4f6e53feacfb236eff4d0f48f7faf92c
 +it('retains an unknown native context module until both fields arrive, without showing 0%', () => {
 +  const view = meter({ telemetryAvailability: pending, contextPressure: { contextWindow: 128000 } })
 +  fireEvent.click(view.getByRole('button', { name: '上下文 —' }))
-+  expect(view.getByRole('dialog').textContent).toContain('等待已确认的上下文占用及容量')
++  expect(view.getByRole('dialog').textContent).toBe('上下文 —')
 +  expect(view.getByRole('dialog').textContent).not.toContain('0%')
 +  expect(view.container.querySelector('[stroke-dasharray]')).toBeNull()
 +  fireEvent.keyDown(document, { key: 'Escape' })
 +  expect(view.queryByRole('dialog')).toBeNull()
 +})
-+it.each(['not-reported', 'disconnected'])('explains actual unavailable reason %s', reason => {
++it.each(['not-reported', 'disconnected'])('keeps unavailable context unknown without extra explanatory copy: %s', reason => {
 +  const view = meter({ telemetryAvailability: { context: { state: 'unavailable', reason } } })
 +  fireEvent.click(view.getByRole('button', { name: '上下文 —' }))
-+  expect(view.getByRole('dialog').textContent).toContain(reason === 'disconnected' ? '数据连接已断开' : '当前 CLI 尚未公开')
++  expect(view.getByRole('dialog').textContent).toBe('上下文 —')
++  expect(view.getByRole('dialog').textContent).not.toContain('0%')
 +})
 +it('prefers actual occupancy over optional availability, including a real zero reading', () => {
 +  const view = meter({ telemetryAvailability: pending, contextPressure: { pressureTokens: 0, contextWindow: 128000 } })

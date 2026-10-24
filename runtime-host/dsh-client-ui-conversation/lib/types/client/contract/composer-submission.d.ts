@@ -15,6 +15,10 @@ export interface MessageSubmissionState {
     };
     readonly runMode: 'default' | 'plan' | 'goal';
     readonly running: boolean;
+    /** Whether the Session is still blank, so this message is its first. */
+    readonly newSession: boolean;
+    /** Agent preset id the Session records, when known. */
+    readonly agentPreset?: string;
 }
 /** Immutable occurrence and delivery intent carried by one composer attempt. */
 export interface MessageSubmission {

@@ -63,6 +63,14 @@ export declare class DraftEditorRuntime {
      */
     setDraft(text: string): void;
     /**
+     * Add plain text after the current draft as new paragraphs, keeping its text
+     * and references; an empty draft takes the text as its whole content.
+     * Placeholder-sanitized; the caret lands at the end; merged into history
+     * like {@link setDraft}.
+     * @param text - plain text to add.
+     */
+    appendDraft(text: string): void;
+    /**
      * Insert pasted plain text over the current editor selection
      * (placeholder-sanitized). The paste event's own default is suppressed by
      * the caller; PASTE_TAG makes the paste its own history boundary, so one

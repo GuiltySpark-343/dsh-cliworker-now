@@ -2520,3 +2520,26 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 发布：`main` 与注释 Tag `v0.8.2`（提交 `f1f5863`）已推送。该提交的 GitHub Windows CI 在“Build isolated plugin”失败：Windows 检出默认 `core.autocrlf=true`，把 LF 的 runtime-host 文件转成 CRLF，触发 `runtime-content-mismatch`（v0.8.1 起的提交均带 `[skip ci]`，此前未暴露）。后续提交 `1c36a2f` 新增 `.gitattributes`，令 `runtime-host/**`、`host-extensions/**` 不做换行转换，[CI](https://github.com/SuperWheel/dsh-cliworker-now/actions/runs/39456295405) 通过。安装包不受影响；Tag 保留原位，未强制改写。
 - [GitHub Release v0.8.2](https://github.com/SuperWheel/dsh-cliworker-now/releases/tag/v0.8.2) 已公开，含 tgz、SHA256SUMS.txt 和脱敏 package-verification.json；远端下载后 `shasum -c` 两项均 OK。
 - npm：用户本人登录并完成发布二次验证，同一 tgz 发布返回 `+ dsh-cliworker-now@0.8.2`。随即只读回查时 registry 仍返回 404、`latest` 仍为 0.8.1（发布扫描中）；按用户要求不再继续等待，公开可安装状态未确认。
+
+
+## v0.8.3（未发布）：完整 rc.3 re-vendor 与官方客户端恢复（2026-10-24）
+
+- 包版本保持 **0.8.2**，没有 commit/push/publish。OpenSpec：`upgrade-host-rc3`。39 个 SDK rc.3 版本经 registry 实查存在，根锁文件由 pnpm 重生；四包采用官方 Git tag `dsh-v0.2.1-rc.3`，HEAD `1f81c047fc48fa190a683e469daa699857e9afe8`。
+- pnpm 安装自动记录 release-age 例外：根 workspace 新增 300 个 DSH 包的精确 `0.2.1-rc.3`；扩展独立 workspace 为 296 个 DSH 包加入精确 rc.3，并保留继承的 rc.1/rc.2 与 7 个 Cordis 等基础包的固定版本例外（共 303 行）。保留以便复现本次依赖图，没有关闭全局保护或放开通配版本。
+- 官方 app 的 `be72761` 构建标记经 GitHub commit API 查询无对应公开对象，未冒充 tag commit。48 文件补丁从真实 checkout 导出，保留 rc.3 header hooks、views.actions/view-pins、whenDraftExists、提交快照与原有 commandSource/childImageUploads。旧 rc.2 扩展目录未改。
+- 运行命令统一使用 `PATH=/opt/homebrew/lib/node_modules/corepack/shims:$PATH pnpm --config.verifyDepsBeforeRun=false …`。依赖以 `install --ignore-scripts --no-frozen-lockfile` 更新，扩展独立 store；显式冻结 React 18.3.1 及 Zustand/use-sync-external-store，消除初次源码测试的重复 React。四包源码类型检查通过；builder 构建/verify **4 包 221 文件**，vendor 摘要 **204 文件**，插件 Host/Client `typecheck` 通过。
+- 关联 `tests/build-dependencies.test.ts tests/host-runtime-package.test.ts tests/market-install-peers.test.ts`：**3 文件 24 项通过**。新增 rc.3 精确图选择场景，未知未来版本拒绝保留。source 测试的 7 个旧统计文案断言按已有简洁设计更新，另 1 项负载超时复验；三文件独立复验 **37/37**。首次与后续全量结果及最终复验见下方收尾记录，未将失败轮次计为通过。
+- 隔离实际 Host 使用交接 scratch 中 rc.3 官方 app asar 与 rc.2 DSH Desktop asar（仅 scratch 副本）。四个新 DSH_HOME 的 rc.2/rc.3 启用/禁用均通过；启用预检 ready、五个客户端（含插件），禁用四个官方客户端，四 UI 身份始终各一次。ConfigEditor/SettingsForms 真实 update/reset/replace、旧 revision 拒绝与 canonical stock 行落盘通过；未写正式设置。两版本浏览器已实际打开 CLI Worker 空面板，禁用页均正常启动、插件计数 0。
+- 隔离证据：交接 scratch 下 `rc3-upgrade/isolated-results.json`、各 home 的 `ownership-result.json`、`rc2-cliworker-panel.png`、`rc3-cliworker-panel.png`。本轮构建与测试原始日志在 `.cache/rc3-*`，不纳入 Git。未调用真实模型或派遣任务；未验证 Windows/Linux、真实 CLI 续聊或工具执行。
+
+
+### 收尾结果
+
+- 四包完整源码回归最终以 `--maxWorkers=2` 干净通过：**112 文件、1894/1894**；`check-client-types.mjs` 四包全通过。首次 React 环境失败和旧文案断言失败日志均保留，最终未跳过上述测试。
+- 插件 `pnpm test --maxWorkers=2` 最终 **214 文件通过、3 文件跳过；4285 通过、13 跳过、0 失败**。此前首次全量发现两处 rc.2 pin 旧断言，已更新并增加 rc.3 选图用例；后续高并发全量在 Hermes/ZCode 模拟进程出现 4 项失败，两个相关文件单独 **90/90** 复验通过，最终低并发全量也通过。三组计数不相加。
+- `pnpm build:preview`、`pnpm build` 成功；最终 preview/runtime-host manifest 与 source.patch 相同。生产构建前确认官方 profile 不含插件 bundle，配置块注释，CLI Worker 未加载。独立行补丁 `cordis.patch.yml` 和 `scripts/host-extension-guard.mjs` 与本次起点 HEAD 完全相同。
+- 隔离页面在最后一次 preview 原地重建期间出现 HMR `SlotAssemblyError`；没有将该热更新计为通过。按既有冷启动要求重启 rc.2/rc.3 后，两页均重新呈现原生页面和 CLI Worker，四包各 1、插件 1、无槽位错误，并读取先前保存的 verbose/steer。禁用场景仍各 4 个官方模块、插件 0。支持冷启动更新，不新增热更新承诺。
+- 官方 `/Applications/DeepSeek Harness.app` 版本核验为 **0.2.1-rc.3**。正常 quit 后，仅在 `~/.dsh/profiles/desktop/package.json` 的 bundles 中将插件加到 dshmarket 后，恢复 `cordis.patch.yml` 的原五行 CLI Worker 配置；visible-dynamic-workflows 保持注释。没有编辑官方应用、DSH Desktop、凭据文件、既有会话或 Worker 数据。
+- 两份逐字节校验备份：`~/.dsh/profiles/desktop/package.json.bak-rc3-cliworker-20261024-153635`、`~/.dsh/profiles/desktop/cordis.patch.yml.bak-rc3-cliworker-20261024-153635`。配置变化仅上述恢复及对应说明注释，没有回退。
+- `open -a "DeepSeek Harness"` 后原窗口恢复，CUA 实际点击“打开 CLI Worker”，确认右侧 `CLI Worker Now` 标题、筛选栏及空列表。System Events 窗口标题与截图留于 scratch `rc3-upgrade/official-cliworker.png`；`official-result.json` 与日志前后 inventory 记录 `~/Library/Logs/DeepSeek Harness` **无新增、无修改日志文件**。未触发任务、模型、登录、账号探测或设置修改。
+- 严格规格检查归档前 **25/25**、归档后 **24/24**，`git diff --check` 通过。7/7 任务核对后，同步 package-distribution 的 1 项新增需求并归档至 `openspec/changes/archive/2026-10-24-upgrade-host-rc3/`；其余活动变更和旧待办未变。真实模型、Windows/Linux 与公开分发仍未验证，本次未提交或发布。

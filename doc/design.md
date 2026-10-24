@@ -1072,3 +1072,14 @@ stock 行保留其官方 name 与 canonical config，作为原生设置的唯一
 SettingsForms 本身不修改：describe、update、replace、mutate、revision 和原生事件继续使用 canonical namespace。原 ConfigEditor.edit 继续负责文件锁、层次优先级、验证、原子写入、HMR 与失败回滚；新增设置行使用 stock name，移除插件后不会留下指向 vendored 路径的断言。启动适配不写盘，仅用户原生设置编辑触发宿主写盘。
 
 缓存按 stock entry 与 vendored fiber 身份更新；旧视图的 settings.configure 注册及时释放。预检卸载时恢复原 entries 属性描述符并清理全部展示策略；若后来的扩展已经包装该方法，不覆盖其包装，同时将本适配置为停用并清空缓存。此兼容层限定于随包固定基线的两个纯 UI schema，不能泛化到有 Host 配置副作用的插件。
+
+
+## v0.8.3（未发布）：Harness rc.3 四包升级
+
+开发 SDK 的 39 个固定版本统一升级至 0.2.1-rc.3，插件包版本保持 0.8.2。四包从公开 tag `dsh-v0.2.1-rc.3` 的真实 checkout `1f81c047fc48fa190a683e469daa699857e9afe8` 重编；源码、依赖及元数据摘要冻结于 `host-extensions/dsh-0.2.1-rc.3`，runtime-host manifest 记录相同来源。旧 rc.2 扩展目录保持用于历史复核。
+
+保留 rc.3 的 `conversation.session.header.views.actions`、view-pins、`whenDraftExists` 的 append/replace/keep 优先语义及 `newSession`/`agentPreset` 提交快照。48 文件补丁仅手工合并 skeleton 测试的新 header hooks；另修正历史测试仍期待已移除统计说明的断言，产品显示继续遵循既有简洁统计设计。React/React DOM 18.3.1 与 Zustand/use-sync-external-store 在同一隔离依赖图中固定，避免源码测试跨根目录产生重复 React。
+
+继续使用独立 `cliworker-ui-*` Loader 行、官方浏览器包身份及现有 canonical 原生设置适配；不增加版本白名单。rc.3 随包 UI 在隔离 0.2.1-rc.2 与 0.2.1-rc.3 Host 均通过启用/禁用、页面及设置读写验证，因此保留两者兼容。该结论限于本次 UI 与安装验证，不扩大真实 CLI、模型或平台验收。
+
+官方 app 的 client-modules build identity 为 `be72761`；公开 GitHub commit API 无此对象，单独记录为未解析，不与 tag commit 混同。官方 app 只通过已链接插件目录和两个 profile 文件恢复；不改 app.asar、DSH Desktop、凭据、既有会话或 CLI Worker 数据。实际操作、备份及回退证据见 tasks.md。

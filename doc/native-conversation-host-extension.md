@@ -1,5 +1,7 @@
 # 原生子对话与主对话体验的宿主接口缺口
 
+2026-10-24 当前源码候选已完整迁移至 **0.2.1-rc.3**，公开 tag commit 为 `1f81c047fc48fa190a683e469daa699857e9afe8`，应用 build identity `be72761` 未解析为公开提交。新输入见 `host-extensions/dsh-0.2.1-rc.3`；保留 rc.3 的视图动作、草稿和快照语义，隔离 rc.2/rc.3 界面与原生设置均可用。下文 rc.2 记录保留为历史，实际最终验收见 `doc/tasks.md`。
+
 2026-10-17 当前候选：本次四包构建输入为用户实际更新的 Desktop **0.2.1-rc.2**。官方源码 tag `dsh-v0.2.1-rc.2` 对应 `687f282e8625c6b8d11ff58211a90524be2e4317`，实际应用构建标记为 `332895e0f7c9d4dbfb29729f5eb367fa263ff986`，两者分别记录，不视为同一提交。源码补丁位于 `host-extensions/dsh-0.2.1-rc.2`，独立候选为 `artifacts/dsh-host-extension-021rc2-data`。四包 manifest 的 220 个文件已校验；实际 Node 24 下四包类型检查与 8 文件、268 项定向回归通过。此处记录构建及验收事实，不作为插件加载的宿主版本白名单；实际安装与 Desktop 验收以 `doc/tasks.md` 对应阶段记录为准。
 
 官方 rc.1 到 rc.2 在四个 UI 包及 slot 文档范围仅四个 package.json 的版本变化；迁移后的 229 个生产源码文件与前一候选字节一致，保留原生 `conversation.chat.flow`、真实子 Agent 和已授权可选接口。新补丁只另修正一项遗留测试，使其使用新版拆分后的原生 UsagePill。构建依赖、内容地址 store、四包产物均独立保存，不替换根 node_modules、旧候选或用户资料；SDK 别名使用本次官方依赖或同版源码，不回落到旧 SDK。
