@@ -1090,3 +1090,12 @@ SettingsForms 本身不修改：describe、update、replace、mutate、revision 
 此前的启用/禁用兼容性记录不能推导为连续热切换安全。本次实际市场 toggle 路由在隔离 rc.2 Desktop Host 与 rc.3 原生 Host 均触发 `session-maybe` adapter 缺失和 React 白屏；stock 模块随后恢复也不能恢复已经崩溃的页面。scratch guard 在 dispose 中停 vendor、等待旧 fiber、恢复 stock 的候选同样失败，未合入。rc.3 还复现失败启用重新加入 bundle、却保留 owned rows disabled 的分裂状态，最终 stock/vendor 同时关闭；rc.2 Desktop 的市场停用列表过滤使该方向表现不同。
 
 保持现有 fail-closed、settings alias 释放及唯一来源契约；不在插件销毁时引入未经保证的跨模块交换，不重新插入 stock id。建议上游在 live mutation 前识别需重启 bundle，延迟完整切换，并修复失败启用的 bundle/patch 一致性。详细源码行号、候选、实测和未验证范围见 [调查报告](blank-toggle-investigation.md)。
+
+
+## 2026-10-25：界面中英双语（add-client-i18n，未发布）
+
+`GeneralSettings.language` 为 `follow | zh | en`，默认 `follow`，与总并发上限同存 `general-settings.json`（0600），`null` 恢复默认，其他值被补丁 schema 拒绝。Host 在 Worker 快照中仅在非 `follow` 时附带 `language`，所有已打开面板据此同步；Remote 签名不变，旧记录缺省视为 `follow`。
+
+Client 以中文原文为键（`src/client/i18n-messages.ts` 的 `en` 字典，`MessageKey = keyof typeof en`），中文字典是键的恒等映射。`src/client/i18n.ts` 维护模块级语言状态与 `useSyncExternalStore` 订阅：`t()` 供普通函数使用，组件经 `useT()` 订阅并在语言变化时重绘。`index.tsx` 在挂载后调用 `installClientLocale(ctx)`，于可选 `locale` 作用域内用 `scope.effect` 注册 `cliworker` 命名空间并订阅 Harness 语言变化，插件卸载时注销并回到中文。`follow` 时经 `locale.bind('cliworker')` 取词（Harness 语言以 `zh` 开头为中文，其余为英文，外部语言包可覆盖）；显式选择则用插件词典。日期与数字格式随有效语言使用 `zh-CN` / `en-US`。
+
+Host 与共享模块仍只输出中文，不导入 Client 词典。Client 的 `hostText()` 对词典中收录的 Host 原文（约 90 条：常见错误、能力原因、权限选项、暂停原因等）及两条带变量的模板做精确映射，英文时剥离 `Error:` 前缀；未收录内容原样显示，不机器猜译。仍为中文的范围：未收录的 Host/CLI 错误、Host 生成的标题与摘要、内置角色预设内容、默认名称 `智能体-xxx`、发给 CLI 的附件说明，以及给主 Agent 的工具描述与提示词。Client 内与 Host 原文比较的字符串（如状态、暂停原因）保持中文键比较，不比较译文。
