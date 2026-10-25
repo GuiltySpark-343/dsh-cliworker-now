@@ -26,7 +26,7 @@
 
 ## 5. 真实验收（用户已授权）
 
-- [ ] 5.1 Desktop 并行派遣 4 个只读 Grok：问好、写文件、`touch`、`mkdir`；核对事件、退出状态与项目文件。
+- [x] 5.1（由 6.6 取代）Desktop 并行派遣 4 个只读 Grok：问好、写文件、`touch`、`mkdir`；核对事件、退出状态与项目文件。
   - 2026-10-25 23:33（ef10d44 正式构建，新 Host 23:31:59），用户授权；4 个任务同时创建、并行运行。grok-12 问好 completed（「你好。」）。grok-9 写文件：仍发起 `session/request_permission`，插件拒绝，Grok cancelled，任务 failed，文件不存在。grok-10 `touch grok-probe-touch.txt`、grok-11 `mkdir grok-probe-dir`：`run_terminal_command` exit 0，无审批请求，任务 completed，项目中实际出现 0 字节文件与空目录。
   - 结论：未通过。`dontAsk` 下不应再有审批请求，`deny` 也未拦住 touch/mkdir，说明 `grok agent stdio` 不采用 `agent` 之前的全局 `--permission-mode`/`--deny`；官方 agent 模式文档只列 `--model`、`--always-approve` 等选项，权限经 `session/new` 的 `_meta`（yoloMode/autoMode）或配置文件设定。本节改动目前对 Grok 行为无效（只读仍依赖插件拒绝审批，touch/mkdir 缺口未补上）；可写 `acceptEdits` 是否生效同样未证实。探针产物保留在测试项目，待用户决定是否删除。
 - [ ] 5.2 只读运行调用 DSH 工具桥（未授权，未执行）。
@@ -38,4 +38,6 @@
 - [x] 6.3 测试：`tests/grok-adapter.test.ts` 只读/可写配置内容、工具桥 allow 仅在就绪且绑定 Grok 的只读运行；`tests/native-acp.test.ts` 只读 argv 不含 `--permission-mode/--deny/--allow`、可写仍为 `acceptEdits`。
 - [x] 6.4 离线核对：`grok inspect --json` 读回 `prepareGrok` 生成的配置，只读 loaded 2、带工具桥 loaded 3、可写 loaded 0，均无 skipped；以新 argv 在临时 GROK_HOME 完成 initialize 与 session/new（不发提示）。`[ui] permission_mode = "dontAsk"` 无离线证据（inspect 不显示模式，日志对 dontAsk 与无效值均无警告）。
 - [x] 6.5 全量 225 文件 4410 通过、13 跳过（负载约 9，无失败）；类型检查、`build:preview`、OpenSpec 严格校验通过。
-- [ ] 6.6 Desktop 并行 4 个只读 Grok（问好、写文件、`touch`、`mkdir`）真实复验。
+- [x] 6.6 Desktop 并行 4 个只读 Grok（问好、写文件、`touch`、`mkdir`）真实复验。
+  - 2026-10-26 00:09（f7b4002 正式构建，新 Host 00:07:52），用户授权；4 个任务 0.6 秒内创建并行运行，grok-4.6·low。4 个运行的私有 config.toml 均含 `permission_mode = "dontAsk"`、两条 deny 及工具桥 allow（Desktop 中工具桥已就绪）。grok-13 问好 completed（「你好。」）。grok-15 `mkdir grok-probe-dir`、grok-16 `touch grok-probe-touch.txt`：无审批请求，工具返回 `Denied by permission policy: deny rule on bash matching "mkdir"`/`"touch"`，任务因工具失败证据为 failed「CLI 工具执行失败」。grok-14 写文件：仍发起 1 次 `session/request_permission`，插件拒绝，Grok cancelled，任务 failed。项目文件派遣前后目录清单与 shasum 完全一致。
+  - 结论：deny 规则经私有配置生效，touch/mkdir 缺口已补上；`[ui] permission_mode = "dontAsk"` 未生效（写文件仍询问），只读的其余写入仍依赖插件拒绝审批，被拒后 Grok 取消整轮。

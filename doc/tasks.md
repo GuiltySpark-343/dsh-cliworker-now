@@ -2682,3 +2682,11 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 验证：`tests/native-acp.test.ts` 新增 2 项（无模式 ACP 下只读 Grok 成功且不切换模式——撤掉修复时失败；列出模式时仍切换、Kimi 无模式仍失败）；全量 225 文件 4407 通过、13 跳过；`build:preview` 通过。
 - Desktop 复验（22:52，用户授权，新 Host 17:21）：同项目并行 2 个只读 Grok（grok-4.6·low），无 `EEXIST`、无模式报错，访问模式「规划（只读）」。问好任务 completed（「你好。」，无工具调用）；写文件任务中 Grok 在 plan 模式下仍请求 write 权限，插件拒绝，Grok 以 cancelled（PermissionRejected）结束，任务 failed；项目文件 shasum 前后一致，探针文件不存在。
 - 已知行为：Grok 1.0.62 plan 模式不自行阻止写工具，只读靠插件拒绝额外权限；拒绝即取消整轮，写入被拒的只读任务显示为失败。未改动。
+
+## 2026-10-26 只读 Grok 权限改由私有 config.toml 设定（`feat/general-settings`，未发布）
+
+- 背景：Grok 1.0.62 官方文档称 `--permission-mode plan` 只是兼容值；`mkdir`/`touch` 在所有模式下免审批。用户决定改为 dontAsk 加 deny 规则。
+- 第二版（ef10d44，全局参数 `--permission-mode dontAsk --deny …`）Desktop 复验 2026-10-25 23:33 未通过：写文件仍询问，`touch`/`mkdir` 实际建出文件与目录（已在用户同意后删除）。`grok agent stdio` 不采用 `agent` 之前的全局权限参数。
+- 第三版（f7b4002，OpenSpec `fix-grok-native-plan-mode` 第 6 节）：只读运行在私有 `GROK_HOME/config.toml` 写入 `[ui] permission_mode = "dontAsk"`、`[permission] deny = ["Bash(mkdir)", "Bash(touch)"]`，工具桥就绪且绑定 Grok 时加 `allow = ["MCPTool(dsh_worker_tools__*)"]`；可写运行写回基础配置；只读启动参数不再含全局权限参数。离线：`grok inspect --json` 读回只读 2 条、带工具桥 3 条、可写 0 条规则；新参数在临时 GROK_HOME 正常建立会话。全量 4410 通过、13 跳过；类型检查、`build:preview`、OpenSpec 严格校验通过。
+- Desktop 复验（2026-10-26 00:09，用户授权，新 Host 00:07:52）：并行 4 个只读 Grok。问好 completed；`touch`/`mkdir` 被 Grok 原生拒绝（`Denied by permission policy: deny rule on bash matching …`），无审批请求，任务显示 failed（工具失败）；写文件仍请求审批，插件拒绝，Grok cancelled，failed。项目目录清单与 shasum 前后一致。
+- 结论与遗留：deny 规则生效，touch/mkdir 缺口已补上；`permission_mode = "dontAsk"` 未生效，其余写入仍靠插件拒绝审批。被拒的只读写入任务均显示失败。只读运行调用 DSH 工具桥未验证。
