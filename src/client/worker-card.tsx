@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   active,
   effortLabel,
@@ -11,6 +11,7 @@ import {
 import { displayModelName } from '../shared/model-presentation.ts'
 import { Glyph } from './icons.tsx'
 import { NameCopy } from './name-copy.tsx'
+import type { IsolationAction } from './isolation-dialog.tsx'
 
 const status: Record<WorkerStatus, string> = {
   queued: '排队中',
@@ -22,6 +23,16 @@ const status: Record<WorkerStatus, string> = {
   interrupted: '已中断',
 }
 export type WorkerManagementAction = 'title' | 'name' | 'delete'
+/** Real copy state only; no progress estimate is shown while copying or merging. */
+function isolationLabel(worker: Worker): string | undefined {
+  const isolation = worker.isolation
+  if (!isolation || isolation.state === 'released') return undefined
+  if (isolation.message) return isolation.message
+  if (isolation.state === 'preparing') return '正在创建隔离副本'
+  if (isolation.state === 'merging') return '正在合并隔离副本'
+  if (isolation.state === 'conflict') return `合并冲突：${isolation.conflicts?.length ?? 0} 个文件，项目未改动`
+  return active(worker.status) ? '在隔离副本中运行' : '隔离副本待合并'
+}
 export function WorkerCard({
   worker,
   collapsed,
@@ -29,6 +40,7 @@ export function WorkerCard({
   busy,
   onOpen,
   onManage,
+  onIsolation,
 }: {
   worker: Worker
   collapsed: boolean
@@ -36,6 +48,7 @@ export function WorkerCard({
   busy: boolean
   onOpen: () => void
   onManage: (action: WorkerManagementAction) => void
+  onIsolation: (action: IsolationAction) => void
 }) {
   const [menu, setMenu] = useState(false)
   const point = useRef<{ x: number; y: number }>()
@@ -45,6 +58,10 @@ export function WorkerCard({
     if (collapsed) setMenu(false)
   }, [collapsed])
   const locked = collapsed || unavailable || busy
+  const isolation = isolationLabel(worker)
+  const mergeable =
+    !active(worker.status) && (worker.isolation?.state === 'ready' || worker.isolation?.state === 'conflict')
+  const notice = worker.status === 'queued' ? worker.isolationNotice : undefined
   const openMenu = (x?: number, y?: number) => {
     if (collapsed) return
     point.current = x === undefined || y === undefined ? undefined : { x, y }
@@ -134,6 +151,21 @@ export function WorkerCard({
               </span>
               <span>{effortLabel(worker.preference.effort)}</span>
             </div>
+            {(isolation || notice) && (
+              <div className="cwn-worker-isolation" data-tone={notice || worker.isolation?.state === 'conflict' ? 'warn' : undefined}>
+                <span>{isolation ?? notice}</span>
+                {isolation && mergeable && (
+                  <>
+                    <Button type="button" size="sm" variant="ghost" disabled={locked} onClick={() => onIsolation('merge')}>
+                      合并
+                    </Button>
+                    <Button type="button" size="sm" variant="ghost" disabled={locked} onClick={() => onIsolation('discard')}>
+                      丢弃
+                    </Button>
+                  </>
+                )}
+              </div>
+            )}
             <span className="cwn-worker-chevron" aria-hidden="true">
               <Glyph name="chevron" />
             </span>

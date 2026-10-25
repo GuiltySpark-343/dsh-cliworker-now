@@ -41,6 +41,7 @@ import { BrandIcon } from './icons.tsx'
 import { installNativeJobOverlay } from './native-job-overlay.ts'
 import { workerManagementStyles } from './management-styles.ts'
 import { renameCopyStyles } from './rename-copy-styles.ts'
+import { isolationStyles } from './isolation-dialog.tsx'
 
 const ID = 'dsh-cliworker-now'
 
@@ -206,6 +207,7 @@ export function apply(ctx: Context): void {
         rolePresetStyles +
         workerManagementStyles +
         renameCopyStyles +
+        isolationStyles +
         processStyles +
         contextInspectionStyles +
         reasoningRecordsStyles + workerGoalStyles

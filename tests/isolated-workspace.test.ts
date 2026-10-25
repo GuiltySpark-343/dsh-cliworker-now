@@ -21,6 +21,7 @@ import { randomUUID } from 'node:crypto'
 import {
   assertIsolatedCopy,
   createIsolatedWorkspace,
+  insideTarget,
   IsolationUnavailableError,
   isolationRoot,
   mergeIsolatedWorkspace,
@@ -250,4 +251,15 @@ describe('three-way merge back into the project', () => {
     expect((await mergeIsolatedWorkspace(context)).status).toBe('conflict')
     expect(readFileSync(join(context.project, 'README.md'), 'utf8')).toBe('# app\n')
   })
+})
+
+it('classifies link targets with POSIX and Windows separators without touching the filesystem', () => {
+  // Windows forms are checked as strings only; not verified on a Windows machine.
+  expect(insideTarget('src/alias.ts', 'b.ts')).toBe('src/b.ts')
+  expect(insideTarget('src/alias.ts', '..\\README.md')).toBe('README.md')
+  expect(insideTarget('src/alias.ts', '..\\..\\secret')).toBeUndefined()
+  expect(insideTarget('a', 'C:\\Users\\x')).toBeUndefined()
+  expect(insideTarget('a', 'c:/Users/x')).toBeUndefined()
+  expect(insideTarget('a', '/etc/hosts')).toBeUndefined()
+  expect(insideTarget('a/b/c', '../../../x')).toBeUndefined()
 })

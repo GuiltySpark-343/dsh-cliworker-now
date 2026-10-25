@@ -14,6 +14,8 @@ export interface GeneralSettings {
   maxConcurrent: number
   /** Deployment value used when the user has not chosen one. */
   defaultMaxConcurrent: number
+  /** Conflicting same-project writers run in plugin-owned copies; off by default. */
+  isolatedParallelWrites: boolean
 }
 
 /** Machine-local executable selection; separate from project model preferences. */

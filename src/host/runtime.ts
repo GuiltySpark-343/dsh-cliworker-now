@@ -3,7 +3,7 @@ import type { HarnessConversationApi } from './harness-conversation-types.ts'
 import { forkWorkerConversation, readWorkerForkState, writeWorkerForkState, type NativeForkCut, type ForkHistory, type WorkerForkState } from './worker-fork.ts'
 import { readClaudeOwnRoute, prepareClaudeWorkerLaunch } from './claude-own-route.ts'
 import { extendedLaunch, isExtendedCli } from './extended-adapters.ts'
-import { appendFileSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
 import { z } from 'zod'
@@ -73,6 +73,17 @@ import type { NativeHarnessConnection } from './native-harness-tools.ts'
 import type { NativeAttachment } from './native-attachments.mjs'
 import { workerPermissionOptions } from '../shared/worker-permissions.ts'
 import { GOAL_OBJECTIVE_LIMIT, type WorkerGoal } from '../shared/conversation-features.ts'
+import {
+  createIsolatedWorkspace,
+  isolatedCopyExists,
+  isolationPromptNotice,
+  isolationRoot,
+  IsolationUnavailableError,
+  mergeIsolatedWorkspace,
+  removeIsolatedWorkspace,
+  workspacePaths,
+  type MergeResult,
+} from './isolated-workspace.ts'
 
 interface Task {
   attachments?: readonly NativeAttachment[]
@@ -95,6 +106,12 @@ interface Task {
   nativeStopRequested?: boolean
   steering: Map<string, { prompt: string; done: Promise<void> }>
   steeringController: AbortController
+  /** Admission order; a task returned from a refused copy keeps its place. */
+  order: number
+  /** Drain chose a plugin-owned copy because the main directory is busy. */
+  isolate?: boolean
+  /** A copy was refused for this turn; it waits for the main directory instead. */
+  isolationRefused?: boolean
 }
 /** Internal identity distinguishes deliberate cancellation from timeouts and failures. */
 class UserStoppedError extends Error {
@@ -132,7 +149,7 @@ export class WorkerRuntime {
   private harnessPreparation?: (
     worker: Worker,
     signal: AbortSignal,
-    input: { submissionId?: string },
+    input: { submissionId?: string; isolated?: boolean },
   ) => Promise<{ connection?: NativeHarnessConnection; close(): Promise<void> } | undefined>
   setHarnessPreparation(prepare: NonNullable<WorkerRuntime['harnessPreparation']>): () => void {
     this.harnessPreparation = prepare
@@ -182,6 +199,11 @@ export class WorkerRuntime {
     Map<string, { generation: number; controller: AbortController; leases: number }>
   >()
   private stopOperations = new Map<string, Set<symbol>>()
+  /** Merge or discard of a Worker's copy; excludes sends and management. */
+  private isolationOperations = new Map<string, { kind: 'merging' | 'discarding'; done: Promise<unknown> }>()
+  /** Projects whose main directory a merge is writing. */
+  private mainWrites = new Set<string>()
+  private admissions = 0
   revision = 0
   constructor(
     readonly storage: WorkerStorage,
@@ -239,6 +261,25 @@ export class WorkerRuntime {
         ? `${CLI_LABELS[cli]} 元数据清理记录无法核验，已暂停此 CLI`
         : `${CLI_LABELS[cli]} 元数据进程清理尚未确认，已暂停此 CLI`)
     }
+    for (const worker of storage.workers.values()) this.recoverIsolation(worker)
+  }
+  /** Settles copies left by an earlier Host process; never deletes a ready copy. */
+  private recoverIsolation(worker: Worker): void {
+    const isolation = worker.isolation
+    if (!isolation) return
+    const root = isolationRoot(this.storage.directory)
+    let next: Worker['isolation'] = isolation
+    if (isolation.state === 'preparing') {
+      // An unfinished copy has no reliable baseline. The CLI never ran in it.
+      rmSync(join(root, worker.id), { recursive: true, force: true })
+      next = worker.conversationId ? { state: 'released', path: isolation.path } : undefined
+    } else if (isolation.state === 'merging')
+      next = { ...isolation, state: 'ready', message: '上次合并在 Host 关闭时中断，可重新合并；已写回的文件会被跳过' }
+    if (next && next.state !== 'released' && !isolatedCopyExists(root, worker.id, worker.project))
+      next = { ...next, message: '隔离副本目录已缺失，只能丢弃' }
+    if (next === isolation) return
+    worker.isolation = next
+    this.storage.save(worker)
   }
   /** Explicit construction policy is overridable by legacy protocol regression fixtures. */
   protected initialTransport(cli: CliId): string | undefined {
@@ -465,7 +506,7 @@ export class WorkerRuntime {
         cliOf(worker.preference),
         this.backend,
         this.config,
-        worker.project,
+        this.executionDirectory(worker),
         control,
       )
       control.throwIfAborted()
@@ -907,7 +948,11 @@ export class WorkerRuntime {
     return this.storage.generalSettings().maxConcurrent ?? this.config.maxConcurrent
   }
   generalSettings(): GeneralSettings {
-    return { maxConcurrent: this.maxConcurrent, defaultMaxConcurrent: this.config.maxConcurrent }
+    return {
+      maxConcurrent: this.maxConcurrent,
+      defaultMaxConcurrent: this.config.maxConcurrent,
+      isolatedParallelWrites: this.storage.generalSettings().isolatedParallelWrites ?? false,
+    }
   }
   setGeneralSettings(patch: unknown): GeneralSettings {
     if (this.disposed) throw new Error('插件正在关闭')
@@ -1060,6 +1105,7 @@ export class WorkerRuntime {
       (this.latestPriority.has(worker.id) && this.latestPriority.get(worker.id)!.id !== priorityId)
     )
       throw new Error('请等待任务结束并完成进程清理后再管理此任务')
+    if (this.isolationOperations.has(worker.id)) throw new Error('正在合并或丢弃隔离副本，请稍后再试')
   }
   assertLegacyRestart(parent: string, id: string): Worker {
     const worker = this.get(parent, id)
@@ -1202,6 +1248,7 @@ export class WorkerRuntime {
 
   async forkWorker(parent: Agent, id: string, atMessageId: string, bridge: HarnessConversationApi, signal: AbortSignal) {
     const source = this.get(parent.id, id)
+    if (source.isolation) throw new Error('隔离副本中的对话暂不支持分支，请先合并或丢弃后新建对话')
     // Paused queued followups still belong to this conversation and prohibit a fork.
     if (this.busyReason(source) || this.followups.list(id).length)
       throw new Error('请等待当前运行结束后再分支')
@@ -1319,7 +1366,9 @@ export class WorkerRuntime {
       attachTelemetry(rows, runId, this.runTelemetry(worker, runId))
     return rows
   }
-  private runTelemetry(worker: Worker, runId: string) {
+  private runTelemetry(bound: Worker, runId: string) {
+    // Native session files are keyed by the directory the CLI actually ran in.
+    const worker = bound.isolation ? { ...bound, project: bound.isolation.path } : bound
     const rawPath = join(this.storage.directory, `${worker.id}.${runId}.raw.jsonl`)
     const observed = { ...this.telemetryReader.read(
       rawPath,
@@ -1482,6 +1531,8 @@ export class WorkerRuntime {
       throw new Error('此会话正在准备发送，请稍后再试')
     if (previous && (active(previous.status) || this.tasks.has(previous.id)))
       throw new Error('This CLI conversation already has a running or queued turn')
+    if (previous && this.isolationOperations.has(previous.id))
+      throw new Error('正在合并或丢弃隔离副本，请稍后再发送')
     const freshAfterStop = previous && !previous.conversationId && isUserInterrupted(previous)
     if (previous && !previous.conversationId && !readWorkerForkState(this.storage.directory, previous.id)?.sourceConversationId && !freshAfterStop)
       throw new Error('No CLI conversation_id was received; start a new worker')
@@ -1568,6 +1619,7 @@ export class WorkerRuntime {
     worker.observedModel = undefined
     worker.updatedAt = now
     worker.jobId = undefined
+    worker.isolationNotice = undefined
     this.storage.save(worker)
     if (!queuedAdmission || queuedAdmission.priority) {
       this.storage.append(worker, {
@@ -1621,6 +1673,7 @@ export class WorkerRuntime {
       submissionId,
       steering: new Map(),
       steeringController: new AbortController(),
+      order: this.admissions++,
     }
     void admission.catch((error) => {
       if (!controller.signal.aborted) task.admissionFailure = { error }
@@ -1793,16 +1846,123 @@ export class WorkerRuntime {
         continue
       }
       if (this.running.size >= this.maxConcurrent) break
-      const conflicts = (other: Task) =>
-        other.worker.project === task.worker.project &&
-        (other.worker.mode === 'accept-edits' || task.worker.mode === 'accept-edits')
-      if ([...this.running].some(conflicts) || this.queue.slice(0, this.queue.indexOf(task)).some(conflicts))
-        continue
+      // A conversation bound to a copy never touches the main directory.
+      if (!task.worker.isolation) {
+        const conflicts = (other: Task) =>
+          other.worker.project === task.worker.project &&
+          !other.worker.isolation &&
+          !other.isolate &&
+          (other.worker.mode === 'accept-edits' || task.worker.mode === 'accept-edits')
+        if (
+          this.mainWrites.has(task.worker.project) ||
+          [...this.running].some(conflicts) ||
+          this.queue.slice(0, this.queue.indexOf(task)).some(conflicts)
+        ) {
+          if (this.mainWrites.has(task.worker.project) || !this.canIsolate(task)) continue
+          task.isolate = true
+        }
+      }
       this.queue.splice(this.queue.indexOf(task), 1)
       this.running.add(task)
       void this.run(task).catch((error) => {
         this.finish(task, 'failed', String(error))
       })
+    }
+  }
+  /**
+   * Only a new writer with no native session may move into a copy: CLI
+   * sessions are tied to their working directory and cannot change it.
+   */
+  private canIsolate(task: Task): boolean {
+    const worker = task.worker
+    return (
+      !!this.storage.generalSettings().isolatedParallelWrites &&
+      worker.mode === 'accept-edits' &&
+      !task.isolationRefused &&
+      !worker.conversationId &&
+      !readWorkerForkState(this.storage.directory, worker.id)?.sourceConversationId
+    )
+  }
+  /** The CLI's working directory: the bound copy, or the project itself. */
+  executionDirectory(worker: Worker): string {
+    return worker.isolation?.path ?? worker.project
+  }
+  /** Metadata processes need an existing directory; a released copy is recreated only for a turn. */
+  catalogDirectory(worker: Worker): string {
+    return worker.isolation && isolatedCopyExists(isolationRoot(this.storage.directory), worker.id, worker.project)
+      ? worker.isolation.path
+      : worker.project
+  }
+  /**
+   * Creates (or recreates at the bound path) this Worker's copy. Returns the
+   * copy path, or undefined when the task went back to the serial queue.
+   */
+  private async prepareIsolation(task: Task): Promise<string | undefined> {
+    const { worker, controller } = task
+    const root = isolationRoot(this.storage.directory)
+    const bound = worker.isolation
+    if (bound && bound.state !== 'released') {
+      if (!isolatedCopyExists(root, worker.id, worker.project)) throw new Error('隔离副本目录已缺失，请丢弃后新建对话')
+      return bound.path
+    }
+    mkdirSync(root, { recursive: true, mode: 0o700 })
+    const path = workspacePaths(realpathSync(root), worker.id, worker.project).copy
+    if (bound && bound.path !== path) throw new Error('隔离副本路径与会话记录不一致，请新建对话')
+    worker.isolation = { state: 'preparing', path }
+    this.storage.save(worker)
+    this.changed()
+    try {
+      const created = await createIsolatedWorkspace({
+        root,
+        workerId: worker.id,
+        project: worker.project,
+        signal: controller.signal,
+      })
+      // A stop that lands after the last copy step must not leave a fresh copy behind.
+      controller.signal.throwIfAborted()
+      worker.isolation = {
+        state: 'ready',
+        path: created.path,
+        createdAt: new Date().toISOString(),
+        ...(created.skippedLinks ? { skippedLinks: created.skippedLinks } : {}),
+      }
+      this.storage.save(worker)
+      this.storage.append(worker, {
+        kind: 'diagnostic',
+        text: bound ? '已重新创建隔离副本' : '已创建隔离副本',
+        detail: `本轮在隔离副本中运行：${created.path}${
+          created.skippedLinks ? `\n跳过 ${created.skippedLinks} 个指向项目外或无法重建的符号链接` : ''
+        }`,
+      })
+      this.changed()
+      // Verify the account against the directory the CLI will actually read.
+      const original = task.admission
+      task.admission = original.then(() =>
+        readCliAccountBinding(cliOf(worker.preference), this.backend, this.config, created.path, controller.signal),
+      )
+      void task.admission.catch((error) => {
+        if (!controller.signal.aborted) task.admissionFailure ??= { error }
+        if (error instanceof ProcessCleanupUnconfirmedError) {
+          task.admissionFailure ??= { error }
+          this.blockCatalogOnCleanup(cliOf(worker.preference), error)
+        }
+      })
+      return created.path
+    } catch (error) {
+      // No copy existed before this preparation, so whatever is there is ours to remove.
+      await removeIsolatedWorkspace(root, worker.id).catch(() => undefined)
+      worker.isolation = bound ? { state: 'released', path: bound.path } : undefined
+      if (bound || controller.signal.aborted) {
+        this.storage.save(worker)
+        this.changed()
+        throw error
+      }
+      const reason = error instanceof IsolationUnavailableError ? error.message : `无法创建隔离副本：${String(error)}`
+      worker.isolationNotice = `${reason}；已改为排队，等待主目录空闲`
+      this.storage.save(worker)
+      this.storage.append(worker, { kind: 'diagnostic', text: '未创建隔离副本', detail: worker.isolationNotice })
+      this.changed()
+      return undefined
     }
   }
   private finish(
@@ -1870,7 +2030,39 @@ export class WorkerRuntime {
     }
   }
   private async run(task: Task): Promise<void> {
+    let directory = task.worker.project
+    if (task.isolate || task.worker.isolation) {
+      let prepared: string | undefined
+      try {
+        prepared = await this.prepareIsolation(task)
+      } catch (error) {
+        const stopped = task.controller.signal.aborted
+        await this.finishQueued(
+          task,
+          stopped ? 'interrupted' : 'failed',
+          stopped ? '用户已取消排队任务' : String(error instanceof Error ? error.message : error),
+        )
+        return
+      }
+      if (!prepared) {
+        // Back to the serial queue at its original admission position.
+        this.running.delete(task)
+        task.isolate = false
+        task.isolationRefused = true
+        const index = this.queue.findIndex((other) => other.order > task.order)
+        this.queue.splice(index < 0 ? this.queue.length : index, 0, task)
+        this.changed()
+        this.drain()
+        return
+      }
+      directory = prepared
+    }
+    await this.execute(task, directory)
+  }
+  private async execute(task: Task, directory: string): Promise<void> {
     const { worker, controller } = task
+    const isolated = directory !== worker.project
+    const prompt = isolated ? isolationPromptNotice(directory, worker.project) + task.prompt : task.prompt
     let handle: SubprocessHandle | undefined
     let readers: Promise<void>[] = []
     let harnessLease: { connection?: NativeHarnessConnection; close(): Promise<void> } | undefined
@@ -1929,7 +2121,7 @@ export class WorkerRuntime {
         worker.preference,
         this.backend,
         this.config,
-        worker.project,
+        directory,
         controller.signal,
         admitted,
       )
@@ -1944,9 +2136,9 @@ export class WorkerRuntime {
         controller.signal,
       )
       controller.signal.throwIfAborted()
-      await assertFirstPartyConfiguration(cliOf(worker.preference), worker.project, controller.signal)
+      await assertFirstPartyConfiguration(cliOf(worker.preference), directory, controller.signal)
       metadataReady = true
-      harnessLease = await this.harnessPreparation?.(worker, controller.signal, { submissionId: task.submissionId })
+      harnessLease = await this.harnessPreparation?.(worker, controller.signal, { submissionId: task.submissionId, isolated })
       const executionConfig = { ...this.config,
         ...(task.attachments?.length ? { attachments: task.attachments } : {}),
         ...(harnessLease?.connection ? { harnessTools: harnessLease.connection } : {}),
@@ -1956,7 +2148,7 @@ export class WorkerRuntime {
       this.changed()
       const selectedClaudeRoute =
         cliOf(worker.preference) === 'claude'
-          ? await readClaudeOwnRoute(worker.project, controller.signal)
+          ? await readClaudeOwnRoute(directory, controller.signal)
           : undefined
       // Bind the exact prepared snapshot as well as the current source. A -> B -> A
       // configuration changes must not authorize launching B under A's admission.
@@ -1967,7 +2159,7 @@ export class WorkerRuntime {
             'claude',
             this.backend,
             executionConfig,
-            worker.project,
+            directory,
             controller.signal,
             selectedClaudeRoute,
           ))
@@ -1977,15 +2169,15 @@ export class WorkerRuntime {
         ? await extendedLaunch(
             cliOf(worker.preference),
             executable,
-            worker.project,
+            directory,
             worker.preference,
             worker.mode,
-            task.prompt,
+            prompt,
             this.nativeStateDirectory(worker),
             executionConfig,
             resumeConversation,
             (argv, env) =>
-              captureCatalogMetadata(this.backend, this.config, argv, worker.project, controller.signal, env),
+              captureCatalogMetadata(this.backend, this.config, argv, directory, controller.signal, env),
             {
               backend: this.backend,
               signal: controller.signal,
@@ -1998,10 +2190,10 @@ export class WorkerRuntime {
               selectedClaudeRoute!,
               workerArguments(
                 executable,
-                worker.project,
+                directory,
                 worker.preference,
                 worker.mode,
-                task.prompt,
+                prompt,
                 this.config.timeoutMs,
                 resumeConversation,
                 nativeTransport,
@@ -2017,10 +2209,10 @@ export class WorkerRuntime {
               },
               argv: workerArguments(
                 executable,
-                worker.project,
+                directory,
                 worker.preference,
                 worker.mode,
-                task.prompt,
+                prompt,
                 this.config.timeoutMs,
                 resumeConversation,
                 nativeTransport,
@@ -2037,10 +2229,10 @@ export class WorkerRuntime {
               launch,
               {
                 cli: cliOf(worker.preference),
-                project: worker.project,
+                project: directory,
                 preference: worker.preference,
                 mode: worker.mode,
-                prompt: task.prompt,
+                prompt: prompt,
                 conversationId: expectedConversation,
                 ...(pendingFork?.sourceConversationId ? { forkSource: { conversationId: pendingFork.sourceConversationId, messageId: pendingFork.sourceMessageId! } } : {}),
                 stateDirectory: nativeState,
@@ -2068,7 +2260,7 @@ export class WorkerRuntime {
           cliOf(worker.preference),
           this.backend,
           this.config,
-          worker.project,
+          directory,
           controller.signal,
         ))
       )
@@ -2097,7 +2289,7 @@ export class WorkerRuntime {
       handle = await spawnManagedAgent(this.backend, {
         argv: execution.argv,
         env: 'env' in execution ? execution.env : undefined,
-        cwd: worker.project,
+        cwd: directory,
         stdio: { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' },
         graceMs: this.config.graceMs,
         signal: controller.signal,
@@ -2256,6 +2448,92 @@ export class WorkerRuntime {
     this.finish(task, status, error, interruptionReason)
   }
 
+  /** Idle, unbound-from-operations Worker with an existing copy. */
+  private isolationTarget(parent: string, id: string): Worker {
+    const worker = this.get(parent, id)
+    if (this.disposed) throw new Error('CLI Worker is shutting down')
+    const isolation = worker.isolation
+    if (!isolation || isolation.state === 'released' || isolation.state === 'preparing')
+      throw new Error('此任务没有待合并的隔离副本')
+    if (this.isolationOperations.has(id)) throw new Error('正在合并或丢弃隔离副本，请稍后再试')
+    if (this.busyReason(worker) || this.tasks.has(id)) throw new Error('请等待本轮结束后再合并或丢弃隔离副本')
+    return worker
+  }
+  /** Ends the copy binding after its directory is confirmed gone. */
+  private releaseIsolation(worker: Worker, text: string): void {
+    const path = worker.isolation!.path
+    // A conversation never started in the copy has nothing tied to its path.
+    worker.isolation = worker.conversationId ? { state: 'released', path } : undefined
+    this.storage.save(worker)
+    this.storage.append(worker, { kind: 'diagnostic', text })
+  }
+  /**
+   * Three-way merge of the copy into the project as uncommitted changes.
+   * Nothing is written when any path conflicts; the copy is then kept.
+   */
+  async mergeIsolation(parent: string, id: string, signal?: AbortSignal): Promise<MergeResult> {
+    const worker = this.isolationTarget(parent, id)
+    const project = worker.project
+    if (this.mainWrites.has(project)) throw new Error('该项目正在写回另一个隔离副本，请稍后再试')
+    const writer = [...this.running].find(
+      (task) => task.worker.project === project && !task.worker.isolation && !task.isolate && task.worker.mode === 'accept-edits',
+    )
+    if (writer) throw new Error('主目录中有写任务正在运行，请等它结束后再合并')
+    const previous = worker.isolation!
+    const root = isolationRoot(this.storage.directory)
+    const done = (async () => {
+      worker.isolation = { ...previous, state: 'merging', message: undefined }
+      this.storage.save(worker)
+      this.changed()
+      try {
+        const result = await mergeIsolatedWorkspace({ root, workerId: id, project, signal })
+        if (result.status === 'conflict') {
+          worker.isolation = { ...previous, state: 'conflict', conflicts: result.conflicts.slice(0, 200), message: undefined }
+          this.storage.save(worker)
+          this.storage.append(worker, {
+            kind: 'diagnostic',
+            text: `隔离副本有 ${result.conflicts.length} 个冲突，主目录未改动`,
+            detail: result.conflicts.map((item) => `${item.path}：${item.reason}`).join('\n'),
+          })
+          return result
+        }
+        await removeIsolatedWorkspace(root, id)
+        this.releaseIsolation(
+          worker,
+          `已合并隔离副本：写回 ${result.written.length} 个、删除 ${result.deleted.length} 个文件（未提交）`,
+        )
+        return result
+      } catch (error) {
+        worker.isolation = { ...previous, state: previous.state, message: `合并失败：${error instanceof Error ? error.message : String(error)}` }
+        this.storage.save(worker)
+        throw error
+      }
+    })()
+    return this.isolationOperation(id, 'merging', done, project)
+  }
+  /** Deletes the copy; reports success only after the directory is gone. */
+  async discardIsolation(parent: string, id: string): Promise<void> {
+    const worker = this.isolationTarget(parent, id)
+    const root = isolationRoot(this.storage.directory)
+    const done = (async () => {
+      await removeIsolatedWorkspace(root, id)
+      this.releaseIsolation(worker, '已丢弃隔离副本，主目录未改动')
+    })()
+    return this.isolationOperation(id, 'discarding', done)
+  }
+  private async isolationOperation<T>(id: string, kind: 'merging' | 'discarding', done: Promise<T>, project?: string): Promise<T> {
+    this.isolationOperations.set(id, { kind, done })
+    if (project) this.mainWrites.add(project)
+    this.changed()
+    try {
+      return await done
+    } finally {
+      this.isolationOperations.delete(id)
+      if (project) this.mainWrites.delete(project)
+      this.changed()
+      this.drain()
+    }
+  }
   async close(): Promise<void> {
     if (this.disposed) return
     this.disposed = true
@@ -2281,6 +2559,8 @@ export class WorkerRuntime {
     )
     await Promise.allSettled(interruptions)
     await Promise.allSettled([...this.followupRuns])
+    // A merge writes the user's project; let it finish rather than cut it off.
+    await Promise.allSettled([...this.isolationOperations.values()].map((operation) => operation.done))
     this.listeners.clear()
     this.supplementalContextReader.clear()
     this.storage.close()

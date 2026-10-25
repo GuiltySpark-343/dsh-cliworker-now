@@ -27,14 +27,14 @@
 - Host：项目偏好、会话索引、运行调度、Antigravity 适配器和持久化。
 - Client：原生右侧栏注册、两层任务树、实时记录、配置入口、停止和续聊。
 - 通信：Harness Gateway/Typert RPC；查询配置、快照、事件流和执行操作。
-- 模型工具：`cliworker_start`、`cliworker_status`、`cliworker_followup`、`cliworker_stop`。
+- 模型工具：`cliworker_start`、`cliworker_status`、`cliworker_followup`、`cliworker_stop`；隔离副本的合并与丢弃另有 `cliworker_merge`、`cliworker_discard`。
 - 独立保存 workerId、Harness parentSessionId 和外部 conversation_id。每轮运行独立记录，事件带单调递增序号。
 - 自然语言路由通过工具描述及作用域内提示规则完成。只管理通过插件启动的进程。
 
 ## 4. 生命周期与边界
 
 - 状态：等待配置、排队、运行、停止中、完成、失败、中断。
-- 默认最多两个并发；同会话单轮互斥，同目录写任务串行。
+- 默认最多两个并发；同会话单轮互斥，同目录写任务串行（「同目录写任务并行」开关打开时的例外见文末“隔离副本并行”一节）。
 - argv 显式传递 model/effort；解析 stream-json；stderr 与对话区分。失效模型或参数提示重选，不静默回退。
 - 沿用旧 skill 的目录校验、默认沙箱、私有文件权限；遵循宿主权限及规划模式。
 - 关闭侧栏不取消任务；断线重连恢复记录；宿主重启将遗留运行标为中断。
@@ -1090,3 +1090,16 @@ SettingsForms 本身不修改：describe、update、replace、mutate、revision 
 此前的启用/禁用兼容性记录不能推导为连续热切换安全。本次实际市场 toggle 路由在隔离 rc.2 Desktop Host 与 rc.3 原生 Host 均触发 `session-maybe` adapter 缺失和 React 白屏；stock 模块随后恢复也不能恢复已经崩溃的页面。scratch guard 在 dispose 中停 vendor、等待旧 fiber、恢复 stock 的候选同样失败，未合入。rc.3 还复现失败启用重新加入 bundle、却保留 owned rows disabled 的分裂状态，最终 stock/vendor 同时关闭；rc.2 Desktop 的市场停用列表过滤使该方向表现不同。
 
 保持现有 fail-closed、settings alias 释放及唯一来源契约；不在插件销毁时引入未经保证的跨模块交换，不重新插入 stock id。建议上游在 live mutation 前识别需重启 bundle，延迟完整切换，并修复失败启用的 bundle/patch 一致性。详细源码行号、候选、实测和未验证范围见 [调查报告](blank-toggle-investigation.md)。
+
+## 未发布：同目录写任务隔离副本并行
+
+OpenSpec 变更 `add-isolated-parallel-writes`，设计细节见该变更的 `design.md`。
+
+- 「CLI Worker 设置」→「任务调度」新增「同目录写任务并行」开关，默认关闭；关闭时调度与此前完全一致。
+- 打开后，`drain()` 判定新写任务与主目录中运行中或排在前面的任务冲突，且该 Worker 尚无原生会话时，在 `<状态目录>/isolated/<Worker ID>/copy/<项目名>` 建副本并立即放行；不冲突的任务、只读任务和已在主目录建立会话的续聊照旧。
+- 副本不含 `.git` 与依赖/缓存目录；符号链接不跟随，只复制相对且留在项目内的链接；先扫描后复制，超过 20 000 个文件或 1 GiB 时回退排队并在任务卡写明原因。APFS 等支持时用 `COPYFILE_FICLONE` 写时复制。清单记录每个文件的哈希，可合并文本（≤2 MiB、无 NUL）另存基线。
+- `projectDirectory()` 不放宽；副本路径另用 `assertIsolatedCopy()` 只接受调度器为该 Worker 生成的确切真实目录。
+- CLI 的 cwd、原生目录参数、账号核验与遥测读取使用副本路径；Worker 的项目身份、偏好、父会话与权限模式不变。本轮提示说明副本与原项目路径；隔离运行不接 DSH 工具桥；隔离对话暂不支持分支。
+- 合并（任务卡或 `cliworker_merge`）逐文件三方合并：只有副本改动的直接写回，两边都改的文本 diff3，其余为冲突；有冲突时主目录一个文件都不写、保留副本。写回为未提交改动，绝不提交。丢弃（任务卡确认或 `cliworker_discard` 原生询问）只在副本目录确认删除后报告成功。
+- 原生会话与工作目录绑定，故合并/丢弃后对话仍绑定同一路径（`released`），续聊时在原路径重建副本。
+- 重启时 `preparing` 删除、`merging` 恢复为可再次合并；停止只结束进程不删副本；归档保留副本。

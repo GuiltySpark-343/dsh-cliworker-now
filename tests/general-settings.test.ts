@@ -77,9 +77,13 @@ it('uses the saved limit over the config and admits queued work as soon as it is
   runtime.submit(worker.parentSessionId, project, worker.title, 'synthetic continuation', worker.preference,
     worker.mode, worker.id, undefined, 'synthetic-account')
   await vi.waitFor(() => expect(storage.workers.get(worker.id)?.status).toBe('queued'))
-  expect(runtime.generalSettings()).toEqual({ maxConcurrent: 0, defaultMaxConcurrent: 0 })
+  expect(runtime.generalSettings()).toEqual({ maxConcurrent: 0, defaultMaxConcurrent: 0, isolatedParallelWrites: false })
   expect(backend.resolveExecutable).not.toHaveBeenCalled()
 
-  expect(runtime.setGeneralSettings({ maxConcurrent: 1 })).toEqual({ maxConcurrent: 1, defaultMaxConcurrent: 0 })
+  expect(runtime.setGeneralSettings({ maxConcurrent: 1 })).toEqual({
+    maxConcurrent: 1,
+    defaultMaxConcurrent: 0,
+    isolatedParallelWrites: false,
+  })
   await vi.waitFor(() => expect(storage.workers.get(worker.id)?.status).not.toBe('queued'))
 })

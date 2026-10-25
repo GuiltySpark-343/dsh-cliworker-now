@@ -2574,3 +2574,10 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 实际执行：`vitest run tests/general-settings.test.ts tests/cli-settings.test.ts tests/settings-dialog.test.tsx tests/storage.test.ts` **4 文件 335 项通过**（含新增导航测试）；`node scripts/build-preview.mjs` 通过（Host/Client 类型检查与隔离构建）；`openspec validate add-general-settings-page --strict` 通过。
 - 说明：根目录 `typecheck` 读取的是 Desktop 链接的 `lib/` 生成类型，未正式构建前会报新增 Remote 不存在；本次未运行正式 `build`，未更新 Desktop。
 - 未执行：Desktop 实机界面（明暗主题、窄屏）；真实 CLI 多任务并发；全量 suite。
+
+## 2026-10-25 同目录写任务隔离副本并行（分支 `claude/isolated-parallel-writes-459fae`，未发布）
+
+- 范围：「CLI Worker 设置 → 任务调度」新增「同目录写任务并行」开关（缺省关闭）。开启后，仅在同目录写冲突时为新写任务在插件私有目录创建 APFS 克隆副本，任务结束后由任务卡或 `cliworker_merge` / `cliworker_discard` 三方合并或丢弃；合并有冲突时项目零写入、副本保留，结果为未提交改动。OpenSpec `add-isolated-parallel-writes`；无新增依赖（diff3 自实现）。
+- 实际执行：`vitest run` 隔离相关 8 文件（diff3、isolated-workspace、isolated-runtime、isolation-ui、general-settings、settings-dialog、storage、cli-settings）**373 项通过**；`tests/isolated-runtime.test.ts` 修复复制完成后才收到停止的挂起后连续运行 10 次均 10/10 通过；`node scripts/build-preview.mjs` 通过；`openspec validate add-isolated-parallel-writes --strict` 通过；`git diff --check` 通过。
+- 全量 suite：4329 通过、13 跳过、2 失败；失败均为 `tests/build-dependencies.test.ts` 读取正式构建产物 `lib/typert.remote-client.js`，本工作树未运行正式 `build` 故不存在，与本变更无关。
+- 未执行：真实 CLI 与模型、DSH Desktop 实机界面、Windows 实机（路径分隔符仅单元测试）、Linux reflink；未运行正式 `build`，未更新 Desktop。

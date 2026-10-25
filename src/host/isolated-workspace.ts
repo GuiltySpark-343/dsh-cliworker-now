@@ -160,7 +160,7 @@ interface Scanned {
   target?: string
 }
 /** Relative POSIX path of a link target, or undefined when it can leave the project. */
-function insideTarget(path: string, target: string): string | undefined {
+export function insideTarget(path: string, target: string): string | undefined {
   const normalized = target.replaceAll('\\', '/')
   if (isAbsolute(target) || posix.isAbsolute(normalized) || /^[a-z]:/i.test(normalized)) return undefined
   const resolved = posix.normalize(posix.join(posix.dirname(path), normalized))

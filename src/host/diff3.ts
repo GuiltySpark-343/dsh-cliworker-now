@@ -35,7 +35,7 @@ export function diffHunks(base: readonly string[], side: readonly string[], limi
   if (!n || !m) return [{ baseStart: prefix, baseLength: n, sideStart: prefix, sideLength: m }]
   const max = Math.min(n + m, limit)
   const offset = max + 1
-  let v = new Int32Array(2 * max + 3)
+  let v: Int32Array = new Int32Array(2 * max + 3)
   const trace: Int32Array[] = []
   let found = -1
   for (let d = 0; d <= max && found < 0; d++) {

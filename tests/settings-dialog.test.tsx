@@ -2606,7 +2606,7 @@ it.each(['read', 'save'] as const)(
   },
 )
 it('opens CLI Worker settings above agents and saves the shared concurrency limit', async () => {
-  let current = { maxConcurrent: 2, defaultMaxConcurrent: 2 }
+  let current = { maxConcurrent: 2, defaultMaxConcurrent: 2, isolatedParallelWrites: false }
   const generalSettings = vi.fn(async () => remote(current))
   const saveGeneralSettings = vi.fn(async (_session, raw: string) => {
     current = { ...current, ...JSON.parse(raw) }
@@ -2623,4 +2623,25 @@ it('opens CLI Worker settings above agents and saves the shared concurrency limi
   await t.click('4')
   expect(saveGeneralSettings).toHaveBeenCalledWith('simulation-parent', '{"maxConcurrent":4}', expect.any(AbortSignal))
   expect(t.text()).toContain('同时对话数已保存')
+})
+it('explains and saves the same-directory isolated-copy switch, off by default', async () => {
+  let current = { maxConcurrent: 2, defaultMaxConcurrent: 2, isolatedParallelWrites: false }
+  const saveGeneralSettings = vi.fn(async (_session, raw: string) => {
+    current = { ...current, ...JSON.parse(raw) }
+    return remote(current)
+  })
+  const t = await setup({ generalSettings: vi.fn(async () => remote(current)), saveGeneralSettings })
+  await t.click('CLI Worker 设置')
+  expect(t.button('同目录写任务并行').props['aria-checked']).toBe(false)
+  expect(t.text()).toContain('合并')
+  expect(t.text()).toContain('不会替你提交')
+  expect(t.text()).toContain('项目保持不变')
+  await t.click('同目录写任务并行')
+  expect(saveGeneralSettings).toHaveBeenCalledWith(
+    'simulation-parent',
+    '{"isolatedParallelWrites":true}',
+    expect.any(AbortSignal),
+  )
+  expect(t.button('同目录写任务并行').props['aria-checked']).toBe(true)
+  expect(t.text()).toContain('已开启同目录写任务并行')
 })

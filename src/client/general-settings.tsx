@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { Button, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, StateDot, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import { MAX_CONCURRENT_LIMIT, type GeneralSettings } from '../shared/cli-settings.ts'
 import { BrandIcon } from './icons.tsx'
 import { NativeChoice } from './native-settings-choice.tsx'
@@ -10,7 +10,11 @@ function readSettings(raw: string): GeneralSettings {
   const next = JSON.parse(raw)
   const count = (input: unknown) =>
     Number.isInteger(input) && (input as number) >= 1 && (input as number) <= MAX_CONCURRENT_LIMIT
-  if (!count(next?.maxConcurrent) || !count(next?.defaultMaxConcurrent))
+  if (
+    !count(next?.maxConcurrent) ||
+    !count(next?.defaultMaxConcurrent) ||
+    typeof next?.isolatedParallelWrites !== 'boolean'
+  )
     throw new Error('收到无效的通用设置，请重试')
   return next
 }
@@ -23,7 +27,9 @@ export function GeneralSettingsPane({ api, sessionId }: { api: API; sessionId: s
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
   const [attempt, retry] = useState(0)
+  const [subject, setSubject] = useState<'concurrency' | 'isolation'>('concurrency')
   const hintId = useId()
+  const isolationHintId = useId()
   const request = useRef<AbortController>()
   const service = api.cliworker
 
@@ -48,21 +54,23 @@ export function GeneralSettingsPane({ api, sessionId }: { api: API; sessionId: s
     return () => controller.abort()
   }, [service, sessionId, attempt])
 
-  async function saveMaxConcurrent(count: number) {
-    if (!settings || request.current || count === settings.maxConcurrent) return
+  async function save(patch: Partial<Pick<GeneralSettings, 'maxConcurrent' | 'isolatedParallelWrites'>>) {
+    if (!settings || request.current) return
+    const [[field, wanted]] = Object.entries(patch) as [[keyof typeof patch, unknown]]
+    if (settings[field] === wanted) return
     const controller = new AbortController()
     request.current = controller
+    setSubject(field === 'maxConcurrent' ? 'concurrency' : 'isolation')
     setSaving(true)
     setSaved(false)
     setError('')
     try {
       const next = readSettings(
-        value(
-          await service.saveGeneralSettings(sessionId, JSON.stringify({ maxConcurrent: count }), controller.signal),
-        ),
+        value(await service.saveGeneralSettings(sessionId, JSON.stringify(patch), controller.signal)),
       )
       if (controller.signal.aborted) return
-      if (next.maxConcurrent !== count) throw new Error('同时对话数未保存，请重新选择重试')
+      if (next[field] !== wanted)
+        throw new Error(field === 'maxConcurrent' ? '同时对话数未保存，请重新选择重试' : '同目录写任务并行未保存，请重试')
       setSettings(next)
       setSaved(true)
     } catch (error) {
@@ -117,14 +125,37 @@ export function GeneralSettingsPane({ api, sessionId }: { api: API; sessionId: s
               placeholder={loading ? '正在读取…' : '选择数量'}
               choices={choices}
               disabled={loading || saving || !settings}
-              onChange={(count) => void saveMaxConcurrent(Number(count))}
+              onChange={(count) => void save({ maxConcurrent: Number(count) })}
+            />
+          </div>
+          <div className="cwn-setting-row">
+            <span className="cwn-setting-row-text">
+              <span>同目录写任务并行</span>
+              <span className="cwn-setting-description" id={isolationHintId}>
+                同一项目已有写任务运行时，新写任务会把项目复制到插件私有目录（不含 .git 与 node_modules 等依赖目录），在副本中同时运行。完成后在任务卡上点「合并」把改动写回项目，作为未提交改动，不会替你提交；两边改了同一处时列出冲突文件，项目保持不变。项目过大时仍排队。关闭时同目录写任务依次排队。
+              </span>
+            </span>
+            <Switch
+              checked={settings?.isolatedParallelWrites ?? false}
+              onChange={(enabled) => void save({ isolatedParallelWrites: enabled })}
+              label="同目录写任务并行"
+              disabled={loading || saving || !settings}
             />
           </div>
           {(saving || saved || error) && (
             <div className="cwn-settings-save">
               <span className="cwn-settings-feedback-slot" role="status">
                 {saving && <StateDot state="ongoing" size={14} />}
-                {error || (saving ? '正在保存同时对话数…' : '同时对话数已保存')}
+                {error ||
+                  (subject === 'concurrency'
+                    ? saving
+                      ? '正在保存同时对话数…'
+                      : '同时对话数已保存'
+                    : saving
+                      ? '正在保存同目录写任务并行…'
+                      : settings?.isolatedParallelWrites
+                        ? '已开启同目录写任务并行'
+                        : '已关闭同目录写任务并行')}
               </span>
               {error && !settings && (
                 <Button type="button" size="sm" variant="ghost" disabled={loading} onClick={() => retry((old) => old + 1)}>

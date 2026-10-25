@@ -152,6 +152,22 @@ export interface Worker {
   interruptionReason?: 'user'
   observedModel?: string
   lastResult?: string
+  /** Plugin-owned project copy this conversation runs in; see isolated-workspace.ts. */
+  isolation?: WorkerIsolation
+  /** Why the last turn waited for the main directory instead of using a copy. */
+  isolationNotice?: string
+}
+/**
+ * `released` keeps the conversation bound to its copy path after merge or
+ * discard: native CLI sessions are tied to their working directory.
+ */
+export interface WorkerIsolation {
+  state: 'preparing' | 'ready' | 'merging' | 'conflict' | 'released'
+  path: string
+  createdAt?: string
+  conflicts?: { path: string; reason: string }[]
+  skippedLinks?: number
+  message?: string
 }
 export type HarnessConversationFeature = 'send' | 'queue' | 'steer' | 'stop' | 'model' | 'permission' | 'plan' | 'attachments' | 'fork' | 'forkEarlier' | 'goal' | 'feedback' | 'skills' | 'tools'
 export interface HarnessConversationBinding {
