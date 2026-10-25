@@ -443,7 +443,10 @@ export class CliWorkerService extends TypertRemoteService {
             : parent.ctx.get('sandboxPolicy')!.resolve({ session: parent.session }).mode,
         )
         child.ctx.get('planMode')?.set(child, worker.mode === 'plan')
-        const support = nativeHarnessToolCapability(cli)
+        // Host tools act on the parent's project; an isolated run must not write there.
+        const support = input.isolated
+          ? { transport: false, reason: '本轮在隔离副本中运行，未接通 DSH 工具桥，避免写入原项目' }
+          : nativeHarnessToolCapability(cli)
         if (!support.transport) {
           worker.harnessConversation = {
             ...binding,
@@ -1329,6 +1332,65 @@ export class CliWorkerService extends TypertRemoteService {
         ),
       'cliworker:stop',
     )
+    this.ctx.effect(
+      () =>
+        this.ctx.tools.register(
+          defineTool({
+            name: 'cliworker_merge',
+            description:
+              '把空闲 CLI 智能体隔离副本中的改动三方合并回当前项目，作为未提交改动写回，不会提交。有任何冲突时主目录不改动，返回冲突文件和副本路径（可只读查看副本后手动处理，再用 cliworker_discard 丢弃）。',
+            parameters: { worker_id: { type: 'string' }, worker_name: { type: 'string' } },
+            output,
+            isConcurrencySafe: () => false,
+            execute: async (args, exec) => {
+              if (!exec.agent) throw new Error('A parent Agent is required')
+              const worker = this.runtime.resolveWorker(exec.agent.id, args.worker_id, args.worker_name)
+              return JSON.stringify(await this.mergeIsolatedWorker(exec.agent, worker.id, exec.signal))
+            },
+          }),
+        ),
+      'cliworker:merge',
+    )
+    this.ctx.effect(
+      () =>
+        this.ctx.tools.register(
+          defineTool({
+            name: 'cliworker_discard',
+            description:
+              '丢弃空闲 CLI 智能体的隔离副本。执行前会向用户确认；确认后副本中的改动永久删除，主目录不变。用户未确认时副本保留。',
+            parameters: { worker_id: { type: 'string' }, worker_name: { type: 'string' } },
+            output,
+            isConcurrencySafe: () => false,
+            execute: async (args, exec) => {
+              if (!exec.agent) throw new Error('A parent Agent is required')
+              const agent = exec.agent
+              const worker = this.runtime.resolveWorker(agent.id, args.worker_id, args.worker_name)
+              const signal = AbortSignal.any([exec.signal, this.disposed.signal])
+              const response = await waitForInput(
+                agent.ctx.get('userQuestions')!.ask({
+                  agent,
+                  signal,
+                  questions: [
+                    {
+                      id: 'cliworker_discard',
+                      header: '丢弃副本',
+                      question: `丢弃 ${workerName(worker)} 的隔离副本？副本中的改动将永久删除，项目主目录不变。`,
+                      options: [{ label: '丢弃' }, { label: '保留' }],
+                    },
+                  ],
+                }),
+                signal,
+              )
+              const answer = response.answers.find((item) => item.id === 'cliworker_discard')
+              if (answer?.custom !== undefined || answer?.selected.length !== 1 || answer.selected[0] !== '丢弃')
+                return JSON.stringify({ status: 'kept', message: '用户未确认，隔离副本已保留' })
+              await this.runtime.discardIsolation(agent.id, worker.id)
+              return JSON.stringify({ status: 'discarded' })
+            },
+          }),
+        ),
+      'cliworker:discard',
+    )
   }
   /** @param parentSessionId - Owning Harness session. @param workerId - Selected worker or empty string. @param signal - Stream lifetime. @returns JSON snapshots, initially and after changes. */
   @Remote({ mode: 'stream' })
@@ -1655,6 +1717,35 @@ export class CliWorkerService extends TypertRemoteService {
       return JSON.stringify(await this.runtime.forkWorker(parent, workerId, atMessageId, this.harnessConversation, signal))
     } catch (error) { throw failure(error) }
   }
+  /** @param parentSessionId - Owning parent. @param workerId - Idle Worker with an isolated copy. @param signal - Cancels only before any project file is written. @returns Merge result JSON. */
+  @Remote('mergeIsolation')
+  async mergeIsolation(parentSessionId: string, workerId: string, signal: AbortSignal): Promise<string> {
+    try {
+      const agent = await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      return JSON.stringify(await this.mergeIsolatedWorker(agent, workerId, signal))
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param workerId - Idle Worker with an isolated copy; the user confirmed in the client. @param signal - Admission lifetime. @returns Completion after the copy directory is gone. */
+  @Remote('discardIsolation')
+  async discardIsolation(parentSessionId: string, workerId: string, signal: AbortSignal): Promise<void> {
+    try {
+      await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      await this.runtime.discardIsolation(parentSessionId, workerId)
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** Writes into the parent's project, so the host's plan/read-only boundary applies. */
+  private async mergeIsolatedWorker(agent: Agent, workerId: string, signal: AbortSignal) {
+    const worker = this.runtime.get(agent.id, workerId)
+    this.assertExecution(agent)
+    if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目合并')
+    return this.runtime.mergeIsolation(agent.id, workerId, AbortSignal.any([signal, this.disposed.signal]))
+  }
   /** @param parentSessionId - Owning session. @param signal - Query lifetime. @returns Profile-wide general settings JSON. */
   @Remote('generalSettings')
   async generalSettings(parentSessionId: string, signal: AbortSignal): Promise<string> {
@@ -1961,11 +2052,13 @@ export class CliWorkerService extends TypertRemoteService {
       if (!expected) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
       this.runtime.assertCliEnabled(cli)
       this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
-      let catalog = this.settingsCatalogs.display(worker.project, cli, expected)
+      // An isolated conversation's account was verified against its copy.
+      const directory = this.runtime.catalogDirectory(worker)
+      let catalog = this.settingsCatalogs.display(directory, cli, expected)
       if (!catalog) {
         const result = await this.settingsCatalogs.get({
           cli,
-          project: worker.project,
+          project: directory,
           signal: control,
           selfVerifiedDiscovery: cli === 'qoder' || cli === 'qodercn',
           binding: async () => {
@@ -1973,14 +2066,14 @@ export class CliWorkerService extends TypertRemoteService {
               cli,
               this.backend,
               this.options,
-              worker.project,
+              directory,
               control,
             )
             if (current !== expected) throw new Error(ACCOUNT_CHANGED)
             return current
           },
           discover: () =>
-            this.queryCatalog(cli, this.backend, this.options, worker.project, control, expected),
+            this.queryCatalog(cli, this.backend, this.options, directory, control, expected),
         })
         catalog = result.catalog
       }
@@ -2075,7 +2168,7 @@ export class CliWorkerService extends TypertRemoteService {
       if (!expected) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
       this.runtime.assertCliEnabled(cliOf(preference))
       this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
-      const catalog = this.settingsCatalogs.display(worker.project, cliOf(preference), expected)
+      const catalog = this.settingsCatalogs.display(this.runtime.catalogDirectory(worker), cliOf(preference), expected)
       if (!catalog) throw new Error('模型目录已失效，请重试读取或在设置中刷新')
       validatePreference(preference, catalog)
       signal.throwIfAborted()

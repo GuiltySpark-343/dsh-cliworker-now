@@ -102,6 +102,7 @@ const cliSettingsSchema = z.object({ enabled: z.partialRecord(storedCliSchema, z
 const generalSettingsSchema = z.object({
   maxConcurrent: z.int().min(1).max(MAX_CONCURRENT_LIMIT).optional(),
   language: z.enum(LANGUAGE_PREFERENCES).optional(),
+  isolatedParallelWrites: z.boolean().optional(),
 })
 export type StoredGeneralSettings = z.infer<typeof generalSettingsSchema>
 const enabledByDefault = () => Object.fromEntries(CLI_IDS.map((cli) => [cli, true])) as CliSettings['enabled']
@@ -163,6 +164,17 @@ const workerSchema = z.object({
   interruptionReason: z.literal('user').optional(),
   observedModel: z.string().optional(),
   lastResult: z.string().optional(),
+  isolation: z
+    .object({
+      state: z.enum(['preparing', 'ready', 'merging', 'conflict', 'released']),
+      path: z.string().min(1),
+      createdAt: z.string().optional(),
+      conflicts: z.array(z.object({ path: z.string(), reason: z.string() })).max(200).optional(),
+      skippedLinks: z.number().int().nonnegative().optional(),
+      message: z.string().max(2000).optional(),
+    })
+    .optional(),
+  isolationNotice: z.string().max(2000).optional(),
 })
 const eventSchema = z.object({
   requestState: z.object({
@@ -506,16 +518,18 @@ export class WorkerStorage {
       .object({
         maxConcurrent: z.int().min(1).max(MAX_CONCURRENT_LIMIT).nullable().optional(),
         language: z.enum(LANGUAGE_PREFERENCES).nullable().optional(),
+        isolatedParallelWrites: z.boolean().nullable().optional(),
       })
       .strict()
       .parse(patch)
-    const next: StoredGeneralSettings = { ...this.general }
-    for (const [key, value] of Object.entries(changes) as [keyof StoredGeneralSettings, unknown][]) {
+    const next: Record<string, unknown> = { ...this.general }
+    for (const [key, value] of Object.entries(changes)) {
       if (value === null) delete next[key]
-      else Object.assign(next, { [key]: value })
+      else if (value !== undefined) next[key] = value
     }
-    atomicJSON(join(this.directory, 'general-settings.json'), generalSettingsSchema.parse(next))
-    this.general = next
+    const parsed = generalSettingsSchema.parse(next)
+    atomicJSON(join(this.directory, 'general-settings.json'), parsed)
+    this.general = parsed
     return this.generalSettings()
   }
   rolePresets(): RolePreset[] {

@@ -35,7 +35,8 @@ Once installed, the plugin appears in Harness as **CLI Worker / CLI Worker Now**
 - **Native conversation experience**: child sessions use Harness's own conversation view, composer, model and permission controls, "+" menu and usage indicators, with queueing, stopping and follow-ups.
 - **Native CLI behavior**: each CLI uses its own protocol, login and sessions. Models and reasoning effort come from that CLI's real catalog and current account.
 - **Named agents with roles**: unique names, role presets and custom instructions, so you can call the same agent again.
-- **Predictable scheduling**: nothing starts before you explicitly choose a model. One turn per session, serialized writes per directory, and no silent fallback to another CLI.
+- **Predictable scheduling**: nothing starts before you explicitly choose a model. One turn per session, serialized writes per directory by default, and no silent fallback to another CLI.
+- **Optional parallel writes in one project**: turn on the same-directory parallel writes switch in CLI Worker settings, and a new writer that would wait runs in a plugin-owned copy of the project instead. Merge it back from the task card as uncommitted changes (no Git required, nothing is committed); on conflict the project stays untouched, or discard the copy.
 - **Goal, plan, feedback and fork**: use these Harness features in CLI child sessions; unsupported entries explain why.
 
 ## Screenshots

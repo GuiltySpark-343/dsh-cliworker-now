@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { Button, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, StateDot, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   LANGUAGE_PREFERENCES,
   MAX_CONCURRENT_LIMIT,
@@ -16,19 +16,37 @@ function readSettings(raw: string): GeneralSettings {
   const next = JSON.parse(raw)
   const count = (input: unknown) =>
     Number.isInteger(input) && (input as number) >= 1 && (input as number) <= MAX_CONCURRENT_LIMIT
-  // An absent language is an older Host's `follow`; any other value is rejected.
+  // Absent fields are an older Host's defaults (`follow`, off); any other value is rejected.
   const language = next?.language ?? 'follow'
-  if (!count(next?.maxConcurrent) || !count(next?.defaultMaxConcurrent) || !LANGUAGE_PREFERENCES.includes(language))
+  const isolatedParallelWrites = next?.isolatedParallelWrites ?? false
+  if (
+    !count(next?.maxConcurrent) ||
+    !count(next?.defaultMaxConcurrent) ||
+    !LANGUAGE_PREFERENCES.includes(language) ||
+    typeof isolatedParallelWrites !== 'boolean'
+  )
     throw new Error(t('收到无效的通用设置，请重试'))
-  return { ...next, language }
+  return { ...next, language, isolatedParallelWrites }
 }
 
-type Field = 'language' | 'maxConcurrent'
-const SAVING: Record<Field, MessageKey> = { language: '正在保存界面语言…', maxConcurrent: '正在保存同时对话数…' }
-const SAVED: Record<Field, MessageKey> = { language: '界面语言已保存', maxConcurrent: '同时对话数已保存' }
+type Field = 'language' | 'maxConcurrent' | 'isolatedParallelWrites'
+const SAVING: Record<Field, MessageKey> = {
+  language: '正在保存界面语言…',
+  maxConcurrent: '正在保存同时对话数…',
+  isolatedParallelWrites: '正在保存同目录写任务并行…',
+}
+const SAVED = (field: Field, settings?: GeneralSettings): MessageKey =>
+  field === 'language'
+    ? '界面语言已保存'
+    : field === 'maxConcurrent'
+      ? '同时对话数已保存'
+      : settings?.isolatedParallelWrites
+        ? '已开启同目录写任务并行'
+        : '已关闭同目录写任务并行'
 const UNSAVED: Record<Field, MessageKey> = {
   language: '界面语言未保存，请重新选择重试',
   maxConcurrent: '同时对话数未保存，请重新选择重试',
+  isolatedParallelWrites: '同目录写任务并行未保存，请重试',
 }
 // Each language is named in itself, so the choice stays findable after a switch.
 const LANGUAGE_LABELS: Record<LanguagePreference, () => string> = {
@@ -48,6 +66,7 @@ export function GeneralSettingsPane({ api, sessionId }: { api: API; sessionId: s
   const [attempt, retry] = useState(0)
   const languageHintId = useId()
   const hintId = useId()
+  const isolationHintId = useId()
   const request = useRef<AbortController>()
   const service = api.cliworker
 
@@ -106,7 +125,7 @@ export function GeneralSettingsPane({ api, sessionId }: { api: API; sessionId: s
       <div className="cwn-settings-save">
         <span className="cwn-settings-feedback-slot" role="status">
           {saving === field && <StateDot state="ongoing" size={14} />}
-          {error?.field === field ? error.message : saving === field ? t(SAVING[field]) : t(SAVED[field])}
+          {error?.field === field ? error.message : saving === field ? t(SAVING[field]) : t(SAVED(field, settings))}
         </span>
       </div>
     )
@@ -184,6 +203,23 @@ export function GeneralSettingsPane({ api, sessionId }: { api: API; sessionId: s
             />
           </div>
           {feedback('maxConcurrent')}
+          <div className="cwn-setting-row">
+            <span className="cwn-setting-row-text">
+              <span>{t('同目录写任务并行')}</span>
+              <span className="cwn-setting-description" id={isolationHintId}>
+                {t(
+                  '同一项目已有写任务运行时，新写任务会把项目复制到插件私有目录（不含 .git 与 node_modules 等依赖目录），在副本中同时运行。完成后在任务卡上点「合并」把改动写回项目，作为未提交改动，不会替你提交；两边改了同一处时列出冲突文件，项目保持不变。项目过大时仍排队。关闭时同目录写任务依次排队。',
+                )}
+              </span>
+            </span>
+            <Switch
+              checked={settings?.isolatedParallelWrites ?? false}
+              onChange={(enabled) => void save('isolatedParallelWrites', enabled)}
+              label={t('同目录写任务并行')}
+              disabled={disabled}
+            />
+          </div>
+          {feedback('isolatedParallelWrites')}
           {error && !error.field && (
             <div className="cwn-settings-save">
               <span className="cwn-settings-feedback-slot" role="status">

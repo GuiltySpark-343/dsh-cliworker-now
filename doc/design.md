@@ -27,14 +27,14 @@
 - Host：项目偏好、会话索引、运行调度、Antigravity 适配器和持久化。
 - Client：原生右侧栏注册、两层任务树、实时记录、配置入口、停止和续聊。
 - 通信：Harness Gateway/Typert RPC；查询配置、快照、事件流和执行操作。
-- 模型工具：`cliworker_start`、`cliworker_status`、`cliworker_followup`、`cliworker_stop`。
+- 模型工具：`cliworker_start`、`cliworker_status`、`cliworker_followup`、`cliworker_stop`；隔离副本的合并与丢弃另有 `cliworker_merge`、`cliworker_discard`。
 - 独立保存 workerId、Harness parentSessionId 和外部 conversation_id。每轮运行独立记录，事件带单调递增序号。
 - 自然语言路由通过工具描述及作用域内提示规则完成。只管理通过插件启动的进程。
 
 ## 4. 生命周期与边界
 
 - 状态：等待配置、排队、运行、停止中、完成、失败、中断。
-- 默认最多两个并发；同会话单轮互斥，同目录写任务串行。
+- 默认最多两个并发；同会话单轮互斥，同目录写任务串行（「同目录写任务并行」开关打开时的例外见文末“隔离副本并行”一节）。
 - argv 显式传递 model/effort；解析 stream-json；stderr 与对话区分。失效模型或参数提示重选，不静默回退。
 - 沿用旧 skill 的目录校验、默认沙箱、私有文件权限；遵循宿主权限及规划模式。
 - 关闭侧栏不取消任务；断线重连恢复记录；宿主重启将遗留运行标为中断。
@@ -1099,3 +1099,16 @@ SettingsForms 本身不修改：describe、update、replace、mutate、revision 
 Client 以中文原文为键（`src/client/i18n-messages.ts` 的 `en` 字典，`MessageKey = keyof typeof en`），中文字典是键的恒等映射。`src/client/i18n.ts` 维护模块级语言状态与 `useSyncExternalStore` 订阅：`t()` 供普通函数使用，组件经 `useT()` 订阅并在语言变化时重绘。`index.tsx` 在挂载后调用 `installClientLocale(ctx)`，于可选 `locale` 作用域内用 `scope.effect` 注册 `cliworker` 命名空间并订阅 Harness 语言变化，插件卸载时注销并回到中文。`follow` 时经 `locale.bind('cliworker')` 取词（Harness 语言以 `zh` 开头为中文，其余为英文，外部语言包可覆盖）；显式选择则用插件词典。日期与数字格式随有效语言使用 `zh-CN` / `en-US`。
 
 Host 与共享模块仍只输出中文，不导入 Client 词典。Client 的 `hostText()` 对词典中收录的 Host 原文（约 90 条：常见错误、能力原因、权限选项、暂停原因等）及两条带变量的模板做精确映射，英文时剥离 `Error:` 前缀；未收录内容原样显示，不机器猜译。仍为中文的范围：未收录的 Host/CLI 错误、Host 生成的标题与摘要、内置角色预设内容、默认名称 `智能体-xxx`、发给 CLI 的附件说明，以及给主 Agent 的工具描述与提示词。Client 内与 Host 原文比较的字符串（如状态、暂停原因）保持中文键比较，不比较译文。
+
+## 未发布：同目录写任务隔离副本并行
+
+OpenSpec 变更 `add-isolated-parallel-writes`，设计细节见该变更的 `design.md`。
+
+- 「CLI Worker 设置」→「任务调度」新增「同目录写任务并行」开关，默认关闭；关闭时调度与此前完全一致。
+- 打开后，`drain()` 判定新写任务与主目录中运行中或排在前面的任务冲突，且该 Worker 尚无原生会话时，在 `<状态目录>/isolated/<Worker ID>/copy/<项目名>` 建副本并立即放行；不冲突的任务、只读任务和已在主目录建立会话的续聊照旧。
+- 副本不含 `.git` 与依赖/缓存目录；符号链接不跟随，只复制相对且留在项目内的链接；先扫描后复制，超过 20 000 个文件或 1 GiB 时回退排队并在任务卡写明原因。APFS 等支持时用 `COPYFILE_FICLONE` 写时复制。清单记录每个文件的哈希，可合并文本（≤2 MiB、无 NUL）另存基线。
+- `projectDirectory()` 不放宽；副本路径另用 `assertIsolatedCopy()` 只接受调度器为该 Worker 生成的确切真实目录。
+- CLI 的 cwd、原生目录参数、账号核验与遥测读取使用副本路径；Worker 的项目身份、偏好、父会话与权限模式不变。本轮提示说明副本与原项目路径；隔离运行不接 DSH 工具桥；隔离对话暂不支持分支。
+- 合并（任务卡或 `cliworker_merge`）逐文件三方合并：只有副本改动的直接写回，两边都改的文本 diff3，其余为冲突；有冲突时主目录一个文件都不写、保留副本。写回为未提交改动，绝不提交。丢弃（任务卡确认或 `cliworker_discard` 原生询问）只在副本目录确认删除后报告成功。
+- 原生会话与工作目录绑定，故合并/丢弃后对话仍绑定同一路径（`released`），续聊时在原路径重建副本。
+- 重启时 `preparing` 删除、`merging` 恢复为可再次合并；停止只结束进程不删副本；归档保留副本。

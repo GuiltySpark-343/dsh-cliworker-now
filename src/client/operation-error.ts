@@ -1,10 +1,23 @@
 import { en, type MessageKey } from './i18n-messages.ts'
 import { t, uiLanguage } from './i18n.ts'
 
-/** `<CLI> 已关闭…` and similar Host messages carry one variable part. */
-const hostPatterns: [RegExp, MessageKey, string][] = [
+/**
+ * Host messages with variable parts. A `reason` capture is itself Host text and
+ * is mapped again; paths, counts and other details stay verbatim.
+ */
+const hostPatterns: [RegExp, MessageKey, ...string[]][] = [
   [/^(.+) 已关闭，请先在 CLI Worker 设置中开启$/u, '{cli} 已关闭，请先在 CLI Worker 设置中开启', 'cli'],
   [/^目标须包含 1–(\d+) 个字符$/u, '目标须包含 1–{limit} 个字符', 'limit'],
+  [/^(.+)；已改为排队，等待主目录空闲$/u, '{reason}；已改为排队，等待主目录空闲', 'reason'],
+  [/^项目文件数超过隔离副本上限（(\d+) 个）$/u, '项目文件数超过隔离副本上限（{limit} 个）', 'limit'],
+  [/^项目文件总大小超过隔离副本上限（(\d+) MiB）$/u, '项目文件总大小超过隔离副本上限（{limit} MiB）', 'limit'],
+  [/^无法创建隔离副本：(.+)$/su, '无法创建隔离副本：{detail}', 'detail'],
+  [/^合并失败：(.+)$/su, '合并失败：{reason}', 'reason'],
+  [/^已合并隔离副本：写回 (\d+) 个、删除 (\d+) 个文件（未提交）$/u, '已合并隔离副本：写回 {written} 个、删除 {deleted} 个文件（未提交）', 'written', 'deleted'],
+  [/^隔离副本有 (\d+) 个冲突，主目录未改动$/u, '隔离副本有 {count} 个冲突，主目录未改动', 'count'],
+  [/^主目录中的 (.+) 不是目录，已停止合并$/u, '主目录中的 {path} 不是目录，已停止合并', 'path'],
+  [/^合并期间主目录中的 (.+) 发生变化，请重新合并$/u, '合并期间主目录中的 {path} 发生变化，请重新合并', 'path'],
+  [/^合并写回中途失败，主目录可能已部分更新，可再次合并：(.+)$/su, '合并写回中途失败，主目录可能已部分更新，可再次合并：{detail}', 'detail'],
 ]
 
 /**
@@ -20,9 +33,13 @@ export function hostText(text: string | undefined): string | undefined {
   // Stored run errors may keep an `Error: ` prefix; only a known message drops it.
   const bare = text.replace(/^(?:(?:[A-Za-z_$][\w$]*Error|Error):\s*)+/, '')
   if (bare !== text && Object.hasOwn(en, bare)) return t(bare as MessageKey)
-  for (const [pattern, key, name] of hostPatterns) {
+  for (const [pattern, key, ...names] of hostPatterns) {
     const match = pattern.exec(bare)
-    if (match) return t(key, { [name]: match[1]! })
+    if (match)
+      return t(key, Object.fromEntries(names.map((name, index) => {
+        const captured = match[index + 1]!
+        return [name, name === 'reason' ? hostText(captured) : captured]
+      })))
   }
   return text
 }

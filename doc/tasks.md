@@ -2588,3 +2588,17 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 新增测试：语言持久化（0600、重载、`null` 恢复默认）与非法补丁；Runtime 快照字段；词典完整性（英文非空、占位符一致、英文不含中文）；跟随/显式/非法偏好；模拟 locale 服务下随 Harness 语言实时切换与卸载注销；Host 文案映射与未知原文保留；设置窗口保存 English 后整体切换；面板随快照语言切换。locale 服务与 Cordis 上下文均为测试内模拟。
 - 未执行：DSH Desktop 实机英文界面（窄栏换行、明暗主题、Windows）；真实 Harness 语言切换下的 `ctx.locale` 行为；正式 `build`（未更新 Desktop）；真实模型调用。
 - 已知限制（保持中文）：未收录的 Host/CLI 错误、Host 生成的标题与摘要、内置角色预设名称与内容、默认名称 `智能体-xxx`、发给 CLI 的附件说明；给主 Agent 的工具描述与提示词不在范围内。并行会话（同目录写任务隔离副本并行）的新增文案在合并时补入词典。
+
+## 2026-10-25 同目录写任务隔离副本并行（分支 `claude/isolated-parallel-writes-459fae`，未发布）
+
+- 范围：「CLI Worker 设置 → 任务调度」新增「同目录写任务并行」开关（缺省关闭）。开启后，仅在同目录写冲突时为新写任务在插件私有目录创建 APFS 克隆副本，任务结束后由任务卡或 `cliworker_merge` / `cliworker_discard` 三方合并或丢弃；合并有冲突时项目零写入、副本保留，结果为未提交改动。OpenSpec `add-isolated-parallel-writes`；无新增依赖（diff3 自实现）。
+- 实际执行：`vitest run` 隔离相关 8 文件（diff3、isolated-workspace、isolated-runtime、isolation-ui、general-settings、settings-dialog、storage、cli-settings）**373 项通过**；`tests/isolated-runtime.test.ts` 修复复制完成后才收到停止的挂起后连续运行 10 次均 10/10 通过；`node scripts/build-preview.mjs` 通过；`openspec validate add-isolated-parallel-writes --strict` 通过；`git diff --check` 通过。
+- 全量 suite：4329 通过、13 跳过、2 失败；失败均为 `tests/build-dependencies.test.ts` 读取正式构建产物 `lib/typert.remote-client.js`，本工作树未运行正式 `build` 故不存在，与本变更无关。
+- 未执行：真实 CLI 与模型、DSH Desktop 实机界面、Windows 实机（路径分隔符仅单元测试）、Linux reflink；未运行正式 `build`，未更新 Desktop。
+
+## 2026-10-25 合并 i18n 与隔离副本并行到 `feat/general-settings`（未发布）
+
+- 合并：`claude/i18n-english-482e08`（9f9e87a、fb178f8、641b45b）无冲突合入；`claude/isolated-parallel-writes-459fae`（07cfe97、5d20d71）在 10 个文件冲突，均为两边并列新增：`GeneralSettings` 同时含 `language` 与 `isolatedParallelWrites`，存储补丁两字段共用一个合并逻辑；通用设置页以 i18n 版本为底，按其逐字段保存反馈加入并行开关；旧 Host 缺少 `isolatedParallelWrites` 时按关闭读取。
+- 文案：隔离副本的设置开关、任务卡状态与按钮、合并/丢弃弹窗改用 `t()`；Host 的副本状态、排队原因、冲突原因、过程行与错误经 `hostText()` 映射。`hostPatterns` 改为支持多参数，`reason` 捕获再次映射（如「项目文件数超过隔离副本上限（N 个）；已改为排队…」整体译出）；路径与系统错误细节保持原文。冲突列表连接符改为语言无关的 ` — `（词典规则要求键含中文）。给 CLI 的副本提示、主 Agent 工具描述与丢弃确认询问仍为中文。
+- 实际执行：`vitest run tests/isolation-ui.test.tsx tests/client-i18n.test.tsx tests/general-settings.test.ts tests/settings-dialog.test.tsx` **4 文件 225 项通过**（新增英文下的任务卡/弹窗与 Host 副本文案映射测试）；`node scripts/build-preview.mjs` 通过；全量 `vitest run` 第一次 **4350 通过、4 失败、13 跳过**，失败均为 `tests/native-zcode.test.ts` 的模拟账号 header 用例（单独运行 3 次均 24/24 通过，与 i18n 分支基线记录的同类不稳定一致），第二次全量 **220 文件、4354 通过、13 跳过、0 失败**；`openspec validate --all --strict` **26/26**；`git diff --check` 通过。
+- 未执行：正式 `build` 与 Desktop 更新；DSH Desktop 实机（中英界面、并行开关、任务卡合并/丢弃、明暗主题、窄屏、Windows）；真实 CLI 与模型的副本运行与合并。

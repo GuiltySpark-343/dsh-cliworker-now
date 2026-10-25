@@ -20,6 +20,8 @@ export interface GeneralSettings {
   defaultMaxConcurrent: number
   /** Interface language preference; `follow` when never chosen. */
   language: LanguagePreference
+  /** Conflicting same-project writers run in plugin-owned copies; off by default. */
+  isolatedParallelWrites: boolean
 }
 
 /** Machine-local executable selection; separate from project model preferences. */

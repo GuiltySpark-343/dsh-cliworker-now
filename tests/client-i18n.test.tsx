@@ -176,6 +176,26 @@ it('maps known Host messages to English and leaves unknown Host or CLI text verb
   expect(operationMessage(new Error('请先关闭账号终端'))).toBe('请先关闭账号终端')
 })
 
+it('maps isolated-copy Host messages, translating a nested Host reason but not paths or details', () => {
+  setLanguagePreference('en')
+  expect(hostText('项目文件数超过隔离副本上限（20000 个）；已改为排队，等待主目录空闲')).toBe(
+    'The project has more files than the isolated copy limit (20000); queued instead until the main folder is free',
+  )
+  expect(hostText('无法创建隔离副本：模拟的系统错误；已改为排队，等待主目录空闲')).toBe(
+    'Could not create an isolated copy: 模拟的系统错误; queued instead until the main folder is free',
+  )
+  expect(hostText('合并失败：两边改动了相同或相邻的行')).toBe('Merge failed: Both sides changed the same or adjacent lines')
+  expect(hostText('合并期间主目录中的 src/模拟.ts 发生变化，请重新合并')).toBe(
+    'src/模拟.ts in the main folder changed during the merge. Merge again',
+  )
+  expect(hostText('已合并隔离副本：写回 3 个、删除 1 个文件（未提交）')).toBe(
+    'Isolated copy merged: wrote back 3 and deleted 1 files (uncommitted)',
+  )
+  expect(hostText('隔离副本有 2 个冲突，主目录未改动')).toBe('The isolated copy has 2 conflicts; the main folder was not changed')
+  setLanguagePreference('zh')
+  expect(hostText('合并失败：两边改动了相同或相邻的行')).toBe('合并失败：两边改动了相同或相邻的行')
+})
+
 it('re-renders a mounted component when the Harness language changes', async () => {
   const harness = install('zh-CN')
   let renderer!: ReactTestRenderer
