@@ -1,90 +1,56 @@
-import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions/types'
 import type { Worker } from '../shared/types.ts'
 import type { MergeConflict, MergeResolution, MergeResult } from './isolated-workspace.ts'
 
-// Wording for the parent agent and the user's merge questions. Free-text answers are never applied as a decision.
+// Wording for the parent agent. Overlapping edits are normal parallel work for it to integrate, not errors.
+
+/** Largest content the main agent may write for one file, matching the merge baseline limit. */
+export const MERGE_CONTENT_LIMIT = 2 * 1024 * 1024
 
 /** Tells the parent agent that an isolated run's edits still wait in the copy. */
 export function isolationGuidance(worker: Worker): string | undefined {
   const isolation = worker.isolation
   if (isolation?.state === 'ready')
-    return `本轮改动写在隔离副本 ${isolation.path}，项目主目录尚未改动。核查结果后调用 cliworker_merge 写回；无法自动合并的文件由该工具询问用户。不要让 CLI 改到原目录重做。`
+    return `本轮改动写在隔离副本 ${isolation.path}，项目主目录尚未改动。核查结果后调用 cliworker_merge 写回；两边都改过的文件由你整合。不要让 CLI 改到原目录重做。`
   if (isolation?.state === 'conflict')
-    return `改动仍在隔离副本 ${isolation.path}，上次合并有冲突，主目录未改动；调用 cliworker_merge 由用户决定冲突文件。`
+    return `改动仍在隔离副本 ${isolation.path}，有文件两边都改过、等待你整合，主目录未改动；再次调用 cliworker_merge，并为这些文件给出 resolutions。`
   return undefined
 }
 
-const MERGE_COPY = '采用 CLI 副本的版本'
-const MERGE_PROJECT = '保留项目当前版本'
-const MERGE_DEFER = '暂不合并'
-const MERGE_ALL_COPY = '全部采用 CLI 副本的版本'
-const MERGE_ALL_PROJECT = '全部保留项目当前版本'
-/** Above this many conflicts the user decides once for all files. */
-export const MERGE_QUESTION_LIMIT = 6
+const INTEGRATION_GUIDANCE =
+  '以下文件在项目和该智能体的副本中都改过，这是并行写入的正常情况，不是错误。versions.base 是派遣时的项目版本，versions.project 是项目当前版本（可能已含其他智能体写回的改动），versions.copy 是该智能体的版本。读取这些文件，按各任务的目标把两边改动整合成最终内容，然后再次调用 cliworker_merge，在 resolutions 中为每个文件给出 use="content"（附完整的最终内容）、use="copy" 或 use="project"；choices 只列出该文件允许的方式。只有两边任务的目标相互矛盾、无法同时满足时，才用 ask_user_question 请用户选择。给出全部文件的决定前，项目中的文件不会被改动，副本保留。'
 
-export function mergeQuestions(name: string, result: Extract<MergeResult, { status: 'conflict' }>): AskUserQuestionItem[] {
-  const { conflicts, copy } = result
-  const copyOption = { label: MERGE_COPY, description: '用副本中的内容覆盖项目中的这个文件' }
-  const projectOption = { label: MERGE_PROJECT, description: '项目中的这个文件不变，舍弃副本对它的改动' }
-  const deferOption = { label: MERGE_DEFER, description: '不写回任何文件，副本保留' }
-  if (conflicts.length <= MERGE_QUESTION_LIMIT)
-    return conflicts.map((item, index) => ({
-      id: `conflict_${index}`,
-      header: '合并冲突',
-      question: `${item.path}：${item.reason}`,
-      detail: `${name} 的隔离副本：${copy}`,
-      options: [...(item.resolvable ? [copyOption] : []), projectOption, deferOption],
-    }))
-  const listed = conflicts.slice(0, 20).map((item) => `${item.path}：${item.reason}`)
-  if (conflicts.length > listed.length) listed.push(`另有 ${conflicts.length - listed.length} 个文件`)
-  const fixed = conflicts.filter((item) => !item.resolvable).length
-  return [
-    {
-      id: 'conflicts',
-      header: '合并冲突',
-      question: `${name} 的隔离副本有 ${conflicts.length} 个文件无法自动合并，如何处理？`,
-      detail: [...listed, `副本：${copy}`].join('\n'),
-      options: [
-        {
-          label: MERGE_ALL_COPY,
-          description: fixed
-            ? `其中 ${fixed} 个结构性冲突只能保留项目版本`
-            : '用副本中的内容覆盖这些文件',
-        },
-        { label: MERGE_ALL_PROJECT, description: '这些文件不变，舍弃副本对它们的改动' },
-        deferOption,
-      ],
-    },
-  ]
+/** What the parent agent needs to integrate the files both sides changed. */
+export function integrationReport(
+  name: string,
+  result: Extract<MergeResult, { status: 'conflict' }>,
+  pending?: readonly string[],
+) {
+  return {
+    status: 'needs_integration' as const,
+    agentName: name,
+    copy: result.copy,
+    files: result.conflicts.map(({ path, reason, choices, versions }: MergeConflict) => ({ path, reason, choices, versions })),
+    guidance: pending?.length
+      ? `${INTEGRATION_GUIDANCE} 本次仍缺少这些文件的决定，或合并期间项目又有变化：${pending.join('、')}。`
+      : INTEGRATION_GUIDANCE,
+  }
 }
 
-/** Every conflict needs a single chosen option; free text goes back to the parent agent unapplied. */
-export function readMergeDecisions(
-  conflicts: readonly MergeConflict[],
-  answers: readonly { id: string; selected: readonly string[]; custom?: string }[],
-):
-  | { status: 'decided'; resolutions: Record<string, MergeResolution> }
-  | { status: 'deferred' | 'note'; note?: string } {
-  const choice = (id: string) => {
-    const answer = answers.find((item) => item.id === id)
-    if (answer?.custom?.trim()) return { note: answer.custom.trim() }
-    return { selected: answer?.selected.length === 1 ? answer.selected[0] : undefined }
-  }
+/** Validates the tool's `resolutions` argument; paths repeat at most once. */
+export function readResolutions(raw: unknown): Record<string, MergeResolution> | undefined {
+  if (raw === undefined || raw === null) return undefined
+  if (!Array.isArray(raw)) throw new Error('resolutions 须为数组')
   const resolutions: Record<string, MergeResolution> = {}
-  if (conflicts.length > MERGE_QUESTION_LIMIT) {
-    const picked = choice('conflicts')
-    if (picked.note) return { status: 'note', note: picked.note }
-    if (picked.selected !== MERGE_ALL_COPY && picked.selected !== MERGE_ALL_PROJECT) return { status: 'deferred' }
-    for (const item of conflicts)
-      resolutions[item.path] = picked.selected === MERGE_ALL_COPY && item.resolvable ? 'copy' : 'project'
-    return { status: 'decided', resolutions }
+  for (const item of raw) {
+    const { path, use, content } = (item ?? {}) as { path?: unknown; use?: unknown; content?: unknown }
+    if (typeof path !== 'string' || !path) throw new Error('resolutions 中每项须包含 path')
+    if (Object.hasOwn(resolutions, path)) throw new Error(`resolutions 中 ${path} 重复`)
+    if (use === 'copy' || use === 'project') resolutions[path] = use
+    else if (use === 'content') {
+      if (typeof content !== 'string') throw new Error(`${path} 选择 content 时须提供完整内容`)
+      if (Buffer.byteLength(content, 'utf8') > MERGE_CONTENT_LIMIT) throw new Error(`${path} 的整合内容超过 2 MiB`)
+      resolutions[path] = { content }
+    } else throw new Error(`${path} 的 use 须为 content、copy 或 project`)
   }
-  for (const [index, item] of conflicts.entries()) {
-    const picked = choice(`conflict_${index}`)
-    if (picked.note) return { status: 'note', note: picked.note }
-    if (picked.selected === MERGE_COPY && item.resolvable) resolutions[item.path] = 'copy'
-    else if (picked.selected === MERGE_PROJECT) resolutions[item.path] = 'project'
-    else return { status: 'deferred' }
-  }
-  return { status: 'decided', resolutions }
+  return resolutions
 }

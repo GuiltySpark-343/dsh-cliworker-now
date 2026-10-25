@@ -197,7 +197,29 @@ describe('three-way merge back into the project', () => {
     expect(readFileSync(join(copy, 'src', 'a.ts'), 'utf8')).toBe('one\nCOPY\nthree\nfour\nfive\n')
   })
 
-  it('applies the user decision for each conflict and writes nothing while one is undecided', async () => {
+  it('writes content the main agent integrated from both sides, with the versions it needs to read', async () => {
+    const context = fixture()
+    const { copy } = await create(context)
+    writeFileSync(join(copy, 'src', 'a.ts'), 'one\nCOPY\nthree\nfour\nfive\n')
+    writeFileSync(join(context.project, 'src', 'a.ts'), 'one\nMAIN\nthree\nfour\nfive\n')
+    const first = await mergeIsolatedWorkspace(context)
+    expect(first.status).toBe('conflict')
+    if (first.status !== 'conflict') return
+    const versions = first.conflicts[0]!.versions!
+    expect(readFileSync(versions.base!, 'utf8')).toBe('one\ntwo\nthree\nfour\nfive\n')
+    expect(readFileSync(versions.project!, 'utf8')).toBe('one\nMAIN\nthree\nfour\nfive\n')
+    expect(readFileSync(versions.copy!, 'utf8')).toBe('one\nCOPY\nthree\nfour\nfive\n')
+    const merged = 'one\nMAIN and COPY\nthree\nfour\nfive\n'
+    expect(await mergeIsolatedWorkspace({ ...context, resolutions: { 'src/a.ts': { content: merged } } })).toEqual({
+      status: 'merged',
+      written: ['src/a.ts'],
+      deleted: [],
+      kept: [],
+    })
+    expect(readFileSync(join(context.project, 'src', 'a.ts'), 'utf8')).toBe(merged)
+  })
+
+  it('applies the decision for each overlapping file and writes nothing while one is undecided', async () => {
     const context = fixture()
     const { copy } = await create(context)
     writeFileSync(join(copy, 'src', 'a.ts'), 'one\nCOPY\nthree\nfour\nfive\n')
@@ -209,8 +231,8 @@ describe('three-way merge back into the project', () => {
     expect(first).toMatchObject({
       status: 'conflict',
       conflicts: [
-        { path: 'README.md', resolvable: true },
-        { path: 'src/a.ts', resolvable: true },
+        { path: 'README.md', choices: ['project', 'copy', 'content'] },
+        { path: 'src/a.ts', choices: ['project', 'copy', 'content'] },
       ],
     })
     // One decision is not enough: the project stays untouched.
@@ -245,7 +267,7 @@ describe('three-way merge back into the project', () => {
     mkdirSync(join(copy, 'README.md'))
     expect(await mergeIsolatedWorkspace(context)).toMatchObject({
       status: 'conflict',
-      conflicts: [{ path: 'README.md', resolvable: false }],
+      conflicts: [{ path: 'README.md', choices: ['project'] }],
     })
     expect(await mergeIsolatedWorkspace({ ...context, resolutions: { 'README.md': 'copy' } })).toMatchObject({
       status: 'conflict',

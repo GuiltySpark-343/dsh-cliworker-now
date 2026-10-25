@@ -2501,7 +2501,7 @@ export class WorkerRuntime {
           this.storage.save(worker)
           this.storage.append(worker, {
             kind: 'diagnostic',
-            text: `隔离副本有 ${result.conflicts.length} 个冲突，主目录未改动`,
+            text: `${result.conflicts.length} 个文件两边都改过，等待主 Agent 整合，主目录未改动`,
             detail: result.conflicts.map((item) => `${item.path}：${item.reason}`).join('\n'),
           })
           return result

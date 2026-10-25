@@ -29,9 +29,10 @@
 - [x] 3b.1 任务卡去掉副本状态行、「合并」「丢弃」按钮与 `IsolationDialog`；移除对应 Remote 与字典条目。
 - [x] 3b.2 设置说明缩为一行；开关保存成功不再显示确认文字。
 - [x] 3b.3 完成通知与 `cliworker_status` 加入副本待合并提示。
-- [x] 3b.4 `resolutions` 逐文件决定；`cliworker_merge` 冲突时原生询问（逐个 / 超过 6 个一次性），暂不合并或自由文本不写入。
-- [x] 3b.5 测试：`tests/isolated-merge-decisions.test.ts`、`tests/isolated-workspace.test.ts`（决定写回、副本删除、结构性冲突）、`tests/isolation-ui.test.tsx`（任务卡无副本状态与按钮）、`tests/settings-dialog.test.tsx`。
-- [ ] 3b.6 Desktop 真实主 Agent 合并与冲突询问复验。
+- [x] 3b.4 `resolutions` 逐文件决定（content / copy / project）；`cliworker_merge` 对两边都改过的文件返回 `needs_integration` 与三个版本路径，由主 Agent 整合，目标矛盾时由主 Agent 用 `ask_user_question` 问用户；插件不弹问题卡、不称为冲突。（第一版插件问题卡已按用户反馈撤下。）
+- [x] 3b.5 测试：`tests/isolated-merge-decisions.test.ts`（提示、整合报告、resolutions 校验）、`tests/isolated-workspace.test.ts`（整合内容写回、三个版本、决定写回、副本删除、结构性改动）、`tests/isolation-ui.test.tsx`（任务卡无副本状态与按钮）、`tests/settings-dialog.test.tsx`。
+- [ ] 3b.6 Desktop 真实主 Agent 整合复验。
+  - 2026-10-25 第一版（插件问题卡）实测：ZCode 默认模型 GLM-5.3-Flash·Low，A 在主目录、B 在副本，主 Agent 按提示调用 `cliworker_merge`，问题卡出现并选副本版本后写回 merge.txt、b-extra.txt；用户随后否定问题卡方案，改为主 Agent 整合。
 
 ## 4. 未执行
 

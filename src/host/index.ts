@@ -78,7 +78,7 @@ import { ACCOUNT_CHANGED, authorizedCatalog, authorizeSelection } from './author
 import { WorkerStorage, type DispatchSetup } from './storage.ts'
 import { WorkerRuntime, type Submission } from './runtime.ts'
 import type { MergeResolution } from './isolated-workspace.ts'
-import { isolationGuidance, mergeQuestions, readMergeDecisions } from './isolated-merge-decisions.ts'
+import { integrationReport, isolationGuidance, readResolutions } from './isolated-merge-decisions.ts'
 import { AccountManager } from './accounts.ts'
 import {
   CLI_DELEGATION_GUIDANCE,
@@ -1344,14 +1344,41 @@ export class CliWorkerService extends TypertRemoteService {
           defineTool({
             name: 'cliworker_merge',
             description:
-              '把空闲 CLI 智能体隔离副本中的改动三方合并回当前项目，作为未提交改动写回，不会提交。隔离运行的智能体完成后，由你核查结果再调用本工具。无法自动合并的文件由本工具向用户询问：采用 CLI 副本的版本、保留项目当前版本或暂不合并；不要自行决定冲突，也不要让 CLI 改到原目录重做。用户暂不合并时主目录不变、副本保留，可稍后再次调用。',
-            parameters: { worker_id: { type: 'string' }, worker_name: { type: 'string' } },
+              '把空闲 CLI 智能体隔离副本中的改动三方合并回当前项目，作为未提交改动写回，不会提交。隔离运行的智能体完成后，由你核查结果再调用本工具。只有一边改过的文件直接写回；两边都改过的文件不是错误，返回 needs_integration 及基线、项目、副本三个版本的文件路径，由你按各任务目标整合，再带 resolutions 调用本工具（use=content 附完整最终内容，或 use=copy / use=project）。只有两边目标相互矛盾时才用 ask_user_question 请用户选择。决定齐全前项目不变、副本保留。不要让 CLI 改到原目录重做。',
+            parameters: {
+              worker_id: { type: 'string' },
+              worker_name: { type: 'string' },
+              resolutions: {
+                type: 'array',
+                description:
+                  'Decisions for files a previous call returned in needs_integration. Each item: path, use (content | copy | project), and content (the complete final file text) when use is content.',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    path: { type: 'string', required: true },
+                    use: { type: 'string', enum: ['content', 'copy', 'project'], required: true },
+                    content: { type: 'string' },
+                  },
+                },
+              },
+            },
             output,
             isConcurrencySafe: () => false,
             execute: async (args, exec) => {
               if (!exec.agent) throw new Error('A parent Agent is required')
               const worker = this.runtime.resolveWorker(exec.agent.id, args.worker_id, args.worker_name)
-              return JSON.stringify(await this.mergeWithDecisions(exec.agent, worker.id, exec.signal))
+              const resolutions = readResolutions(args.resolutions)
+              const result = await this.mergeIsolatedWorker(exec.agent, worker.id, exec.signal, resolutions)
+              return JSON.stringify(
+                result.status === 'merged'
+                  ? result
+                  : integrationReport(
+                      workerName(worker),
+                      result,
+                      resolutions && result.conflicts.map((item) => item.path),
+                    ),
+              )
             },
           }),
         ),
@@ -1734,35 +1761,6 @@ export class CliWorkerService extends TypertRemoteService {
     this.assertExecution(agent)
     if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目合并')
     return this.runtime.mergeIsolation(agent.id, workerId, AbortSignal.any([signal, this.disposed.signal]), resolutions)
-  }
-  /**
-   * Merges, then lets the user decide each file that cannot merge on its own.
-   * Nothing is written until every conflict has a decision.
-   */
-  private async mergeWithDecisions(agent: Agent, workerId: string, signal: AbortSignal) {
-    const first = await this.mergeIsolatedWorker(agent, workerId, signal)
-    if (first.status === 'merged') return first
-    const name = workerName(this.runtime.get(agent.id, workerId))
-    const waiting = AbortSignal.any([signal, this.disposed.signal])
-    const response = await waitForInput(
-      agent.ctx.get('userQuestions')!.ask({ agent, signal: waiting, questions: mergeQuestions(name, first) }),
-      waiting,
-    )
-    const decisions = readMergeDecisions(first.conflicts, response.answers)
-    if (decisions.status !== 'decided')
-      return {
-        ...first,
-        decision: decisions.status,
-        note: decisions.note,
-        guidance:
-          decisions.status === 'note'
-            ? '用户对冲突给出了说明，主目录未改动、副本保留；按说明处理后可再次调用 cliworker_merge。'
-            : '用户选择暂不合并，主目录未改动、副本保留；用户要求时再调用 cliworker_merge。',
-      }
-    const result = await this.mergeIsolatedWorker(agent, workerId, signal, decisions.resolutions)
-    return result.status === 'merged'
-      ? result
-      : { ...result, guidance: '合并期间出现新的冲突，主目录未改动；可再次调用 cliworker_merge 让用户决定。' }
   }
   /** @param parentSessionId - Owning session. @param signal - Query lifetime. @returns Profile-wide general settings JSON. */
   @Remote('generalSettings')

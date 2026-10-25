@@ -69,11 +69,11 @@
 diff3：Myers O(ND)（仅保留每步 V 数组，D 上限 2000，超出视为无法自动合并），按基线区间分组，相邻或重叠的两边改动为一个区域；两边结果相同则采用，否则冲突。
 
 
-### 主 Agent 合并与冲突询问（2026-10-25 调整）
+### 主 Agent 合并与整合（2026-10-25 调整）
 
-- 任务完成通知的 `guidance` 与 `cliworker_status` 对 `ready`/`conflict` 的 Worker 写明副本路径、主目录未改动、核查后调用 `cliworker_merge`、不要让 CLI 改到原目录重做。起因：实测主 Agent 不知道改动待合并，让 ZCode 用绝对路径直接改了原项目。
-- `mergeIsolatedWorkspace` 接受 `resolutions: Record<路径, 'copy' | 'project'>`。冲突项带 `resolvable`：内容冲突可取副本版本（写入、删除、链接或目录照副本执行，仍带 `expected` 校验）；结构性冲突只能保留项目版本。未决定的冲突存在时整体不写。
-- `cliworker_merge` 先无决定合并；有冲突时询问用户，≤6 个逐文件提问，更多则一次性提问；全部决定后带决定重新合并（期间主目录变化会再次得到冲突，返回给主 Agent 重新询问）。暂不合并、未作答或自由文本：不写、保留副本，把状态与说明返回主 Agent。
+- 任务完成通知的 `guidance` 与 `cliworker_status` 对 `ready`/`conflict` 的 Worker 写明副本路径、主目录未改动、核查后调用 `cliworker_merge`、两边都改过的文件由主 Agent 整合、不要让 CLI 改到原目录重做。起因：实测主 Agent 不知道改动待合并，让 ZCode 用绝对路径直接改了原项目。
+- `mergeIsolatedWorkspace` 接受 `resolutions: Record<路径, 'copy' | 'project' | { content }>`。每个两边都改过的文件带 `choices` 与 `versions`（基线、项目、副本文件路径）：内容类可取副本版本或写入主 Agent 整合的内容（仅当两边都是普通文件或不存在；写入仍带 `expected` 校验）；结构性情况只能保留项目版本。未决定的文件存在时整体不写。持久化状态名 `conflict` 保持兼容，但不向用户或主 Agent 显示“冲突”。
+- `cliworker_merge` 不再弹问题卡：返回 `needs_integration`，说明这是并行写入的正常情况，主 Agent 读取三个版本、按各任务目标整合后带 `resolutions` 再调用；只有两边目标相互矛盾时才用 Harness 原生 `ask_user_question` 问用户。第一版（插件逐文件问题卡）实测后被用户否定：用户不希望并行改动被显示成冲突，而是由主 Agent 理解合并逻辑。
 - 移除 Remote `mergeIsolation` / `discardIsolation`、`IsolationDialog` 与任务卡隔离状态行；Host 端诊断仍写入时间线。
 
 ## 互斥与生命周期

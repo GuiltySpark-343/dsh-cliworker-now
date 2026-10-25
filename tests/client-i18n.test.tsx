@@ -191,7 +191,9 @@ it('maps isolated-copy Host messages, translating a nested Host reason but not p
   expect(hostText('已合并隔离副本：写回 3 个、删除 1 个文件（未提交）')).toBe(
     'Isolated copy merged: wrote back 3 and deleted 1 files (uncommitted)',
   )
-  expect(hostText('隔离副本有 2 个冲突，主目录未改动')).toBe('The isolated copy has 2 conflicts; the main folder was not changed')
+  expect(hostText('2 个文件两边都改过，等待主 Agent 整合，主目录未改动')).toBe(
+    '2 files were changed on both sides and wait for the main agent to integrate them; the main folder was not changed',
+  )
   setLanguagePreference('zh')
   expect(hostText('合并失败：两边改动了相同或相邻的行')).toBe('合并失败：两边改动了相同或相邻的行')
 })

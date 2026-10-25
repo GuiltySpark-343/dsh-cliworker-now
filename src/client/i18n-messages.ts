@@ -693,12 +693,12 @@ export const en = {
   '隔离副本未能完全删除，请稍后重试': 'The isolated copy could not be fully deleted. Try again later',
   '隔离副本元数据与当前任务不一致': 'The isolated copy metadata does not match this task',
   '副本中的文件过多，无法合并': 'The copy has too many files to merge',
-  '仅大小写不同的改名，请手动处理': 'A rename that only changes letter case; resolve it by hand',
+  '仅大小写不同的改名，只能保留项目版本': 'A rename that only changes letter case; only the project version can be kept',
   '主目录中该路径经过符号链接、不是目录或大小写不一致': 'In the main folder this path goes through a symbolic link, is not a folder, or differs in letter case',
   '副本中出现了特殊文件': 'The copy contains a special file',
   '副本中的符号链接指向项目外': 'A symbolic link in the copy points outside the project',
-  '副本改变了文件类型（文件、目录或链接），请手动处理': 'The copy changed the file type (file, folder or link); resolve it by hand',
-  '改动过大，无法自动合并': 'The changes are too large to merge automatically',
+  '副本改变了文件类型（文件、目录或链接），只能保留项目版本': 'The copy changed the file type (file, folder or link); only the project version can be kept',
+  '改动过大，无法逐行合并': 'The changes are too large to merge line by line',
   '两边改动了相同或相邻的行': 'Both sides changed the same or adjacent lines',
   '二进制或超大文件两边都有改动': 'Both sides changed a binary or very large file',
   '副本删除了主目录中已修改的内容': 'The copy deleted content that was changed in the main folder',
@@ -719,7 +719,7 @@ export const en = {
   '已丢弃隔离副本，主目录未改动': 'Isolated copy discarded; the main folder was not changed',
   '本轮在隔离副本中运行，未接通 DSH 工具桥，避免写入原项目': 'This turn runs in an isolated copy without the DSH tool bridge, so the original project is not written',
   '已合并隔离副本：写回 {written} 个、删除 {deleted} 个文件（未提交）': 'Isolated copy merged: wrote back {written} and deleted {deleted} files (uncommitted)',
-  '隔离副本有 {count} 个冲突，主目录未改动': 'The isolated copy has {count} conflicts; the main folder was not changed',
+  '{count} 个文件两边都改过，等待主 Agent 整合，主目录未改动': '{count} files were changed on both sides and wait for the main agent to integrate them; the main folder was not changed',
   // @end
 } as const satisfies Record<string, string>
 

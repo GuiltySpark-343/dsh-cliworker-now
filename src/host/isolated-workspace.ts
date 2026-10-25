@@ -350,14 +350,18 @@ function same(left: Side | Main | undefined, right: Side | Main | undefined): bo
   return left.type === 'dir'
 }
 
+/** How the main agent may settle a path both sides changed. */
+export type MergeChoice = 'project' | 'copy' | 'content'
 export interface MergeConflict {
   path: string
   reason: string
-  /** The user may take the copy's version; otherwise only keeping the project version is safe. */
-  resolvable: boolean
+  /** Structural cases only allow keeping the project version. */
+  choices: MergeChoice[]
+  /** Readable files of each side, for the main agent to compare. */
+  versions?: { base?: string; project?: string; copy?: string }
 }
-/** A user's decision for one conflicting path. */
-export type MergeResolution = 'copy' | 'project'
+/** The main agent's decision for one path: either side, or content it wrote from both. */
+export type MergeResolution = 'copy' | 'project' | { content: string }
 export type MergeResult =
   | { status: 'merged'; written: string[]; deleted: string[]; kept: string[] }
   | { status: 'conflict'; conflicts: MergeConflict[]; copy: string }
@@ -430,7 +434,7 @@ export async function mergeIsolatedWorkspace(input: {
   workerId: string
   project: string
   signal?: AbortSignal
-  /** Per-path user decisions; a conflict without one keeps the project untouched. */
+  /** Per-path decisions; while any changed-on-both-sides path lacks one, nothing is written. */
   resolutions?: Readonly<Record<string, MergeResolution>>
 }): Promise<MergeResult> {
   const copy = assertIsolatedCopy(input.root, input.workerId, input.project)
@@ -471,12 +475,23 @@ export async function mergeIsolatedWorkspace(input: {
   }
   const conflicts: MergeConflict[] = []
   const kept: string[] = []
-  // A decided conflict becomes an action (copy) or is skipped (project); structural ones only allow skipping.
-  const conflict = (path: string, reason: string, take?: () => void) => {
+  // A decided path becomes an action or is skipped (project); structural ones only allow skipping.
+  const conflict = (
+    path: string,
+    reason: string,
+    settle: { take?: () => void; write?: (text: string) => void; versions?: MergeConflict['versions'] } = {},
+  ) => {
     const decision = input.resolutions?.[path]
     if (decision === 'project') kept.push(path)
-    else if (decision === 'copy' && take) take()
-    else conflicts.push({ path, reason, resolvable: !!take })
+    else if (decision === 'copy' && settle.take) settle.take()
+    else if (typeof decision === 'object' && settle.write) settle.write(decision.content)
+    else
+      conflicts.push({
+        path,
+        reason,
+        choices: ['project', ...(settle.take ? (['copy'] as const) : []), ...(settle.write ? (['content'] as const) : [])],
+        versions: settle.versions,
+      })
   }
   // Case-only renames would delete the new name on case-insensitive filesystems.
   const byCase = new Map<string, string[]>()
@@ -488,7 +503,7 @@ export async function mergeIsolatedWorkspace(input: {
     input.signal?.throwIfAborted()
     const { path, base, copy: side } = change
     if (caseRenames.has(path)) {
-      conflict(path, '仅大小写不同的改名，请手动处理')
+      conflict(path, '仅大小写不同的改名，只能保留项目版本')
       continue
     }
     const current = await main.entry(path)
@@ -508,7 +523,7 @@ export async function mergeIsolatedWorkspace(input: {
       continue
     }
     if (base && side && base.type !== side.type) {
-      conflict(path, '副本改变了文件类型（文件、目录或链接），请手动处理')
+      conflict(path, '副本改变了文件类型（文件、目录或链接），只能保留项目版本')
       continue
     }
     const takeCopy = () => {
@@ -527,6 +542,31 @@ export async function mergeIsolatedWorkspace(input: {
     if (same(baseSide, current)) {
       takeCopy()
       continue
+    }
+    // Content written by the main agent replaces a plain file (or fills a missing one).
+    const writable = (!current || current.type === 'file') && (!side || side.type === 'file')
+    const settle = {
+      take: takeCopy,
+      write: writable
+        ? (text: string) =>
+            actions.push({
+              kind: 'write',
+              path,
+              source: Buffer.from(text, 'utf8'),
+              mode:
+                side?.type === 'file'
+                  ? finalMode(current, side, base?.type === 'file' ? base.exec : undefined)
+                  : current?.type === 'file'
+                    ? current.mode
+                    : undefined,
+              expected: current,
+            })
+        : undefined,
+      versions: {
+        base: base?.type === 'file' && base.base ? nativePath(paths.base, path) : undefined,
+        project: current?.type === 'file' ? current.path : undefined,
+        copy: side?.type === 'file' ? side.path : undefined,
+      },
     }
     if (base?.type === 'file' && side?.type === 'file' && current?.type === 'file') {
       const texts =
@@ -549,16 +589,16 @@ export async function mergeIsolatedWorkspace(input: {
           })
           continue
         }
-        conflict(path, merged.reason === 'too-large' ? '改动过大，无法自动合并' : '两边改动了相同或相邻的行', takeCopy)
+        conflict(path, merged.reason === 'too-large' ? '改动过大，无法逐行合并' : '两边改动了相同或相邻的行', settle)
         continue
       }
-      conflict(path, '二进制或超大文件两边都有改动', takeCopy)
+      conflict(path, '二进制或超大文件两边都有改动', settle)
       continue
     }
-    if (!side) conflict(path, '副本删除了主目录中已修改的内容', takeCopy)
-    else if (!base) conflict(path, '两边都新增了同名内容且不一致', takeCopy)
-    else if (!current) conflict(path, '主目录已删除副本中修改过的内容', takeCopy)
-    else conflict(path, '两边的文件类型或内容不一致', takeCopy)
+    if (!side) conflict(path, '副本删除了主目录中已修改的内容', settle)
+    else if (!base) conflict(path, '两边都新增了同名内容且不一致', settle)
+    else if (!current) conflict(path, '主目录已删除副本中修改过的内容', settle)
+    else conflict(path, '两边的文件类型或内容不一致', settle)
   }
   if (conflicts.length) return { status: 'conflict', conflicts: conflicts.sort((a, b) => (a.path < b.path ? -1 : 1)), copy }
   await applyActions(input.project, actions, input.signal)
