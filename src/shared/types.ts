@@ -263,6 +263,8 @@ export interface QueuedFollowup {
   pauseReason?: string
 }
 export interface WorkerSnapshot {
+  /** Saved interface language; absent means follow the DSH language. */
+  language?: import('./cli-settings.ts').LanguagePreference
   externalRequestState?: import('./native-request-state.ts').ExternalRequestState
   /** Exact selected child turn/run totals; never added to native response usage. */
   externalTurnUsage?: import('./native-turn-usage.ts').ExternalTurnUsage
