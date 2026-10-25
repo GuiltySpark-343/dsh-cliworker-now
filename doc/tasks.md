@@ -2647,3 +2647,12 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 修复：放行未被选择的环境 Copilot 记录（`auth.active_provider` 或 `config.yaml` 任意位置为 `copilot` 即视为已选择，仍拒绝）；守卫拒绝改为 `HermesAccountSourceError`，账号终端、状态、续期、绑定显示真实原因；Client 启动白名单与英文词典补充固定文案。OpenSpec `fix-hermes-ambient-copilot-source`。
 - 实际执行：`tests/hermes-renewal.test.ts` 新增 5 项（撤掉守卫修复时 5 项全部失败）；Hermes/账号/绑定/i18n 相关 31 个测试文件 **628 通过、1 跳过**；`node scripts/build-preview.mjs` 通过；`build.mjs --typecheck-only` 的 Host 部分通过，Client 部分在本工作树报 9 个错误，均因自引用 `dsh-cliworker-now/remote` 声明需正式构建生成（报错文件均未改动），未在正式构建后复核；OpenSpec 严格校验 28/28。
 - 未执行：正式构建与 DSH Desktop 实机（账号终端出现原生菜单）；真实 Nous 续期（会消耗一次性刷新令牌，需用户在 Desktop 操作；若服务端拒绝，应显示需重新登录并能打开登录终端）。插件账号目录中的 `copilot` 记录保留未动。
+
+## 2026-10-25 Hermes 续期与 Nous 校验：DSH 子进程 NO_PROXY 带 `[::1]`（`feat/general-settings` e923fee，未发布）
+
+- 合并环境 Copilot 修复（0368236）后实机：账号终端显示原生菜单（修复生效），但状态仍为「Hermes 登录暂时无法续期」；用户在终端选 Nous Portal 报 `Could not verify credentials: Invalid port: ':1]'`。
+- 根因：抓取账号终端进程环境，`NO_PROXY`/`no_proxy` 为 `localhost,127.0.0.1,::1,.local,[::1]`（Desktop 主进程只有 `::1`，`[::1]` 由 DSH 发布给子进程的代理环境追加）。Hermes 自带 httpx 0.28.1 遇 `[::1]` 抛 `InvalidURL: Invalid port: ':1]'`，裸 `::1` 正常；插件续期子进程同样继承，异常被归为 unavailable。插件 Nous 账号访问令牌 2026-10-20 过期、刷新令牌仍在；主会话在干净环境运行同一续期操作返回 ready（真实刷新成功并保存，用户已授权验证）。
+- 修复：`hermesAccountEnvironment` 合入 `hermesNoProxyEnvironment`，把带括号/端口/CIDR 的 IPv6 旁路改为裸地址并去重（与 Hermes 自身规则一致），覆盖账号终端、续期与任务运行。OpenSpec `fix-hermes-bracketed-ipv6-no-proxy`。
+- 验证：`tests/hermes-no-proxy.test.ts` 4 项；Hermes/账号/绑定相关 44 个测试文件（957 通过、1 跳过）；`build:preview`、正式构建、OpenSpec 严格校验 29/29。Desktop 重启（新 Host 15:38）：终端进程 NO_PROXY 不再含 `[::1]`；状态「Nous账号登录」；选择 Nous Portal 后出现模型列表，无 Invalid port；未选模型，config.yaml 未变。
+- 未执行：修复后插件自身触发的过期续期（需令牌再次过期）；设置页 Hermes 模型下拉持续显示「正在读取 Hermes Agent 模型…」是否为独立问题未查。
+
