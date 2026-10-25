@@ -2,12 +2,14 @@ import { replaceNativeArguments, runNativeAcp } from './native-acp.mjs'
 import { GrokResponseTracker, grokResponseUsage, grokPromptUsage, grokModelContext, grokContextStatus } from './grok-response.mjs'
 import { GrokDurableContextObserver } from './grok-durable-context.mjs'
 
+// The native process fixes its permission mode by argument. Read-only uses
+// Grok's own plan mode, which 1.0.62's ACP no longer lists or switches.
 export const grokAcpArgv = (config) =>
   replaceNativeArguments(
     config.argv,
-    ['--output-format', '--resume', '--single', '--tools'],
+    ['--output-format', '--resume', '--single', '--tools', '--permission-mode'],
     [],
-    ['agent', '--no-leader', 'stdio'],
+    ['--permission-mode', config.mode === 'plan' ? 'plan' : 'acceptEdits', 'agent', '--no-leader', 'stdio'],
   )
 
 export const runNativeGrok = (config, io) => {
@@ -21,6 +23,8 @@ export const runNativeGrok = (config, io) => {
     off: 'none',
     // acceptEdits is retained in the native global argv. Never invent an ACP mode id.
     editMode: undefined,
+    // Plan is also set by argv; an ACP that lists modes must still confirm it.
+    argvModes: ['plan'],
     // Installed 1.0.50 accepts the ACP scalar string. Its bundled guide still
     // shows { value }, which the live SessionConfigOptionValue decoder rejects.
     encode: (value) => value,

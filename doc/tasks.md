@@ -2674,3 +2674,10 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 验证：新增 Grok 并行准备、排队让出名额/释放后运行/等待中停止、派遣目录复用/他账号不用/换号失败/其他错误不吞等测试（撤掉修复时对应用例失败）；激活冲突用例按新行为改为排队后运行；全量 225 文件 4404 通过、13 跳过；`build:preview` 通过。真实只读探针：Grok 修复后 100 次 0 失败；经 Host 包装的 OMP 5 次并行派遣检查：首轮提交后一次探针 5 次中 1 次报「无法读取 Pi/OMP 原生模型目录」——两阶段目录读取之间账号被另一读取取得，忙碌错误被改写；保留该错误后连续 4 轮 20/20 成功（每轮约 5.4 秒，修复前 4/5 失败）。
 - Desktop 复验（正式构建，新 Host 17:00，用户授权；Codex gpt-6-astra high 驱动界面）：同一请求并行派遣 3 个 OMP（glm-5.3-flash）与 3 个 Grok（Grok 4.6·Low），均只读。OMP：两个任务记录「账号正被另一个任务使用，排队等待」，三个依次运行（04:16–04:25、04:51–05:00、05:16–05:25）并全部完成，没有账号占用失败。Grok：3 个只读任务在同一项目目录准备，未出现 `EEXIST`，但均在原生会话建立后失败「ACP does not advertise the selected permission mode」——Grok ACP 不提供只读所需的权限模式，属既有问题，未在本次修改。主 Agent 自行改为默认权限补派 3 个，同时创建、同时运行并完成（2 个在隔离副本中）；项目文件未变化。
 - 未执行：Grok 同项目并行的真实成功运行（只读模式受上述问题阻断）；Kimi 登录过期，未核查其并行；Hermes 运行阶段的安装锁冲突未实测（目录读取 5 并行通过）。
+
+## 2026-10-25 Grok 只读任务报「ACP does not advertise the selected permission mode」（`feat/general-settings`，未发布）
+
+- 根因：Grok 1.0.62 的 ACP `session/new` 不再返回 `modes`（只有 model、reasoning_effort 配置项，会话 kind 为 build），插件只读时要求 ACP 列出并切换 `plan`，于是在发送提示前失败。`grok --help` 的 `--permission-mode` 支持 `plan`；临时 GROK_HOME 下以 `--permission-mode plan agent --no-leader stdio` 只做 initialize/session/new（不发提示）会话正常建立。
+- 修复（OpenSpec `fix-grok-native-plan-mode`）：Grok 原生启动参数按任务模式替换权限模式（只读 `plan`、可写 `acceptEdits`），与可写模式一样由原生参数设定；ACP 完全不列出模式时，仅启动参数已确定该模式的 CLI 可跳过 ACP 切换，列出模式时仍须确认 `plan`，其他 CLI 照旧失败关闭；只读中仍拒绝全部额外权限请求。
+- 验证：`tests/native-acp.test.ts` 新增 2 项（无模式 ACP 下只读 Grok 成功且不切换模式——撤掉修复时失败；列出模式时仍切换、Kimi 无模式仍失败）；全量 225 文件 4407 通过、13 跳过；`build:preview` 通过。
+- 未执行：Desktop 真实只读 Grok 任务及“要求写文件但未产生文件”的复验（需用户授权模型调用）。

@@ -32,7 +32,7 @@ createInterface({input:process.stdin}).on('line',line=>{
  if(q.method==='initialize')return reply(q,{protocolVersion:1,agentCapabilities:{loadSession:scenario!=='no-restore'}});
  if(q.method==='session/new'||q.method==='session/load'){
   if(q.method==='session/load')update('session-fixture','OLD HISTORY');
-  const value={...state};if(q.method==='session/load'){delete value.sessionId;if(scenario==='wrong-session')value.sessionId='wrong';}
+  const value={...state};if(scenario==='no-modes')delete value.modes;if(q.method==='session/load'){delete value.sessionId;if(scenario==='wrong-session')value.sessionId='wrong';}
   return reply(q,value);
  }
  if(q.method==='session/set_config_option'){
@@ -204,6 +204,22 @@ describe('Native ACP runners (simulated native processes)', () => {
     })).rejects.toBe(stopped)
     expect(calls).toEqual(['initialize', 'session/new', 'end'])
     expect(closed).toBe(true)
+  })
+  it('runs a read-only Grok turn in its native plan mode when its ACP lists no modes', async () => {
+    const { records, result } = await fixture('grok', 'no-modes')
+    expect(result.status).toBe('SUCCESS')
+    const argv = records.find(record => record.argv).argv
+    expect(argv.slice(-5)).toEqual(['--permission-mode', 'plan', 'agent', '--no-leader', 'stdio'])
+    expect(argv.filter((arg: string) => arg === '--permission-mode')).toHaveLength(1)
+    expect(records.some(record => record.method === 'session/set_mode')).toBe(false)
+  })
+  it('still requires an ACP that lists modes to confirm plan, and never assumes it for other CLIs', async () => {
+    const listed = await fixture('grok')
+    expect(listed.result.status).toBe('SUCCESS')
+    expect(listed.records.find(record => record.method === 'session/set_mode')?.params.modeId).toBe('plan')
+    const kimi = await fixture('kimi', 'no-modes')
+    expect(kimi.result).toMatchObject({ status: 'ERROR', error: 'ACP does not advertise the selected permission mode' })
+    expect(kimi.records.some(record => record.method === 'session/prompt')).toBe(false)
   })
   it('sends Grok model and effort as the scalar values accepted by its native decoder', async () => {
     const { records, result } = await fixture('grok')
