@@ -2602,3 +2602,14 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 文案：隔离副本的设置开关、任务卡状态与按钮、合并/丢弃弹窗改用 `t()`；Host 的副本状态、排队原因、冲突原因、过程行与错误经 `hostText()` 映射。`hostPatterns` 改为支持多参数，`reason` 捕获再次映射（如「项目文件数超过隔离副本上限（N 个）；已改为排队…」整体译出）；路径与系统错误细节保持原文。冲突列表连接符改为语言无关的 ` — `（词典规则要求键含中文）。给 CLI 的副本提示、主 Agent 工具描述与丢弃确认询问仍为中文。
 - 实际执行：`vitest run tests/isolation-ui.test.tsx tests/client-i18n.test.tsx tests/general-settings.test.ts tests/settings-dialog.test.tsx` **4 文件 225 项通过**（新增英文下的任务卡/弹窗与 Host 副本文案映射测试）；`node scripts/build-preview.mjs` 通过；全量 `vitest run` 第一次 **4350 通过、4 失败、13 跳过**，失败均为 `tests/native-zcode.test.ts` 的模拟账号 header 用例（单独运行 3 次均 24/24 通过，与 i18n 分支基线记录的同类不稳定一致），第二次全量 **220 文件、4354 通过、13 跳过、0 失败**；`openspec validate --all --strict` **26/26**；`git diff --check` 通过。
 - 未执行：正式 `build` 与 Desktop 更新；DSH Desktop 实机（中英界面、并行开关、任务卡合并/丢弃、明暗主题、窄屏、Windows）；真实 CLI 与模型的副本运行与合并。
+
+## 2026-10-25 Desktop 实机验收：通用设置、英文界面与隔离副本（`feat/general-settings` 8cf3154，未发布）
+
+- 准备：CLI Worker 无运行或排队的 Worker（54 完成、9 失败、3 中断），后续消息只有已暂停项，Host 进程无 CLI 子进程。先在 Desktop 运行中正式 `build`（11:12），插件 Host 未热重载（锁 token 不变），新 Remote 需要重启；Desktop 退出时提示「当前正在运行的任务将会中断」，经用户确认后退出（锁随即释放）并重新打开，Host 以新构建启动（新锁），日志无新错误。`profiles/desktop/node_modules/dsh-cliworker-now` 链接本仓库。
+- GUI（Codex gpt-6-astra high，Computer Use）：
+  - 通过：导航「CLI Worker 设置」位于「智能体设置」正上方；页面含「语言」「任务调度」，初始为跟随 DSH、`2（默认）`、并行关闭，说明文字与设计一致。切换 English 后设置窗口立即整体变为英文（导航、标题、并行说明、ZCode/Codex 页），保存反馈正确；并行开关开启/关闭反馈正确；最后恢复为跟随 DSH（回到中文）与并行关闭。
+  - 通过：同项目两个 ZCode 写任务（GLM-5.3-Flash · Low），`zcode-append-b` 显示「Running in an isolated copy」→「Isolated copy ready to merge」与 Merge/Discard；Merge 弹窗文案正确，结果「Wrote back 1 and deleted 0 files…」，列出 b.txt，副本目录已清理。Discard 弹窗文案正确，确认后状态行与按钮消失（无单独成功提示）。
+  - 英文模式仍为中文：已有智能体预设名称与描述（已知限制）；插件设置问题卡标题与选项「ZCode 模型」「选择模型」（Host 生成，待补）；「输入你的答案」「跳过」「提交」及子会话内「处理失败」「已调用工具」「代码块」「允许编辑」为 Harness 原生控件，随 Harness 语言（中文）。未逐页检查全部 CLI 页；未打开并发下拉核对 1–8。
+- 落盘核对（本会话直接检查）：a.txt `alpha/one`、b.txt `beta/two`（合并写回）、c.txt `gamma/three`、d.txt `delta/four`。Worker 状态：a 完成（主目录）、b 完成且隔离 `released`、c `failed`（主目录，`ZCode 额外权限请求已拒绝`：Bash `echo >>` 被拒后改用 Edit 成功，运行仍判失败；该判定为 v0.8.1 起的既有 ZCode 行为）、d 完成且第二个副本 `ready` 残留。
+- **发现缺陷：隔离可被绕过。** d 的副本丢弃后，主 Agent 把「改动在隔离副本中」理解为失败，经 `cliworker_followup` 要求「必须在真实目录、不要在隔离副本中操作」；该轮 cwd 仍为新副本，但 ZCode Edit 直接写入 `/Users/leeyl/AI-Project/cliworker-isolation-test/d.txt` 并成功，副本内 d.txt 仍为 `delta`。隔离只靠给 CLI 的提示词，ZCode 原生权限允许写 cwd 外的绝对路径；并行时主目录可能被同时改写。主 Agent 收到的结果也未说明「改动待用户合并」。
+- 未解决：首次派遣的 ZCode 设置问题卡在 26 秒内被回答（GLM-5.3-Flash · Low），Codex 称未提交，会话记录未见主 Agent 代答，来源未查明。测试目录、测试会话与 d 的残留副本保留待处理。
