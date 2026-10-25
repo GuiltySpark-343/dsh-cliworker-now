@@ -2636,3 +2636,6 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 验证：conversation/native/harness/zcode 相关 77 个测试文件（1259 通过、4 跳过）；`build:preview` 与正式构建通过。
 - 第三次真实复验（确认无活动任务后重启 Desktop，新 Host 13:19；Codex gpt-6-astra high 驱动界面；ZCode 沿用 GLM-5.3-Flash·Low，用户授权）：任务卡「结果待核实」；本会话读取 Worker 记录为 `uncertain`、结果帧 UNCERTAIN，Bash 步骤失败，Read/Edit 均在响应完成之后；deny.txt 实际为 alpha、beta、gamma。主 Agent 独立读文件后汇报一致。
 - 遗留：任务详情同时显示「处理失败 / 本轮运行失败 / CLI_RUN_FAILED」，与待核实措辞不一致；其他 CLI 的真实拒绝场景未复验。
+- 用户要求待核实轮次不显示「处理失败 / CLI_RUN_FAILED」（b5f50f2）：Harness 只有 stop/tool-calls/max-tokens/aborted/error 五种结束原因，error 固定渲染为处理失败；改为 uncertain 与 completed 同样以 stop 收尾，说明由插件已有警示提示显示。新增流测试（撤掉修改时失败）；相关 80 个测试文件 1341 通过、4 跳过；`build:preview`、正式构建、OpenSpec 严格校验 27/27 通过。
+- Desktop 复验（新 Host 15:05，ZCode 沿用 GLM-5.3-Flash·Low）：任务卡「结果待核实」，详情只有待核实警示，未见处理失败、本轮运行失败或 CLI_RUN_FAILED；Worker `uncertain`，deny.txt 实际为 alpha、beta、gamma。主 Agent 独立读文件后报告为“已完成”，并注明后台状态为待核实。
+
