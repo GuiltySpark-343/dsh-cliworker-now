@@ -64,6 +64,13 @@ function startupMessage(error: unknown): string {
     'Windows CLI 安装入口无法读取，请检查安装',
     'Windows CLI 安装目录配置无效',
     'Windows 系统目录配置无效',
+    'Hermes 插件账号不能使用额外的托管配置',
+    'Hermes 请使用自身 .env，暂不支持外部密码库配置',
+    'Hermes 请使用自身 API 配置，暂不支持外部密码库引用',
+    '请先关闭 Hermes 的 auth.adopt_external_logins',
+    'Hermes 当前使用外部 Codex 登录，请改用自身账号',
+    'Hermes 账号来源无法确认',
+    'Hermes 含外部账号来源，请使用自身登录',
   ]
   return t(
     safe.find((item) => message === item || message === `Error: ${item}`) ??

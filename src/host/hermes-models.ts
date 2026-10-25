@@ -22,6 +22,27 @@ const literal = (value: unknown): value is string =>
   !/^(?:op:\/\/|!|\$|<|your[_ -]|placeholder|changeme)/i.test(value.trim())
 const unknown = (): AccountModelScope => ({ state: 'unknown', source: 'unknown', models: [] })
 
+/** The plugin Hermes home holds a source this plugin cannot use. Fixed text only:
+ * the account terminal shows it verbatim (Client startup allow-list). */
+export class HermesAccountSourceError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'HermesAccountSourceError'
+  }
+}
+
+/** Whether auth.json or config.yaml names this provider anywhere (model, auxiliary,
+ * MoA and fallback slots alike). Deliberately broad: any matching value counts. */
+function selectsProvider(material: { config: unknown; auth: Record<string, any> }, provider: string) {
+  const named = (value: unknown): boolean =>
+    typeof value === 'string'
+      ? value.trim().toLowerCase() === provider
+      : Array.isArray(value)
+        ? value.some(named)
+        : object(value) && Object.values(value).some(named)
+  return named(material.auth.active_provider) || named(material.config)
+}
+
 /** Native PooledCredential fields; a successful catalog cannot erase a native
  * dead account, active exhaustion window or model-specific entitlement bench. */
 export function hermesPoolEntryUnavailable(entry: Record<string, any>, model?: string): boolean {
@@ -124,6 +145,11 @@ function ownPoolSource(
     nous: ['manual:device_code', 'device_code'],
   }
   if (entry.auth_type === 'oauth' && ownOAuth[provider]?.includes(source)) return true
+  // Native _seed_copilot_singleton records an ambient `gh auth token` row whenever
+  // any picker loads the Copilot pool, independent of adopt_external_logins. Hermes
+  // routes nothing to it unless Copilot is selected, so only that inert row passes.
+  if (provider === 'copilot' && source === 'gh_cli' && entry.auth_type === 'api_key')
+    return !selectsProvider(material, provider)
   return provider === 'openrouter' && entry.auth_type === 'api_key' && source === 'manual:openrouter_pkce'
 }
 
@@ -132,32 +158,33 @@ export async function assertHermesOwnAccounts(home: string, signal?: AbortSignal
   const material = await readHermesAccountMaterial(home, signal)
   try {
     await lstat(join(home, '.cliworker-managed'))
-    throw new Error('Hermes 插件账号不能使用额外的托管配置')
+    throw new HermesAccountSourceError('Hermes 插件账号不能使用额外的托管配置')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
   try {
     await lstat(join(home, '.op.env'))
-    throw new Error('Hermes 请使用自身 .env，暂不支持外部密码库配置')
+    throw new HermesAccountSourceError('Hermes 请使用自身 .env，暂不支持外部密码库配置')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
   if (Object.values(material.env).some((value) => /^(?:op:\/\/|!|\$\{|__BITWARDEN_MANAGED__)/.test(value)))
-    throw new Error('Hermes 请使用自身 API 配置，暂不支持外部密码库引用')
+    throw new HermesAccountSourceError('Hermes 请使用自身 API 配置，暂不支持外部密码库引用')
   if (material.config.auth?.adopt_external_logins !== false)
-    throw new Error('请先关闭 Hermes 的 auth.adopt_external_logins')
+    throw new HermesAccountSourceError('请先关闭 Hermes 的 auth.adopt_external_logins')
   if (
     material.config.model?.openai_runtime === 'codex_app_server' ||
     material.config.model?.api_mode === 'codex_app_server'
   )
-    throw new Error('Hermes 当前使用外部 Codex 登录，请改用自身账号')
+    throw new HermesAccountSourceError('Hermes 当前使用外部 Codex 登录，请改用自身账号')
   // Native dotenv has override=True. Selector assignments would invalidate the
   // account source selected by the Host, even when no API-key value is inherited.
   for (const [provider, entries] of Object.entries(material.auth.credential_pool ?? {})) {
-    if (!Array.isArray(entries)) throw new Error('Hermes 账号来源无法确认')
+    if (!Array.isArray(entries)) throw new HermesAccountSourceError('Hermes 账号来源无法确认')
     for (const entry of entries) {
-      if (!object(entry)) throw new Error('Hermes 账号来源无法确认')
-      if (!ownPoolSource(provider, entry, material)) throw new Error('Hermes 含外部账号来源，请使用自身登录')
+      if (!object(entry)) throw new HermesAccountSourceError('Hermes 账号来源无法确认')
+      if (!ownPoolSource(provider, entry, material))
+        throw new HermesAccountSourceError('Hermes 含外部账号来源，请使用自身登录')
     }
   }
   return material

@@ -720,6 +720,13 @@ export const en = {
   '本轮在隔离副本中运行，未接通 DSH 工具桥，避免写入原项目': 'This turn runs in an isolated copy without the DSH tool bridge, so the original project is not written',
   '已合并隔离副本：写回 {written} 个、删除 {deleted} 个文件（未提交）': 'Isolated copy merged: wrote back {written} and deleted {deleted} files (uncommitted)',
   '{count} 个文件两边都改过，等待主 Agent 整合，主目录未改动': '{count} files were changed on both sides and wait for the main agent to integrate them; the main folder was not changed',
+  'Hermes 插件账号不能使用额外的托管配置': 'The Hermes plugin account cannot use an extra managed configuration',
+  'Hermes 请使用自身 .env，暂不支持外部密码库配置': 'Use Hermes’ own .env; external password manager configuration is not supported',
+  'Hermes 请使用自身 API 配置，暂不支持外部密码库引用': 'Use Hermes’ own API configuration; external password manager references are not supported',
+  '请先关闭 Hermes 的 auth.adopt_external_logins': 'Turn off auth.adopt_external_logins in Hermes first',
+  'Hermes 当前使用外部 Codex 登录，请改用自身账号': 'Hermes is using an external Codex login. Switch to its own account',
+  'Hermes 账号来源无法确认': 'The Hermes account source could not be confirmed',
+  'Hermes 含外部账号来源，请使用自身登录': 'Hermes has an external account source. Use its own login',
   // @end
 } as const satisfies Record<string, string>
 

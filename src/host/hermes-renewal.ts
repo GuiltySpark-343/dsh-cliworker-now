@@ -6,6 +6,7 @@ import { validateHermesHomeDirectory } from './hermes-adapter.ts'
 import { hermesAccountEnvironment } from './hermes-account-context.ts'
 import {
   assertHermesOwnAccounts,
+  HermesAccountSourceError,
   hermesPoolEntryUnavailable,
   readHermesAccountMaterial,
 } from './hermes-models.ts'
@@ -261,7 +262,12 @@ export async function ensureHermesNousFresh(input: HermesRenewalInput): Promise<
       .then(() => renew(input, home, controller.signal))
       .catch((error) => {
         if (error instanceof ProcessCleanupUnconfirmedError) state.poisoned = true
-        if (error instanceof HermesNousError || error instanceof ProcessCleanupUnconfirmedError) throw error
+        if (
+          error instanceof HermesNousError ||
+          error instanceof HermesAccountSourceError ||
+          error instanceof ProcessCleanupUnconfirmedError
+        )
+          throw error
         controller.signal.throwIfAborted()
         throw new HermesRenewalError('unavailable')
       })

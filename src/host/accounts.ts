@@ -56,6 +56,7 @@ import { spawnAccountTerminal, WindowsAccountTerminalError } from './windows-acc
 import { WindowsCliInstallationError, WindowsCliNotFoundError } from './windows-cli-installation.ts'
 import { effectiveHermesHome } from './hermes-account-context.ts'
 import { ensureHermesNousFresh, HermesRenewalError, reserveHermesAccount } from './hermes-renewal.ts'
+import { HermesAccountSourceError } from './hermes-models.ts'
 import { readQoderAccount, qoderEnvironment, QODER_METADATA_ARGUMENTS } from './qoder-accounts.ts'
 
 const STATUS_TIMEOUT = 10_000
@@ -522,6 +523,15 @@ export class AccountManager {
         return { cli, installed, state: 'unavailable', summary: error.message, actions: [] }
       if (error instanceof HermesExecutableError)
         return { cli, installed, state: 'unavailable', summary: error.message, actions: [] }
+      if (error instanceof HermesAccountSourceError)
+        return {
+          cli,
+          installed,
+          state: 'unavailable',
+          verification: 'local',
+          summary: error.message,
+          actions: actionsFor(cli, this.config),
+        }
       if (error instanceof HermesRenewalError)
         return {
           cli,
@@ -864,6 +874,7 @@ export class AccountManager {
       if (error instanceof WindowsAccountTerminalError) throw error
       if (error instanceof WindowsCliInstallationError) throw error
       if (error instanceof HermesExecutableError) throw error
+      if (error instanceof HermesAccountSourceError) throw error
       if (error instanceof MimoConfigurationError) throw error
       if ((error as NodeJS.ErrnoException)?.code === 'CLI_IDENTITY_MISMATCH')
         throw new Error(`${cli === 'omp' ? 'OMP' : 'Pi'} 执行入口身份不匹配，请检查该 CLI 的安装和路径`)
