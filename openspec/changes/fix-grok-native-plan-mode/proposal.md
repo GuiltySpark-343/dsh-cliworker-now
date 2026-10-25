@@ -15,7 +15,8 @@
 
 ## What Changes
 
-- 只读 Grok 运行在本次私有 `GROK_HOME/config.toml` 中写入 `[ui] permission_mode = "dontAsk"` 与 `[permission] deny = ["Bash(mkdir)", "Bash(touch)"]`；DSH 工具桥已就绪且绑定 Grok 时追加 `allow = ["MCPTool(dsh_worker_tools__*)"]`，每次执行仍由 Host 审批。可写运行写回不含这些段的基础配置。
+- 第三版私有配置中的 `[ui] permission_mode = "dontAsk"` 经 2026-10-26 00:09 复验未生效（写文件仍询问），deny 规则生效；用户决定去掉 dontAsk、改加 Edit/Write deny。
+- 只读 Grok 运行在本次私有 `GROK_HOME/config.toml` 中写入 `[permission] deny = ["Edit", "Write", "Bash(mkdir)", "Bash(touch)"]`；DSH 工具桥已就绪且绑定 Grok 时追加 `allow = ["MCPTool(dsh_worker_tools__*)"]`，每次执行仍由 Host 审批。可写运行写回不含这些段的基础配置。
 - 原生 ACP 启动参数中，只读不再传无效的全局权限参数（替换掉原 `--permission-mode`）；可写仍传 `--permission-mode acceptEdits`（其是否生效不在本变更范围）。
 - ACP 完全不列出模式时，只有启动时已由私有配置确定只读的 CLI（Grok）可跳过 ACP 切换；列出模式时仍须确认 `plan`，其他 CLI 照旧失败关闭。
 - 插件继续拒绝非工具桥的额外权限请求作为兜底；不新增操作系统沙箱，不写用户或项目配置。旧非原生路径同样使用该私有配置。
@@ -24,7 +25,7 @@
 
 ### Modified Capabilities
 
-- `platform-runtime`：新增“Grok 只读任务使用私有配置中的拒绝优先权限”。
+- `platform-runtime`：新增“Grok 只读任务使用私有配置中的拒绝规则”“Grok 原生 ACP 只读启动与兜底”。
 
 ## Impact
 

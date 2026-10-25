@@ -25,15 +25,15 @@ export interface GrokInput {
 const record = (x: unknown): x is Record<string, unknown> =>
   typeof x === 'object' && x !== null && !Array.isArray(x)
 const baseConfig = `[cli]\nauto_update = false\nuse_leader = false\n[features]\nsupport_permission = true\ntelemetry = false\nfeedback = false\ncodebase_indexing = false\n[telemetry]\ntrace_upload = false\nmixpanel_enabled = false\n[subagents]\nenabled = false\n[session]\nload_envrc = false\n[shell_environment_policy]\ninherit = "core"\nignore_default_excludes = false\n`
-// `grok agent stdio` ignores the global --permission-mode/--deny flags, so a
-// read-only run sets them in this run's private config. dontAsk denies every
-// call it would prompt for; bare mkdir/touch skip prompts in every mode and are
-// denied by rule. A ready DSH bridge is pre-approved, as dontAsk never asks;
-// the Host still approves each execution.
+// `grok agent stdio` ignores the global --permission-mode/--deny flags, and its
+// config ignores permission_mode = "dontAsk", so a read-only run denies edits
+// by rule in this run's private config. Bare mkdir/touch skip prompts in every
+// mode and are denied too. A ready DSH bridge is pre-approved; the Host still
+// approves each execution. Other prompts are still refused by the plugin.
 function grokConfig(readOnly?: { bridge: boolean }) {
   if (!readOnly) return baseConfig
   const allow = readOnly.bridge ? `allow = ["MCPTool(${HARNESS_MCP_SERVER}__*)"]\n` : ''
-  return `${baseConfig}[ui]\npermission_mode = "dontAsk"\n[permission]\ndeny = ["Bash(mkdir)", "Bash(touch)"]\n${allow}`
+  return `${baseConfig}[permission]\ndeny = ["Edit", "Write", "Bash(mkdir)", "Bash(touch)"]\n${allow}`
 }
 function bridgePath() {
   const here = dirname(fileURLToPath(import.meta.url))

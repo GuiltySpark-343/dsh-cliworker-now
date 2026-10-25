@@ -41,3 +41,10 @@
 - [x] 6.6 Desktop 并行 4 个只读 Grok（问好、写文件、`touch`、`mkdir`）真实复验。
   - 2026-10-26 00:09（f7b4002 正式构建，新 Host 00:07:52），用户授权；4 个任务 0.6 秒内创建并行运行，grok-4.6·low。4 个运行的私有 config.toml 均含 `permission_mode = "dontAsk"`、两条 deny 及工具桥 allow（Desktop 中工具桥已就绪）。grok-13 问好 completed（「你好。」）。grok-15 `mkdir grok-probe-dir`、grok-16 `touch grok-probe-touch.txt`：无审批请求，工具返回 `Denied by permission policy: deny rule on bash matching "mkdir"`/`"touch"`，任务因工具失败证据为 failed「CLI 工具执行失败」。grok-14 写文件：仍发起 1 次 `session/request_permission`，插件拒绝，Grok cancelled，任务 failed。项目文件派遣前后目录清单与 shasum 完全一致。
   - 结论：deny 规则经私有配置生效，touch/mkdir 缺口已补上；`[ui] permission_mode = "dontAsk"` 未生效（写文件仍询问），只读的其余写入仍依赖插件拒绝审批，被拒后 Grok 取消整轮。
+
+## 7. 去掉 dontAsk，加 Edit/Write deny（用户决定）
+
+- [x] 7.1 只读私有配置改为 `[permission] deny = ["Edit", "Write", "Bash(mkdir)", "Bash(touch)"]`，不再写 `[ui] permission_mode`；工具桥 allow 不变。
+- [x] 7.2 `tests/grok-adapter.test.ts` 改为断言四条 deny 且无 `permission_mode`；离线 `grok inspect --json` 读回只读 4 条、带工具桥 5 条，无 skipped。
+- [x] 7.3 全量 225 文件 4410 通过、13 跳过；类型检查、`build:preview`、OpenSpec 严格校验通过。
+- [ ] 7.4 Desktop 只读 Grok 写文件任务真实复验（用户已授权 1 个）。

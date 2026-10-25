@@ -76,8 +76,8 @@ describe('Grok adapter (synthetic fixtures; real execution not subscription-vali
     const config = async (extra: Record<string, unknown>) =>
       readFileSync(join((await prepareGrok({ ...input, ...extra })).env.GROK_HOME!, 'config.toml'), 'utf8')
     const readOnly = await config({})
-    expect(readOnly).toContain('[ui]\npermission_mode = "dontAsk"\n')
-    expect(readOnly).toContain('[permission]\ndeny = ["Bash(mkdir)", "Bash(touch)"]\n')
+    expect(readOnly).toContain('[permission]\ndeny = ["Edit", "Write", "Bash(mkdir)", "Bash(touch)"]\n')
+    expect(readOnly).not.toContain('permission_mode')
     expect(readOnly).not.toContain('allow =')
     expect(readOnly).toContain('load_envrc = false')
     const writable = await config({ mode: 'accept-edits' })
