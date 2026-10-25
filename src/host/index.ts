@@ -780,7 +780,11 @@ export class CliWorkerService extends TypertRemoteService {
       this.runtime.changed()
     }
   }
-  /** Serialize only this conversation's selection; a cancelled waiter never owns the question. */
+  /**
+   * Serialize only this conversation's questions; a cancelled waiter never owns
+   * the question. A settled setup asks nothing, so its catalog check leaves the
+   * queue and parallel dispatches of one conversation start together.
+   */
   private async chooseDispatch(agent: Agent, callerSignal: AbortSignal, cli: CliId): Promise<DispatchSetup> {
     const signal = AbortSignal.any([callerSignal, this.disposed.signal])
     signal.throwIfAborted()
@@ -788,139 +792,160 @@ export class CliWorkerService extends TypertRemoteService {
     const project = this.project(agent)
     const key = JSON.stringify([agent.id, project, cli])
     const waits = (this.dispatchWaits ??= new Map())
-    const previous = waits.get(key) ?? Promise.resolve()
-    let release!: () => void
-    const owned = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    const tail = previous.then(() => owned)
-    waits.set(key, tail)
-    void tail.then(() => {
-      if (waits.get(key) === tail) waits.delete(key)
-    })
+    const turn = () => {
+      const previous = waits.get(key) ?? Promise.resolve()
+      let release!: () => void
+      const owned = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const tail = previous.then(() => owned)
+      waits.set(key, tail)
+      void tail.then(() => {
+        if (waits.get(key) === tail) waits.delete(key)
+      })
+      return { previous, release }
+    }
     this.pending.set(agent.id, (this.pending.get(agent.id) ?? 0) + 1)
     this.runtime.changed()
     try {
-      await waitForInput(previous, signal)
-      signal.throwIfAborted()
-      this.assertExecution(agent)
-      this.runtime.assertCliEnabled(cli)
-      this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
-      const catalogRevision = this.settingsCatalogs.revision(cli)
-      const { catalog, binding } = await this.queryCatalog(cli, this.backend, this.options, project, signal)
-      signal.throwIfAborted()
-      this.runtime.assertCliEnabled(cli)
-      this.settingsCatalogs.remember(project, { catalog, binding }, catalogRevision)
-      const models = catalog.models
-      const valid = (setup: DispatchSetup | undefined): setup is DispatchSetup => {
-        if (!setup || setup.binding !== binding || cliOf(setup.preference) !== cli) return false
+      for (let queued = false; ; queued = true) {
+        const { previous, release } = turn()
+        let held = true
         try {
-          validatePreference(setup.preference, catalog)
-          return resolveModel(setup.preference, models).model === setup.preference.model
-        } catch {
-          return false
+          await waitForInput(previous, signal)
+          signal.throwIfAborted()
+          this.assertExecution(agent)
+          this.runtime.assertCliEnabled(cli)
+          if (!queued && this.runtime.storage.conversationSetup(agent.id, project, cli)) {
+            release()
+            held = false
+          }
+          this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
+          const catalogRevision = this.settingsCatalogs.revision(cli)
+          const { catalog, binding } = await this.queryCatalog(cli, this.backend, this.options, project, signal)
+          signal.throwIfAborted()
+          this.runtime.assertCliEnabled(cli)
+          this.settingsCatalogs.remember(project, { catalog, binding }, catalogRevision)
+          const models = catalog.models
+          const valid = (setup: DispatchSetup | undefined): setup is DispatchSetup => {
+            if (!setup || setup.binding !== binding || cliOf(setup.preference) !== cli) return false
+            try {
+              validatePreference(setup.preference, catalog)
+              return resolveModel(setup.preference, models).model === setup.preference.model
+            } catch {
+              return false
+            }
+          }
+          let asked = false
+          const ask = async (questions: AskUserQuestionItem[]) => {
+            signal.throwIfAborted()
+            asked = true
+            const response = await waitForInput(
+              agent.ctx.get('userQuestions')!.ask({ agent, signal, questions }),
+              signal,
+            )
+            signal.throwIfAborted()
+            this.runtime.assertCliEnabled(cli)
+            return response
+          }
+          const current = this.runtime.storage.conversationSetup(agent.id, project, cli)
+          let setup: DispatchSetup | undefined = valid(current) ? current : undefined
+          // The settled setup no longer fits this catalog: ask again in turn.
+          if (!setup && !held) continue
+          let selected = false
+          if (!current) {
+            const saved = this.runtime.storage.dispatchSetup(project, cli)
+            if (valid(saved)) {
+              const modelLabel =
+                models.find(
+                  (model) =>
+                    model.id === saved.preference.model ||
+                    Object.values(model.variants ?? {}).includes(saved.preference.model),
+                )?.label ?? saved.preference.model
+              const response = await ask([
+                {
+                  id: 'cliworker_reuse',
+                  header: '沿用设定',
+                  question: `是否沿用 ${modelLabel} · ${effortLabel(saved.preference.effort)} · ${saved.role?.name ?? '不使用角色预设'}？`,
+                  options: [{ label: '沿用' }, { label: '重新选择' }],
+                },
+              ])
+              const answer = response.answers.find((item) => item.id === 'cliworker_reuse')
+              if (
+                answer?.custom !== undefined ||
+                answer?.selected.length !== 1 ||
+                !['沿用', '重新选择'].includes(answer.selected[0]!)
+              )
+                throw new Error('请选择沿用或重新选择；任务尚未启动')
+              if (answer.selected[0] === '沿用') setup = saved
+            }
+          }
+          if (!setup) {
+            const choices = visibleModelChoices(models)
+            const response = await ask([
+              {
+                id: 'cliworker_model',
+                header: `${CLI_LABELS[cli]} 模型`,
+                question: '选择模型',
+                options: choices.map((model) => ({ label: model.label })),
+              },
+            ])
+            const answer = response.answers.find((item) => item.id === 'cliworker_model')
+            const chosen =
+              answer?.custom === undefined && answer?.selected.length === 1
+                ? choices.find((model) => model.label === answer.selected[0])
+                : undefined
+            if (!chosen?.efforts?.length) throw new Error('请选择列表中的模型')
+            const offered = structuredClone(this.runtime.storage.rolePresets())
+            const questions: AskUserQuestionItem[] = []
+            if (chosen.efforts.length > 1)
+              questions.push({
+                id: 'cliworker_effort',
+                header: '思考强度',
+                question: `选择 ${chosen.label} 的思考强度`,
+                options: chosen.efforts.map((effort) => ({ label: effortLabel(effort) })),
+              })
+            questions.push(roleQuestion(offered))
+            const selection = await ask(questions)
+            const effortAnswer = selection.answers.find((item) => item.id === 'cliworker_effort')
+            const effort =
+              chosen.efforts.length === 1
+                ? chosen.efforts[0]
+                : effortAnswer?.custom === undefined && effortAnswer?.selected.length === 1
+                  ? chosen.efforts.find((effort) => effortLabel(effort) === effortAnswer.selected[0])
+                  : undefined
+            const preference = resolveModel(preferenceSchema.parse({ cli, model: chosen.id, effort }), models)
+            setup = { preference, role: readRoleAnswer(offered, selection) ?? null, binding }
+            selected = true
+          }
+          // A remembered answer is never execution authority. Detect changes during any
+          // question; an unasked setup was just checked, and launch checks it again.
+          if (asked) {
+            const checked = await this.querySelection(
+              setup.preference,
+              this.backend,
+              this.options,
+              project,
+              signal,
+              binding,
+            )
+            if (checked.preference.model !== setup.preference.model)
+              throw new Error('模型与思考强度已变更，请重新选择')
+          }
+          signal.throwIfAborted()
+          this.assertExecution(agent)
+          this.runtime.assertCliEnabled(cli)
+          if (this.project(agent) !== project) throw new Error('项目已变更，请重新选择')
+          if (selected) this.runtime.storage.setDispatchSetup(project, setup)
+          if (current !== setup) this.runtime.storage.setConversationSetup(agent.id, project, setup)
+          ;(this.selectionBindings ??= new WeakMap()).set(setup.preference, binding)
+          ;(this.selectionProjects ??= new WeakMap()).set(setup.preference, project)
+          return setup
+        } finally {
+          if (held) release()
         }
       }
-      const ask = async (questions: AskUserQuestionItem[]) => {
-        signal.throwIfAborted()
-        const response = await waitForInput(
-          agent.ctx.get('userQuestions')!.ask({ agent, signal, questions }),
-          signal,
-        )
-        signal.throwIfAborted()
-        this.runtime.assertCliEnabled(cli)
-        return response
-      }
-      const current = this.runtime.storage.conversationSetup(agent.id, project, cli)
-      let setup: DispatchSetup | undefined = valid(current) ? current : undefined
-      let selected = false
-      if (!current) {
-        const saved = this.runtime.storage.dispatchSetup(project, cli)
-        if (valid(saved)) {
-          const modelLabel =
-            models.find(
-              (model) =>
-                model.id === saved.preference.model ||
-                Object.values(model.variants ?? {}).includes(saved.preference.model),
-            )?.label ?? saved.preference.model
-          const response = await ask([
-            {
-              id: 'cliworker_reuse',
-              header: '沿用设定',
-              question: `是否沿用 ${modelLabel} · ${effortLabel(saved.preference.effort)} · ${saved.role?.name ?? '不使用角色预设'}？`,
-              options: [{ label: '沿用' }, { label: '重新选择' }],
-            },
-          ])
-          const answer = response.answers.find((item) => item.id === 'cliworker_reuse')
-          if (
-            answer?.custom !== undefined ||
-            answer?.selected.length !== 1 ||
-            !['沿用', '重新选择'].includes(answer.selected[0]!)
-          )
-            throw new Error('请选择沿用或重新选择；任务尚未启动')
-          if (answer.selected[0] === '沿用') setup = saved
-        }
-      }
-      if (!setup) {
-        const choices = visibleModelChoices(models)
-        const response = await ask([
-          {
-            id: 'cliworker_model',
-            header: `${CLI_LABELS[cli]} 模型`,
-            question: '选择模型',
-            options: choices.map((model) => ({ label: model.label })),
-          },
-        ])
-        const answer = response.answers.find((item) => item.id === 'cliworker_model')
-        const chosen =
-          answer?.custom === undefined && answer?.selected.length === 1
-            ? choices.find((model) => model.label === answer.selected[0])
-            : undefined
-        if (!chosen?.efforts?.length) throw new Error('请选择列表中的模型')
-        const offered = structuredClone(this.runtime.storage.rolePresets())
-        const questions: AskUserQuestionItem[] = []
-        if (chosen.efforts.length > 1)
-          questions.push({
-            id: 'cliworker_effort',
-            header: '思考强度',
-            question: `选择 ${chosen.label} 的思考强度`,
-            options: chosen.efforts.map((effort) => ({ label: effortLabel(effort) })),
-          })
-        questions.push(roleQuestion(offered))
-        const selection = await ask(questions)
-        const effortAnswer = selection.answers.find((item) => item.id === 'cliworker_effort')
-        const effort =
-          chosen.efforts.length === 1
-            ? chosen.efforts[0]
-            : effortAnswer?.custom === undefined && effortAnswer?.selected.length === 1
-              ? chosen.efforts.find((effort) => effortLabel(effort) === effortAnswer.selected[0])
-              : undefined
-        const preference = resolveModel(preferenceSchema.parse({ cli, model: chosen.id, effort }), models)
-        setup = { preference, role: readRoleAnswer(offered, selection) ?? null, binding }
-        selected = true
-      }
-      // A remembered answer is never execution authority. Detect changes during any question.
-      const checked = await this.querySelection(
-        setup.preference,
-        this.backend,
-        this.options,
-        project,
-        signal,
-        binding,
-      )
-      if (checked.preference.model !== setup.preference.model)
-        throw new Error('模型与思考强度已变更，请重新选择')
-      signal.throwIfAborted()
-      this.assertExecution(agent)
-      this.runtime.assertCliEnabled(cli)
-      if (this.project(agent) !== project) throw new Error('项目已变更，请重新选择')
-      if (selected) this.runtime.storage.setDispatchSetup(project, setup)
-      if (current !== setup) this.runtime.storage.setConversationSetup(agent.id, project, setup)
-      ;(this.selectionBindings ??= new WeakMap()).set(setup.preference, binding)
-      ;(this.selectionProjects ??= new WeakMap()).set(setup.preference, project)
-      return setup
     } finally {
-      release()
       const pending = (this.pending.get(agent.id) ?? 1) - 1
       if (pending) this.pending.set(agent.id, pending)
       else this.pending.delete(agent.id)

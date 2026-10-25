@@ -2656,3 +2656,11 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 验证：`tests/hermes-no-proxy.test.ts` 4 项；Hermes/账号/绑定相关 44 个测试文件（957 通过、1 跳过）；`build:preview`、正式构建、OpenSpec 严格校验 29/29。Desktop 重启（新 Host 15:38）：终端进程 NO_PROXY 不再含 `[::1]`；状态「Nous账号登录」；选择 Nous Portal 后出现模型列表，无 Invalid port；未选模型，config.yaml 未变。
 - 未执行：修复后插件自身触发的过期续期（需令牌再次过期）；设置页 Hermes 模型下拉曾持续显示「正在读取 Hermes Agent 模型…」，用户自行检查后确认没有问题。
 
+
+## 2026-10-25 设置页去掉“已保存”提示；同对话并行派遣受选型锁拖慢（`feat/general-settings`，未发布）
+
+- 用户要求删除设置页保存后的小字（「同时对话数已保存」「发送方式已保存」等）：通用设置、发送方式、默认设置与角色预设只在保存中或失败时显示一行反馈，已选值由控件本身显示；删除对应中英词条，`doc/settings-ui-design.md` 同步。设置相关 5 个测试文件 227 通过。
+- 用户反馈「同时对话数」设为 5 后 Antigravity 仍最多 2 个并行。核查（只读本机记录）：`general-settings.json` 为 `maxConcurrent: 5`；07:50 的 5 个任务 `createdAt` 依次相隔约 7–9 秒，运行时并未拒绝第 3 个（排队时立即建立隔离副本）。瓶颈在任务创建前：同对话同 CLI 的选型锁内每次先读目录、再重读一次，`agy models` 实测约 3.7 秒，锁内约 7.4 秒；任务约 15 秒完成，故最多两两重叠。
+- 修复（OpenSpec `fix-parallel-dispatch-admission`）：已有本对话设定的派遣取得顺序位置后立即让出，目录检查在锁外并行；设定失效时重新排队按原规则询问；未询问问题时不在选型内重读目录，`launch` 提交前授权不变。
+- 验证：新增并行与失效设定测试（旧实现下并行测试只会进入 1 次目录检查）；派遣/设置相关 7 个测试文件 443 通过；全量 223 文件 4397 通过、13 跳过；`build:preview` 通过。
+- 未执行：正式构建与 Desktop 实机并行派遣（需用户授权真实 Antigravity 模型调用）。

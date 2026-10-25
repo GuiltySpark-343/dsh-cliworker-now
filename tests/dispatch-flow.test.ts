@@ -176,7 +176,8 @@ it('same conversation reuses its frozen setup even if project default or role li
   expect(await f.choose()).toEqual({ ...f.setup, role })
   expect(await f.choose()).toEqual({ ...f.setup, role })
   expect(f.ask).not.toHaveBeenCalled()
-  expect(f.service.querySelection).toHaveBeenCalledTimes(2)
+  expect(f.service.queryCatalog).toHaveBeenCalledTimes(2)
+  expect(f.service.querySelection).not.toHaveBeenCalled()
 })
 
 it('new conversation asks only reuse and captures the offered default without overwriting newer project defaults', async () => {
@@ -437,7 +438,40 @@ it('reopened Host storage reuses this conversation without any question', async 
   f.service.selectionBindings = new WeakMap()
   expect(await f.choose()).toEqual(f.setup)
   expect(f.ask).not.toHaveBeenCalled()
-  expect(f.service.querySelection).toHaveBeenCalledOnce()
+  expect(f.service.queryCatalog).toHaveBeenCalledOnce()
+  // Nothing was asked, so the fresh catalog is the check; launch authorizes again.
+  expect(f.service.querySelection).not.toHaveBeenCalled()
+})
+
+it('parallel dispatches of a settled conversation check the catalog together instead of in turn', async () => {
+  const f = fixture()
+  f.storage.setConversationSetup('parent', f.project, f.setup)
+  const gate = Promise.withResolvers<void>()
+  const query = f.service.queryCatalog.getMockImplementation()
+  f.service.queryCatalog.mockImplementation(async (...args: any[]) => {
+    await gate.promise
+    return query(...args)
+  })
+  const all = Promise.all([f.choose(), f.choose(), f.choose()])
+  await vi.waitFor(() => expect(f.service.queryCatalog).toHaveBeenCalledTimes(3))
+  gate.resolve()
+  expect(await all).toEqual([f.setup, f.setup, f.setup])
+  expect(f.ask).not.toHaveBeenCalled()
+  await vi.waitFor(() => expect(f.service.dispatchWaits.size).toBe(0))
+  expect(f.service.pending.size).toBe(0)
+})
+
+it('a settled setup the catalog no longer offers asks once in turn, and parallel callers share the new answer', async () => {
+  const f = fixture()
+  f.storage.setConversationSetup('parent', f.project, { ...f.setup, preference: { ...f.setup.preference, model: 'retired' } })
+  const one = f.choose(),
+    two = f.choose()
+  await f.complete()
+  const [first, second] = await Promise.all([one, two])
+  expect(first).toEqual(second)
+  expect(first.preference).toMatchObject({ model: 'fixture-a', effort: 'high' })
+  expect(f.ask).toHaveBeenCalledTimes(2)
+  await vi.waitFor(() => expect(f.service.dispatchWaits.size).toBe(0))
 })
 
 it('replays omitted CLI then explicit Hermes without consuming the previous Antigravity setup', async () => {
