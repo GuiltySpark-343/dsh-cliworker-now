@@ -597,6 +597,31 @@ it('keeps a genuine CLI failure as an error with its original detail', async () 
   expect(f.listeners.size).toBe(0)
 })
 
+it('ends an unverified CLI outcome without a failure card or an extra empty step', async () => {
+  const f = await fixture({
+    sourceEvents: [
+      { kind: 'user', text: 'synthetic input' },
+      {
+        kind: 'assistant',
+        text: 'synthetic answer after a denied permission',
+        step: 0,
+        response: { id: 'answer', blockId: 'text', index: 0, complete: true },
+      },
+    ],
+  })
+  await f.begin()
+  await f.finish('uncertain', 'synthetic 结果待核实 notice')
+  expect(f.cancel).not.toHaveBeenCalled()
+  expect(f.agent.session.log.filter((event) => event.type === 'turn/end').at(-1)?.data).toMatchObject({
+    reason: { kind: 'completed' },
+  })
+  expect(JSON.stringify(f.agent.session.log)).not.toContain('CLI_RUN_FAILED')
+  expect(f.agent.session.log.filter((event) => event.type === 'step/start')).toHaveLength(1)
+  expect(f.requestErrors).not.toHaveBeenCalled()
+  expect(f.agentErrors).not.toHaveBeenCalled()
+  expect(f.deps.stop).not.toHaveBeenCalled()
+})
+
 it('retains native completion for a successful CLI outcome without cancelling its turn', async () => {
   const f = await fixture()
   await f.begin()

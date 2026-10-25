@@ -10,3 +10,10 @@
 #### Scenario: 拒绝后仍有其他失败
 - **WHEN** 授权被拒绝后，另一个工具失败或本轮以失败结束
 - **THEN** Worker 状态为失败，不转为结果待核实
+
+### Requirement: 待核实轮次在原生会话中的结束方式
+结果为 uncertain 的轮次在 Harness 原生会话中 SHALL 以正常结束（stop）收尾，MUST NOT 产生失败结束（error / CLI_RUN_FAILED）或额外的空步骤；待核实说明 SHALL 由插件自身的警示提示显示，措辞与任务卡「结果待核实」一致。
+
+#### Scenario: 任务详情不显示处理失败
+- **WHEN** 拒绝授权后 CLI 正常结束，Worker 状态为结果待核实
+- **THEN** 任务详情显示本轮回复与待核实警示，不显示「处理失败 / 本轮运行失败 / CLI_RUN_FAILED」
