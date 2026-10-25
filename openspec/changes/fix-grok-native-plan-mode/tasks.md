@@ -11,4 +11,6 @@
 
 ## 3. 真实验收
 
-- [ ] 3.1 Desktop 派遣只读 Grok 任务成功；要求其创建文件时不产生文件（需用户授权模型调用）。
+- [x] 3.1 Desktop 派遣只读 Grok 任务成功；要求其创建文件时不产生文件（需用户授权模型调用）。
+  - 2026-10-25 22:52（94bfec4 正式构建，新 Host 17:21），用户授权；Codex gpt-6-astra high 驱动界面，同一请求并行派遣 2 个只读 Grok（grok-4.6·low），同项目 `cliworker-isolation-test`，相隔 0.07 秒创建、22:52:36 同时连接，未出现 `EEXIST` 或 `ACP does not advertise the selected permission mode`，界面访问模式为「规划（只读）」。grok-7 问好：completed，回复「你好。」，无工具调用。grok-8 写文件：Grok 在 plan 模式下仍发起 `session/request_permission`（write，选项 allow-edits-session / allow-once / reject-once），插件记录「CLI 额外权限请求已拒绝」，工具 failed（User rejected the execution for tool `write`），Grok 以 `stopReason: cancelled`（cancellationCategory PermissionRejected）结束本轮，任务 failed「CLI 未成功完成（cancelled）」。项目文件派遣前后 shasum 一致，`grok-readonly-probe.txt` 不存在。
+  - 说明：Grok 1.0.62 的 plan 模式不会自行阻止写工具，只读边界由插件拒绝额外权限保证；拒绝后 Grok 取消整轮，因此写入被拒的只读任务显示为失败而非带说明的完成。

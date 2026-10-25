@@ -2680,4 +2680,5 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 根因：Grok 1.0.62 的 ACP `session/new` 不再返回 `modes`（只有 model、reasoning_effort 配置项，会话 kind 为 build），插件只读时要求 ACP 列出并切换 `plan`，于是在发送提示前失败。`grok --help` 的 `--permission-mode` 支持 `plan`；临时 GROK_HOME 下以 `--permission-mode plan agent --no-leader stdio` 只做 initialize/session/new（不发提示）会话正常建立。
 - 修复（OpenSpec `fix-grok-native-plan-mode`）：Grok 原生启动参数按任务模式替换权限模式（只读 `plan`、可写 `acceptEdits`），与可写模式一样由原生参数设定；ACP 完全不列出模式时，仅启动参数已确定该模式的 CLI 可跳过 ACP 切换，列出模式时仍须确认 `plan`，其他 CLI 照旧失败关闭；只读中仍拒绝全部额外权限请求。
 - 验证：`tests/native-acp.test.ts` 新增 2 项（无模式 ACP 下只读 Grok 成功且不切换模式——撤掉修复时失败；列出模式时仍切换、Kimi 无模式仍失败）；全量 225 文件 4407 通过、13 跳过；`build:preview` 通过。
-- 未执行：Desktop 真实只读 Grok 任务及“要求写文件但未产生文件”的复验（需用户授权模型调用）。
+- Desktop 复验（22:52，用户授权，新 Host 17:21）：同项目并行 2 个只读 Grok（grok-4.6·low），无 `EEXIST`、无模式报错，访问模式「规划（只读）」。问好任务 completed（「你好。」，无工具调用）；写文件任务中 Grok 在 plan 模式下仍请求 write 权限，插件拒绝，Grok 以 cancelled（PermissionRejected）结束，任务 failed；项目文件 shasum 前后一致，探针文件不存在。
+- 已知行为：Grok 1.0.62 plan 模式不自行阻止写工具，只读靠插件拒绝额外权限；拒绝即取消整轮，写入被拒的只读任务显示为失败。未改动。
