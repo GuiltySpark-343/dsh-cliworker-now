@@ -108,21 +108,23 @@ describe('metadata preparation cleanup admission, isolated synthetic fixtures', 
     expect(backend.spawn).not.toHaveBeenCalled()
   })
 
-  it('an account activation conflict releases preparation without spawning the task', async () => {
+  it('an account activation conflict releases preparation, waits without spawning, then runs', async () => {
     const { backend, submit } = setup()
     const release = vi.fn()
-    launch.mockResolvedValue({
-      ...safeLaunch(release),
-      activate: vi.fn(async () => {
-        throw new Error('账号正被使用，请稍后刷新')
-      }),
-    })
-    expect(await submit().done).toMatchObject({
-      status: 'failed',
-      error: expect.stringContaining('账号正被使用'),
-    })
-    expect(release).toHaveBeenCalledTimes(1)
+    launch
+      .mockResolvedValueOnce({
+        ...safeLaunch(release),
+        activate: vi.fn(async () => {
+          throw new Error('账号正被使用，请稍后刷新')
+        }),
+      })
+      .mockResolvedValue(safeLaunch())
+    const submission = submit()
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1))
+    expect(submission.worker.status).toBe('queued')
     expect(backend.spawn).not.toHaveBeenCalled()
+    expect((await submission.done).status).toBe('completed')
+    expect(backend.spawn).toHaveBeenCalledTimes(1)
   })
 
   it.each([false, true])(

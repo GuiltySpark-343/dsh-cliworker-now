@@ -1,4 +1,5 @@
 import { readCliAccountBinding } from './cli-account-binding.ts'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { SettingsCatalogCache } from './settings-catalog-cache.ts'
 import { resolveModel } from '../shared/models.ts'
 import { visibleModelChoices } from '../shared/model-presentation.ts'
@@ -75,6 +76,7 @@ import { RUNNING_MESSAGE_MODES } from '../shared/running-message.ts'
 import { workerPermissionOptions, type WorkerPermissionState } from '../shared/worker-permissions.ts'
 import { WindowsCliInstallationError, WindowsCliNotFoundError } from './windows-cli-installation.ts'
 import { ACCOUNT_CHANGED, authorizedCatalog, authorizeSelection } from './authorized-catalog.ts'
+import { ownAccountBusy as accountBusy } from './own-account-lease.mjs'
 import { WorkerStorage, type DispatchSetup } from './storage.ts'
 import { WorkerRuntime, type Submission } from './runtime.ts'
 import type { MergeResolution } from './isolated-workspace.ts'
@@ -163,6 +165,10 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
   }
 }
 
+/** Catalog reads hold a busy Pi/OMP account for seconds; a run holds it longer. */
+const BUSY_ACCOUNT_WAIT_MS = 30_000
+const BUSY_ACCOUNT_RETRY_MS = 1000
+const EXCLUSIVE_ACCOUNT_CLIS = new Set<CliId>(['omp', 'pi'])
 const preferenceSchema = validate.object({
   cli: validate.enum(CLI_IDS).optional(),
   model: validate.string().min(1),
@@ -666,19 +672,66 @@ export class CliWorkerService extends TypertRemoteService {
   }
   private async queryCatalog(...args: Parameters<typeof authorizedCatalog>) {
     try {
-      return await authorizedCatalog(...args)
+      return await this.freshCatalog(...args)
     } catch (error) {
       if (error instanceof ProcessCleanupUnconfirmedError) this.runtime.blockCatalogOnCleanup(args[0], error)
+      if (accountBusy(error)) return this.busyAccountCatalog(error, ...args)
       throw error
     }
   }
+  private async freshCatalog(...args: Parameters<typeof authorizedCatalog>) {
+    const [cli, , , project] = args
+    const revision = this.settingsCatalogs?.revision(cli)
+    const result = await authorizedCatalog(...args)
+    // Parallel dispatches waiting on this exclusive account read the fresh result.
+    if (EXCLUSIVE_ACCOUNT_CLIS.has(cli) && revision !== undefined)
+      try {
+        this.settingsCatalogs?.remember(project, result, revision)
+      } catch {
+        // A source change during the read is caught by the next fresh check.
+      }
+    return result
+  }
+  /**
+   * A Pi/OMP OAuth account is exclusive while another run or catalog read holds
+   * it. Dispatch only needs this account's choices to queue the task, and the run
+   * authorizes afresh once the account is free, so a busy account uses its last
+   * verified catalog. Without one, wait for the short catalog reads to finish.
+   */
+  private async busyAccountCatalog(busy: unknown, ...args: Parameters<typeof authorizedCatalog>) {
+    const [cli, backend, config, project, signal, expected] = args
+    const saved = async () => {
+      const binding = await readCliAccountBinding(cli, backend, config, project, signal)
+      if (expected && binding !== expected) throw new Error(ACCOUNT_CHANGED)
+      const catalog = this.settingsCatalogs?.display(project, cli, binding)
+      return catalog && { catalog, binding }
+    }
+    for (const deadline = Date.now() + BUSY_ACCOUNT_WAIT_MS; ; ) {
+      const hit = await saved()
+      if (hit) return hit
+      if (Date.now() >= deadline) throw busy
+      await sleep(BUSY_ACCOUNT_RETRY_MS, undefined, { signal })
+      // Another read may have finished while this one slept.
+      const later = await saved()
+      if (later) return later
+      try {
+        return await this.freshCatalog(...args)
+      } catch (error) {
+        if (!accountBusy(error)) throw error
+      }
+    }
+  }
   private async querySelection(...args: Parameters<typeof authorizeSelection>) {
+    const [preference, ...rest] = args
     try {
       return await authorizeSelection(...args)
     } catch (error) {
       if (error instanceof ProcessCleanupUnconfirmedError)
-        this.runtime.blockCatalogOnCleanup(cliOf(args[0]), error)
-      throw error
+        this.runtime.blockCatalogOnCleanup(cliOf(preference), error)
+      if (!accountBusy(error)) throw error
+      const result = await this.busyAccountCatalog(error, cliOf(preference), ...rest)
+      validatePreference(preference, result.catalog)
+      return { ...result, preference: resolveModel(preference, result.catalog.models) }
     }
   }
   /** Read installation paths without saving discovery or opening a native account/model process. */

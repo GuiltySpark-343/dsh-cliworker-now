@@ -1,6 +1,6 @@
-import { chmod, lstat, mkdir, realpath, symlink, unlink, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, realpath, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -53,8 +53,16 @@ async function state(stateDirectory: string, project?: string) {
   } catch (e) {
     if (!record(e) || e.code !== 'ENOENT') throw e
   }
-  await writeFile(configPath, config, { mode: 0o600 })
-  await chmod(configPath, 0o600)
+  // Tasks of one project share this state and may start together: each file is
+  // published whole by rename, so a concurrent start never sees or races a gap.
+  const temporary = (path: string) => `${path}.${randomUUID()}.tmp`
+  const configTemporary = temporary(configPath)
+  try {
+    await writeFile(configTemporary, config, { mode: 0o600, flag: 'wx' })
+    await rename(configTemporary, configPath)
+  } finally {
+    await rm(configTemporary, { force: true })
+  }
   if (project) {
     const original = join(homedir(), '.grok', 'auth.json'),
       target = join(home, 'auth.json')
@@ -63,11 +71,23 @@ async function state(stateDirectory: string, project?: string) {
     try {
       const existing = await lstat(target)
       if (!existing.isFile() && !existing.isSymbolicLink()) throw new Error('Unsafe Grok auth snapshot')
-      await unlink(target)
     } catch (e) {
       if (!record(e) || e.code !== 'ENOENT') throw e
     }
-    if (process.platform !== 'win32' && existsSync(original)) await symlink(original, target)
+    if (process.platform !== 'win32' && existsSync(original)) {
+      const link = temporary(target)
+      try {
+        await symlink(original, link)
+        await rename(link, target)
+      } finally {
+        await rm(link, { force: true })
+      }
+    } else
+      try {
+        await unlink(target)
+      } catch (e) {
+        if (!record(e) || e.code !== 'ENOENT') throw e
+      }
   }
   return {
     root,

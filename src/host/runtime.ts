@@ -61,6 +61,7 @@ import { NativeTimelineReprojector } from './native-timeline-reprojection.ts'
 import { projectPublicToolCall } from './public-tool-projection.ts'
 import { WorkerStorage } from './storage.ts'
 import { authorizeSelection, ACCOUNT_CHANGED } from './authorized-catalog.ts'
+import { ownAccountBusy as accountBusy } from './own-account-lease.mjs'
 import { readCliAccountBinding } from './cli-account-binding.ts'
 import { assertFirstPartyConfiguration, firstPartyEnvironment } from './first-party-models.ts'
 import { agyBackgroundEnvironment } from './agy-background-environment.ts'
@@ -113,7 +114,13 @@ interface Task {
   isolate?: boolean
   /** A copy was refused for this turn; it waits for the main directory instead. */
   isolationRefused?: boolean
+  /** CLI and admitted account of this turn, once known. */
+  accountKey?: string
+  /** The account was held exclusively; queued until its holder ends or a retry is due. */
+  accountWait?: { retryAt: number }
 }
+/** Retry for an account held outside this Host's runs, such as a catalog read. */
+const ACCOUNT_RETRY_MS = 2000
 /** Internal identity distinguishes deliberate cancellation from timeouts and failures. */
 class UserStoppedError extends Error {
   constructor() {
@@ -167,6 +174,7 @@ export class WorkerRuntime {
   private tasks = new Map<string, Task>()
   private queue: Task[] = []
   private running = new Set<Task>()
+  private accountRetry?: ReturnType<typeof setTimeout>
   private listeners = new Set<() => void>()
   private disposed = false
   private blocked?: string
@@ -1850,6 +1858,15 @@ export class WorkerRuntime {
         continue
       }
       if (this.running.size >= this.maxConcurrent) break
+      if (task.accountWait) {
+        // Our own holder admits the next waiter when it ends; another holder is retried.
+        if ([...this.running].some((other) => other.accountKey === task.accountKey)) continue
+        const remaining = task.accountWait.retryAt - Date.now()
+        if (remaining > 0) {
+          this.retryDrain(remaining)
+          continue
+        }
+      }
       // A conversation bound to a copy never touches the main directory.
       if (!task.worker.isolation) {
         const conflicts = (other: Task) =>
@@ -2116,8 +2133,10 @@ export class WorkerRuntime {
     let release: (() => void | Promise<void>) | undefined
     let quiescent = false
     let metadataReady = false
+    let busyAccount = false
     try {
       const admitted = await task.admission
+      task.accountKey = JSON.stringify([cliOf(worker.preference), admitted])
       controller.signal.throwIfAborted()
       const previousBinding = this.storage.accountBinding(worker.id)
       if (previousBinding && previousBinding !== admitted) throw new Error(ACCOUNT_CHANGED)
@@ -2372,6 +2391,7 @@ export class WorkerRuntime {
         )
     } catch (error) {
       failure = error
+      busyAccount = accountBusy(error) && !task.spawnAttempted
       failureBeforeStop =
         !!task.admissionFailure ||
         (!controller.signal.aborted &&
@@ -2449,7 +2469,36 @@ export class WorkerRuntime {
       status = 'failed'
       error = String(failure)
     }
+    if (busyAccount && failureBeforeStop && !task.admissionFailure && !releaseFailed && !this.blocked && !this.disposed)
+      return this.waitForAccount(task)
     this.finish(task, status, error, interruptionReason)
+  }
+  /**
+   * A Pi/OMP OAuth account serves one run at a time. Its process never started,
+   * so the turn returns to its queue position without holding a slot.
+   */
+  private waitForAccount(task: Task): void {
+    const { worker } = task
+    this.running.delete(task)
+    if (!task.accountWait)
+      this.storage.append(worker, { kind: 'diagnostic', text: '账号正被另一个任务使用，排队等待' })
+    task.accountWait = { retryAt: Date.now() + ACCOUNT_RETRY_MS }
+    // Nothing was spawned; the next attempt opens its own steering channel.
+    task.steeringController = new AbortController()
+    worker.status = 'queued'
+    worker.error = undefined
+    this.storage.save(worker)
+    const index = this.queue.findIndex((other) => other.order > task.order)
+    this.queue.splice(index < 0 ? this.queue.length : index, 0, task)
+    this.changed()
+    this.drain()
+  }
+  private retryDrain(delay: number): void {
+    if (this.accountRetry || this.disposed) return
+    this.accountRetry = setTimeout(() => {
+      this.accountRetry = undefined
+      this.drain()
+    }, delay)
   }
 
   /** Idle, unbound-from-operations Worker with an existing copy. */
@@ -2546,6 +2595,8 @@ export class WorkerRuntime {
   async close(): Promise<void> {
     if (this.disposed) return
     this.disposed = true
+    clearTimeout(this.accountRetry)
+    this.accountRetry = undefined
     for (const worker of this.storage.workers.values())
       this.pauseFollowups(worker.id, 'Host 已关闭，请确认后继续发送')
     const workers = new Set([

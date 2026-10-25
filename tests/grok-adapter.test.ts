@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import { readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
@@ -238,4 +239,33 @@ it('replaces old worker auth references from the own Grok source and removes the
   await prepareGrok({ ...input, conversationId: 'synthetic-session' })
   expect(existsSync(target)).toBe(false)
   expect(existsSync(nativeAuth)).toBe(false)
+})
+
+it('parallel starts in one project all get the own Grok auth reference and full configuration', async () => {
+  const native = directory(),
+    stateDirectory = directory(),
+    project = directory()
+  vi.stubEnv('HOME', native)
+  vi.stubEnv('USERPROFILE', native)
+  mkdirSync(join(native, '.grok'))
+  writeFileSync(join(native, '.grok/auth.json'), 'SYNTHETIC_OWN_GROK', { mode: 0o600 })
+  const input = {
+    executable: '/fixture/grok',
+    project,
+    stateDirectory,
+    preference: { model: 'grok-fixture', effort: 'default' as const },
+    mode: 'accept-edits' as const,
+    prompt: 'synthetic task',
+  }
+  // Before atomic publication, about two thirds of these rounds lost a start to EEXIST.
+  let home = ''
+  for (let round = 0; round < 10; round++) {
+    const prepared = await Promise.all(Array.from({ length: 5 }, () => prepareGrok(input)))
+    for (const { env } of prepared) {
+      home = env.GROK_HOME!
+      expect(readFileSync(env.GROK_AUTH_PATH!, 'utf8')).toBe('SYNTHETIC_OWN_GROK')
+      expect(readFileSync(join(home, 'config.toml'), 'utf8')).toContain('[subagents]\nenabled = false')
+    }
+  }
+  expect(readdirSync(home).filter((name) => name.endsWith('.tmp'))).toEqual([])
 })
