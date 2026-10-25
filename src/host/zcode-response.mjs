@@ -45,6 +45,7 @@ export function zcodeResponseUsage(value) {
 /** ModelComplete is an ordered native event; a turn/run total cannot close a response. */
 export class ZcodeResponseTracker {
   constructor(emit) { this.output = emit }
+  held = []
   emit(event, assistantMessageId, blockId, index) {
     if (typeof assistantMessageId !== 'string' || !assistantMessageId || assistantMessageId.length > 480) {
       this.output(event)
@@ -55,6 +56,12 @@ export class ZcodeResponseTracker {
     const response = { id: `zcode:${assistantMessageId}`, blockId, index }
     this.last = { ...event, response }
     this.output(this.last)
+  }
+  /** ZCode may schedule a tool before its message's model_complete; a passive
+   * tool row must not precede that response's completion boundary. */
+  tool(event) {
+    if (this.last) this.held.push(event)
+    else this.output(event)
   }
   complete(payload) {
     // mapSessionEventPayload passes the model_complete payload through, without a type tag.
@@ -70,5 +77,6 @@ export class ZcodeResponseTracker {
       response: { ...this.last.response, complete: true, ...(usage ? { usage } : {}) } })
     this.id = undefined
     this.last = undefined
+    for (const event of this.held.splice(0)) this.output(event)
   }
 }

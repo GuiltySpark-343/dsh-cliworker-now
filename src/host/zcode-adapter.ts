@@ -960,7 +960,7 @@ export class ZCodeProtocol {
           if (p.result?.success !== true) this.failed = true
         } else this.open.add(p.toolCallId)
         if (nonempty(p.toolName)) this.toolNames.set(p.toolCallId, p.toolName)
-        this.emit({
+        this.responses.tool({
           kind: 'tool',
           step: this.step(p.toolCallId),
           text: this.toolNames.get(p.toolCallId) ?? '工具',

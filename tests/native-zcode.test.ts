@@ -51,7 +51,7 @@ createInterface({input:process.stdin}).on('line',line=>{
    if(scenario==='context-next-unknown')event('session.updated',{...base,type:'model_request_started',requestId:'request-context-2'},{traceId:'trace-context'});
   }
   event('model.streaming',{kind:'text_delta',delta:'FOREIGN'},{sessionId:'foreign'});
-  event('model.streaming',{kind:'text_delta',delta:'HELLO',...(scenario==='model-usage'?{assistantMessageId:'message-a'}:{})},{eventId:'delta-one'});
+  event('model.streaming',{kind:'text_delta',delta:'HELLO',...(['model-usage','tool-before-complete'].includes(scenario)?{assistantMessageId:'message-a'}:{})},{eventId:'delta-one'});
   if(scenario==='thought-boundary'){
    event('model.streaming',{kind:'reasoning_delta',delta:'Synthetic public thought'});
    event('model.streaming',{kind:'text_delta',delta:'AFTER'});
@@ -71,6 +71,15 @@ createInterface({input:process.stdin}).on('line',line=>{
    event('model.streaming',{kind:'reasoning_delta',assistantMessageId:'message-b',delta:'synthetic public thought'});
    event('model.streaming',{kind:'text_delta',assistantMessageId:'message-b',delta:'AFTER'});
    event('session.updated',{querySource:'main_turn',content:'AFTER',stopReason:'stop',toolCallCount:0,usage:{...usage,outputTokens:6,totalTokens:39}});
+   finish();return;
+  }
+  if(scenario==='tool-before-complete'){
+   // Observed real order: a read-only tool is scheduled and started before its message's model_complete.
+   event('tool.updated',{kind:'scheduled',toolCallId:'early-tool',assistantMessageId:'message-a',toolName:'Read',input:{file_path:'synthetic'}});
+   event('tool.updated',{kind:'started',toolCallId:'early-tool',toolName:'Read'});
+   event('session.updated',{querySource:'main_turn',content:'HELLO',stopReason:'tool-calls',toolCallCount:1});
+   event('tool.updated',{kind:'result',toolCallId:'early-tool',result:{success:true,content:'synthetic result'}});
+   event('tool.updated',{kind:'batch',toolCallIds:['early-tool'],successCount:1,errorCount:0});
    finish();return;
   }
   if(scenario==='tool-boundary'){
@@ -246,6 +255,17 @@ describe('Native ZCode app-server (simulated native processes)', () => {
     ])
     expect(settled[0].event.response.usage.inputTokens).toBe(20)
     expect(foldNativeFrames(frames).filter((row) => row.kind === 'assistant').map((row) => row.text)).toEqual(['HELLO', 'AFTER'])
+  })
+  it('holds a tool started before its message completion until after that response boundary', async () => {
+    const { frames, result } = await fixture('tool-before-complete')
+    expect(result.status).toBe('SUCCESS')
+    const events = frames.filter((frame) => frame.event).map((frame) => frame.event)
+    const complete = events.findIndex((event) => event.response?.complete)
+    const tools = events.flatMap((event, index) => (event.kind === 'tool' ? [[index, event.state]] : []))
+    expect(complete).toBeGreaterThanOrEqual(0)
+    expect(tools.map(([, state]) => state)).toEqual(['RUNNING', 'RUNNING', 'COMPLETED'])
+    expect(tools.every(([index]) => index > complete)).toBe(true)
+    expect(events.slice(0, complete).some((event) => event.kind === 'tool')).toBe(false)
   })
   it('preserves tool-separated text segments instead of merging them into step zero', async () => {
     const { frames, result } = await fixture('tool-boundary')

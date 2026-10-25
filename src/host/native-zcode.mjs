@@ -371,7 +371,7 @@ export async function runNativeZcode(config, io) {
           const value = tools.get(id)
           if (!value || value.done) continue
           tools.set(id, { ...value, done: true })
-          io.event({ kind: 'tool', step: value.step, text: value.name, state: 'FAILED', detail: JSON.stringify(payload),
+          responses.tool({ kind: 'tool', step: value.step, text: value.name, state: 'FAILED', detail: JSON.stringify(payload),
             toolCall: { callId: id, name: value.name, ...(value.input === undefined ? {} : { input: value.input }) } })
         }
       } else if (nonempty(payload.toolCallId)) {
@@ -388,7 +388,7 @@ export async function runNativeZcode(config, io) {
           inputFromStream: explicitInput ? false : cachedInput !== undefined || previous.inputFromStream }
         tools.set(payload.toolCallId, value)
         if (error && !deniedTools.has(payload.toolCallId)) failure('ZCode 工具执行失败')
-        io.event({
+        responses.tool({
           kind: 'tool',
           step: value.step,
           text: value.name,
