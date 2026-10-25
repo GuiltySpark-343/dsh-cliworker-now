@@ -2351,7 +2351,8 @@ it('does not flush a new on-page draft when an earlier background write complete
   expect(JSON.parse(configure.mock.calls[1]![1])).toEqual({ cli: 'antigravity', model: 'source/beta', effort: 'medium' })
   await act(async () => latest.resolve(remote({})))
   await t.click('Antigravity 设置')
-  expect(t.text()).toContain('默认设置已保存')
+  expect(t.text()).not.toContain('默认设置已保存')
+  expect(t.text()).not.toContain('正在保存默认设置')
   expect(visibleText(t.button('默认模型')).trim()).toBe('Beta')
 })
 
@@ -2407,7 +2408,8 @@ it.each(['legacy', 'warm'] as const)('serializes %s writes across rapid close/re
   expect(visibleText(t.button('默认思考强度')).trim()).toBe('Low')
   await act(async () => latest.resolve(remote({})))
   expect(visibleText(t.button('默认思考强度')).trim()).toBe('Low')
-  expect(t.text()).toContain('默认设置已保存')
+  expect(t.text()).not.toContain('默认设置已保存')
+  expect(t.text()).not.toContain('正在保存默认设置')
 })
 
 it('does not save on same-page navigation and flushes explicit changes on external unmount', async () => {
@@ -2429,7 +2431,8 @@ it('rechecks missing catalog binding proof without cancelling an already submitt
   expect(t.catalogForCli).toHaveBeenCalledTimes(2)
   expect(visibleText(t.button('默认思考强度')).trim()).toBe('High')
   await act(async () => first.resolve(remote({ cli: 'codex', model: 'codex-fixture', effort: 'high' })))
-  expect(t.text()).toContain('默认设置已保存')
+  expect(t.text()).not.toContain('默认设置已保存')
+  expect(t.text()).not.toContain('正在保存默认设置')
 })
 
 it('keeps a new save receipt when an older settings read arrives late, then accepts a later fresh snapshot', async () => {
@@ -2533,7 +2536,8 @@ it('saves running message choice automatically and does not refresh account or m
     expect.any(AbortSignal),
   )
   expect(visibleText(t.button('运行中发送'))).toContain('插队')
-  expect(t.text()).toContain('发送方式已保存')
+  expect(t.text()).not.toContain('发送方式已保存')
+  expect(t.text()).not.toContain('正在保存发送方式')
   expect(t.text()).toContain('先停止当前轮')
   expect(t.accountStatus).toHaveBeenCalledTimes(reads)
   expect(t.catalogForCli).toHaveBeenCalledTimes(models)
@@ -2560,7 +2564,8 @@ it('retains a failed mode selection with its error and retries the same choice',
   await t.click('运行中发送')
   await t.click('插队')
   expect(saveRunningMessageMode).toHaveBeenCalledTimes(2)
-  expect(t.text()).toContain('发送方式已保存')
+  expect(t.text()).not.toContain('发送方式已保存')
+  expect(t.text()).not.toContain('正在保存发送方式')
 })
 
 it('does not invent a default after a failed mode read and allows retry', async () => {
@@ -2624,7 +2629,8 @@ it('opens CLI Worker settings above agents and saves the shared concurrency limi
   await t.click('最高同时对话数')
   await t.click('4')
   expect(saveGeneralSettings).toHaveBeenCalledWith('simulation-parent', '{"maxConcurrent":4}', expect.any(AbortSignal))
-  expect(t.text()).toContain('同时对话数已保存')
+  expect(t.text()).not.toContain('同时对话数已保存')
+  expect(t.text()).not.toContain('正在保存同时对话数')
 })
 it('switches the whole dialog to English as soon as the language is saved', async () => {
   let current: Record<string, unknown> = { maxConcurrent: 2, defaultMaxConcurrent: 2 }
@@ -2640,7 +2646,7 @@ it('switches the whole dialog to English as soon as the language is saved', asyn
   await t.click('界面语言')
   await t.click('English')
   expect(saveGeneralSettings).toHaveBeenCalledWith('simulation-parent', '{"language":"en"}', expect.any(AbortSignal))
-  expect(t.text()).toContain('Interface language saved')
+  expect(t.text()).not.toContain('Interface language saved')
   expect(t.text()).toContain('Maximum concurrent conversations')
   expect(t.text()).toContain('Parallel writes in the same directory')
   expect(t.button('Agent settings')).toBeDefined()
@@ -2649,7 +2655,8 @@ it('switches the whole dialog to English as soon as the language is saved', asyn
   await t.click('Interface language')
   await t.click('中文')
   expect(saveGeneralSettings).toHaveBeenLastCalledWith('simulation-parent', '{"language":"zh"}', expect.any(AbortSignal))
-  expect(t.text()).toContain('界面语言已保存')
+  expect(t.text()).not.toContain('界面语言已保存')
+  expect(t.text()).not.toContain('正在保存界面语言')
 })
 it('rejects an unknown language from the Host and keeps the current interface', async () => {
   const generalSettings = vi.fn(async () => remote({ maxConcurrent: 2, defaultMaxConcurrent: 2, language: 'fr' }))

@@ -51,7 +51,6 @@ export function RunningMessageChoice({
   const [selected, setSelected] = useState<RunningMessageMode>()
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
   const [attempt, retry] = useState(0)
   const hintId = useId()
@@ -102,7 +101,6 @@ export function RunningMessageChoice({
     request.current = controller
     setSelected(mode)
     setSaving(true)
-    setSaved(false)
     setError('')
     busyCallback.current(true)
     try {
@@ -113,7 +111,6 @@ export function RunningMessageChoice({
       if (controller.signal.aborted) return
       if (next.mode !== mode) throw new Error(t('发送方式未保存，请重新选择重试'))
       setSettings(next)
-      setSaved(true)
     } catch (error) {
       if (!controller.signal.aborted) setError(operationMessage(error))
     } finally {
@@ -149,11 +146,11 @@ export function RunningMessageChoice({
           onChange={(mode) => void save(mode as RunningMessageMode)}
         />
       </div>
-      {(loading || saving || saved || error) && (
+      {(loading || saving || error) && (
         <div className="cwn-settings-save">
           <span className="cwn-settings-feedback-slot" role="status">
             {(loading || saving) && <StateDot state="ongoing" size={14} />}
-            {error || (loading ? t('正在读取发送方式…') : saving ? t('正在保存发送方式…') : t('发送方式已保存'))}
+            {error || (loading ? t('正在读取发送方式…') : t('正在保存发送方式…'))}
           </span>
           {error && !settings && (
             <Button

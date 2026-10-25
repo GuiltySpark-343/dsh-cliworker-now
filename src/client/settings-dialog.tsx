@@ -580,7 +580,6 @@ function CliSettings({
   const [modelLoading, setModelLoading] = useState(true)
   const [writeState, setWriteState] = useState(() => preferenceSaves.snapshot(cli))
   const saving = writeState.saving
-  const saved = writeState.status === 'saved'
   const saveError = writeState.error
   const [modelError, setModelError] = useState('')
   const [modelRevision, refreshModels] = useState(0)
@@ -991,11 +990,11 @@ function CliSettings({
           <p className="cwn-settings-notice cwn-settings-hint" role="status">
             {modelError || (cli === 'claude' && catalog?.notice?.includes('路由') ? hostText(catalog.notice) : '')}
           </p>
-          {(saving || saved || saveError) && (
+          {(saving || saveError) && (
             <div className="cwn-settings-save">
               <span className="cwn-settings-feedback-slot" role="status">
                 {saving && <StateDot state="ongoing" size={14} />}
-                {saveError || (saving ? t('正在保存默认设置…') : t('默认设置已保存'))}
+                {saveError || t('正在保存默认设置…')}
               </span>
             </div>
           )}

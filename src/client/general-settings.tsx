@@ -35,11 +35,6 @@ const SAVING: Record<Field, MessageKey> = {
   maxConcurrent: '正在保存同时对话数…',
   isolatedParallelWrites: '正在保存同目录写任务并行…',
 }
-// The switch shows its own state, so it reports only saving and failures.
-const SAVED: Partial<Record<Field, MessageKey>> = {
-  language: '界面语言已保存',
-  maxConcurrent: '同时对话数已保存',
-}
 const UNSAVED: Record<Field, MessageKey> = {
   language: '界面语言未保存，请重新选择重试',
   maxConcurrent: '同时对话数未保存，请重新选择重试',
@@ -58,7 +53,6 @@ export function GeneralSettingsPane({ api, sessionId }: { api: API; sessionId: s
   const [settings, setSettings] = useState<GeneralSettings>()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<Field>()
-  const [saved, setSaved] = useState<Field>()
   const [error, setError] = useState<{ field?: Field; message: string }>()
   const [attempt, retry] = useState(0)
   const languageHintId = useId()
@@ -95,7 +89,6 @@ export function GeneralSettingsPane({ api, sessionId }: { api: API; sessionId: s
     const controller = new AbortController()
     request.current = controller
     setSaving(field)
-    setSaved(undefined)
     setError(undefined)
     try {
       const updated = readSettings(
@@ -106,7 +99,6 @@ export function GeneralSettingsPane({ api, sessionId }: { api: API; sessionId: s
       setSettings(updated)
       // Switch the whole plugin at once; other windows follow through the Worker stream.
       if (field === 'language') setLanguagePreference(updated.language)
-      setSaved(field)
     } catch (error) {
       if (!controller.signal.aborted) setError({ field, message: operationMessage(error) })
     } finally {
@@ -117,12 +109,13 @@ export function GeneralSettingsPane({ api, sessionId }: { api: API; sessionId: s
     }
   }
 
+  // A saved choice shows in its own control; only progress and failures get a line.
   const feedback = (field: Field) =>
-    (saving === field || (saved === field && SAVED[field]) || error?.field === field) && (
+    (saving === field || error?.field === field) && (
       <div className="cwn-settings-save">
         <span className="cwn-settings-feedback-slot" role="status">
           {saving === field && <StateDot state="ongoing" size={14} />}
-          {error?.field === field ? error.message : saving === field ? t(SAVING[field]) : t(SAVED[field]!)}
+          {error?.field === field ? error.message : t(SAVING[field])}
         </span>
       </div>
     )

@@ -87,7 +87,6 @@ export function RolePresetsPane({ api, sessionId }: { api: API; sessionId: strin
               ? old.map((item) => (item.id === saved.id ? saved : item))
               : [...old, saved],
           )
-          setFeedback(t('预设已保存，可在下次派遣时选择。'))
         }
       }
       if (!controller.signal.aborted) {
