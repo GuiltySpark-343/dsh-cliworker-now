@@ -14,5 +14,7 @@
 
 ## 3. 未执行
 
-- [ ] 3.1 真实 ZCode 复验：拒绝 shell 后改用编辑完成，任务卡显示结果待核实。
+- [x] 3.1 真实 ZCode 复验：拒绝 shell 后改用编辑完成，任务卡显示结果待核实。
+  - 2026-10-25 第三次（新 Host 13:19，提交 32752a8，GLM-5.3-Flash·Low）：任务卡「结果待核实」；Worker 状态 `uncertain`，结果帧 UNCERTAIN；Bash 步骤显示失败；Read/Edit 工具行均在对应响应完成边界之后；deny.txt 落盘为 alpha、beta、gamma。前两次失败原因见 design.md。
+  - 遗留：同一任务详情仍显示「处理失败 / 本轮运行失败 / CLI_RUN_FAILED」（原生流对非 completed 终态统一报 error），与「结果待核实」措辞不一致，待用户决定。
 - [ ] 3.2 其他 CLI 真实拒绝场景（未调用真实模型）。

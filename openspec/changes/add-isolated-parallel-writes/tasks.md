@@ -31,7 +31,8 @@
 - [x] 3b.3 完成通知与 `cliworker_status` 加入副本待合并提示。
 - [x] 3b.4 `resolutions` 逐文件决定（content / copy / project）；`cliworker_merge` 对两边都改过的文件返回 `needs_integration` 与三个版本路径，由主 Agent 整合，目标矛盾时由主 Agent 用 `ask_user_question` 问用户；插件不弹问题卡、不称为冲突。（第一版插件问题卡已按用户反馈撤下。）
 - [x] 3b.5 测试：`tests/isolated-merge-decisions.test.ts`（提示、整合报告、resolutions 校验）、`tests/isolated-workspace.test.ts`（整合内容写回、三个版本、决定写回、副本删除、结构性改动）、`tests/isolation-ui.test.tsx`（任务卡无副本状态与按钮）、`tests/settings-dialog.test.tsx`。
-- [ ] 3b.6 Desktop 真实主 Agent 整合复验。
+- [x] 3b.6 Desktop 真实主 Agent 整合复验。
+  - 2026-10-25 12:49 新 Host：主 Agent 两次调用 `cliworker_merge`（needs_integration → use=content），merge.txt 为原 5 行 + `A done` + `B done`，副本 released，界面无冲突字样、问题卡与合并按钮（见 doc/tasks.md）。
   - 2026-10-25 第一版（插件问题卡）实测：ZCode 默认模型 GLM-5.3-Flash·Low，A 在主目录、B 在副本，主 Agent 按提示调用 `cliworker_merge`，问题卡出现并选副本版本后写回 merge.txt、b-extra.txt；用户随后否定问题卡方案，改为主 Agent 整合。
 
 ## 4. 未执行

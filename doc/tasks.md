@@ -2629,3 +2629,10 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 同次实测两张任务卡均为「失败」：ZCode 尝试 shell 追加被插件拒绝（`ZCode 额外权限请求已拒绝`）后改用编辑完成。原始帧：requestPermission(toolCallId) → permission.resolved(deny) → batch errorCount 1。按用户决定改为结果待核实（OpenSpec `report-denied-permission-as-unverified`）。Codex/Hermes/HTTP 两个 runner 由 Codex gpt-6.1-sol 子代理并行实施，主会话审阅并补充 Codex 被拒条目豁免。
 - 验证：runner 相关 5 个测试文件 243 通过；`build:preview` 类型检查与构建通过；全量 222 文件通过、3 跳过（4384 通过、13 跳过）；OpenSpec 严格校验 27/27。
 - 未执行：拒绝后标为待核实的真实 CLI 复验（需重启 Desktop）；Hermes/HTTP 系审批不带工具身份，有拒绝时其他工具失败也只到待核实。
+
+## 2026-10-25 拒绝授权后结果待核实的真实复验（`feat/general-settings` 32752a8，未发布）
+
+- 第二次复验（13:09，fa45247）任务被停止：“CLI 新响应先于当前响应的完成边界”。原始帧：ZCode 对只读 Read 先发 scheduled/started，再发该消息 model_complete；被动工具行落在未完成响应之后。修复：`ZcodeResponseTracker.tool()` 在响应未完成时暂存工具事件，完成后按序放出（原生 runner 与旧适配器共用）；新增夹具 `tool-before-complete`，撤掉修复时该测试失败。
+- 验证：conversation/native/harness/zcode 相关 77 个测试文件（1259 通过、4 跳过）；`build:preview` 与正式构建通过。
+- 第三次真实复验（确认无活动任务后重启 Desktop，新 Host 13:19；Codex gpt-6-astra high 驱动界面；ZCode 沿用 GLM-5.3-Flash·Low，用户授权）：任务卡「结果待核实」；本会话读取 Worker 记录为 `uncertain`、结果帧 UNCERTAIN，Bash 步骤失败，Read/Edit 均在响应完成之后；deny.txt 实际为 alpha、beta、gamma。主 Agent 独立读文件后汇报一致。
+- 遗留：任务详情同时显示「处理失败 / 本轮运行失败 / CLI_RUN_FAILED」，与待核实措辞不一致；其他 CLI 的真实拒绝场景未复验。
