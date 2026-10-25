@@ -1655,6 +1655,28 @@ export class CliWorkerService extends TypertRemoteService {
       return JSON.stringify(await this.runtime.forkWorker(parent, workerId, atMessageId, this.harnessConversation, signal))
     } catch (error) { throw failure(error) }
   }
+  /** @param parentSessionId - Owning session. @param signal - Query lifetime. @returns Profile-wide general settings JSON. */
+  @Remote('generalSettings')
+  async generalSettings(parentSessionId: string, signal: AbortSignal): Promise<string> {
+    try {
+      await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      return JSON.stringify(this.runtime.generalSettings())
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning session. @param patch - JSON object of changed fields; `null` restores a default. @param signal - Mutation admission lifetime. @returns Updated general settings JSON. */
+  @Remote('saveGeneralSettings')
+  async saveGeneralSettings(parentSessionId: string, patch: string, signal: AbortSignal): Promise<string> {
+    try {
+      await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      return JSON.stringify(this.runtime.setGeneralSettings(JSON.parse(validate.string().max(4096).parse(patch))))
+    } catch (error) {
+      throw failure(error)
+    }
+  }
   /** @param parentSessionId - Owning session. @param cli - Selected CLI. @param enabled - Allow new CLI operations. @param signal - Mutation admission lifetime. @returns Updated profile-wide CLI enablement JSON. */
   @Remote('setCliEnabled')
   async setCliEnabled(

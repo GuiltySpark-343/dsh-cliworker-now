@@ -23,7 +23,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import { z } from 'zod'
 import { conversationTelemetrySchema, lastRunUsageSnapshotSchema } from './conversation-telemetry.ts'
 import { contextTelemetrySchema } from './context-telemetry.ts'
-import type { CliSettings } from '../shared/cli-settings.ts'
+import { MAX_CONCURRENT_LIMIT, type CliSettings } from '../shared/cli-settings.ts'
 import { parseNativeResponse } from './native-response.mjs'
 import {
   RUNNING_MESSAGE_MODES,
@@ -98,6 +98,11 @@ const conversationSetupSchema = z.object({
 const storedCliSchema = z.enum([...CLI_IDS, 'harness'])
 const storedPreferenceSchema = preferenceSchema.extend({ cli: storedCliSchema.optional() })
 const cliSettingsSchema = z.object({ enabled: z.partialRecord(storedCliSchema, z.boolean()) })
+/** Every field is optional: an absent value keeps the deployment default. */
+const generalSettingsSchema = z.object({
+  maxConcurrent: z.int().min(1).max(MAX_CONCURRENT_LIMIT).optional(),
+})
+export type StoredGeneralSettings = z.infer<typeof generalSettingsSchema>
 const enabledByDefault = () => Object.fromEntries(CLI_IDS.map((cli) => [cli, true])) as CliSettings['enabled']
 const runningMessageSchema = z
   .object({
@@ -248,6 +253,7 @@ export class WorkerStorage {
   private lock: string
   private candidate: string
   private enabled = enabledByDefault()
+  private general: StoredGeneralSettings = {}
   private presets: RolePreset[] = []
   /** Account epochs live outside public Worker records and event/history responses. */
   accountBinding(id: string): string | undefined {
@@ -353,6 +359,11 @@ export class WorkerStorage {
           if (settings.enabled[cli] !== undefined) this.enabled[cli] = settings.enabled[cli]
         }
         chmodSync(settingsPath, 0o600)
+      }
+      const generalPath = join(directory, 'general-settings.json')
+      if (existsSync(generalPath)) {
+        this.general = generalSettingsSchema.parse(JSON.parse(readFileSync(generalPath, 'utf8')))
+        chmodSync(generalPath, 0o600)
       }
       for (const file of readdirSync(directory).filter((name) => name.endsWith('.worker.json'))) {
         const worker = workerSchema.parse(JSON.parse(readFileSync(join(directory, file), 'utf8')))
@@ -484,6 +495,24 @@ export class WorkerStorage {
   }
   cliSettings(): CliSettings {
     return { enabled: { ...this.enabled } }
+  }
+  generalSettings(): StoredGeneralSettings {
+    return { ...this.general }
+  }
+  /** Merges one validated patch; `null` restores that field's deployment default. */
+  setGeneralSettings(patch: unknown): StoredGeneralSettings {
+    const changes = z
+      .object({ maxConcurrent: z.int().min(1).max(MAX_CONCURRENT_LIMIT).nullable().optional() })
+      .strict()
+      .parse(patch)
+    const next: StoredGeneralSettings = { ...this.general }
+    for (const [key, value] of Object.entries(changes) as [keyof StoredGeneralSettings, number | null][]) {
+      if (value === null) delete next[key]
+      else next[key] = value
+    }
+    atomicJSON(join(this.directory, 'general-settings.json'), generalSettingsSchema.parse(next))
+    this.general = next
+    return this.generalSettings()
   }
   rolePresets(): RolePreset[] {
     return structuredClone(this.presets)

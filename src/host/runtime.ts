@@ -68,6 +68,7 @@ import { qoderEnvironment } from './qoder-accounts.ts'
 import { AgyProtocol } from './protocol.ts'
 import { FollowupQueue } from './followup-queue.ts'
 import { supportsWorkerNativeSteering, type RunningMessageMode } from '../shared/running-message.ts'
+import type { GeneralSettings } from '../shared/cli-settings.ts'
 import type { NativeHarnessConnection } from './native-harness-tools.ts'
 import type { NativeAttachment } from './native-attachments.mjs'
 import { workerPermissionOptions } from '../shared/worker-permissions.ts'
@@ -900,6 +901,21 @@ export class WorkerRuntime {
     const settings = this.storage.setCliEnabled(cli, enabled)
     this.changed()
     return settings
+  }
+  /** A saved user choice overrides the deployment config; lowering never stops running work. */
+  get maxConcurrent(): number {
+    return this.storage.generalSettings().maxConcurrent ?? this.config.maxConcurrent
+  }
+  generalSettings(): GeneralSettings {
+    return { maxConcurrent: this.maxConcurrent, defaultMaxConcurrent: this.config.maxConcurrent }
+  }
+  setGeneralSettings(patch: unknown): GeneralSettings {
+    if (this.disposed) throw new Error('插件正在关闭')
+    this.storage.setGeneralSettings(patch)
+    // A raised limit admits already queued tasks at once.
+    this.drain()
+    this.changed()
+    return this.generalSettings()
   }
   /** Account mutation must also respect a prior unconfirmed process cleanup. */
   assertAccountIdle(cli: string): void {
@@ -1776,7 +1792,7 @@ export class WorkerRuntime {
         void this.finishQueued(task, 'failed', blocked)
         continue
       }
-      if (this.running.size >= this.config.maxConcurrent) break
+      if (this.running.size >= this.maxConcurrent) break
       const conflicts = (other: Task) =>
         other.worker.project === task.worker.project &&
         (other.worker.mode === 'accept-edits' || task.worker.mode === 'accept-edits')

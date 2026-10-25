@@ -8,6 +8,7 @@ import {
   IconChevronDownOutlineRegular,
   IconLinkOutlineRegular,
   IconRefreshOutlineRegular,
+  IconSettingsOutlineRegular,
   IconUserOutlineRegular,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
@@ -26,6 +27,7 @@ import { BrandIcon, Glyph } from './icons.tsx'
 import { operationMessage } from './operation-error.ts'
 import { value, type API } from './workers.ts'
 import { RolePresetsPane } from './role-presets.tsx'
+import { GeneralSettingsPane } from './general-settings.tsx'
 import { AccountQueryQueue } from './account-query-queue.ts'
 import { CliExecutableSettings } from './cli-executable-settings.tsx'
 import { NativeChoice } from './native-settings-choice.tsx'
@@ -128,7 +130,7 @@ function OpenSettingsDialog({
   fallbackSaves,
 }: SettingsDialogProps & { fallbackSaves: SettingsPreferenceSaves }) {
   const [cli, setCli] = useState<CliId>(isRetiredCli(initialCli) ? 'hermes' : initialCli)
-  const [page, setPage] = useState<'cli' | 'roles'>('cli')
+  const [page, setPage] = useState<'cli' | 'roles' | 'general'>('cli')
   const [cliExpanded, setCliExpanded] = useState(true)
   const cliGroupId = useId()
   const [enabled, setEnabled] = useState<Enabled>()
@@ -321,6 +323,20 @@ function OpenSettingsDialog({
             variant="ghost"
             size="md"
             className="cwn-settings-nav-primary"
+            aria-label="CLI Worker 设置"
+            aria-pressed={page === 'general'}
+            onClick={() => void leave(() => setPage('general'))}
+          >
+            <span className="cwn-settings-nav-icon" aria-hidden="true">
+              <IconSettingsOutlineRegular size={20} />
+            </span>
+            <span className="cwn-settings-nav-label">CLI Worker 设置</span>
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="md"
+            className="cwn-settings-nav-primary"
             aria-label="智能体设置"
             aria-pressed={page === 'roles'}
             onClick={() => void leave(() => setPage('roles'))}
@@ -391,7 +407,9 @@ function OpenSettingsDialog({
             </div>
           </div>
         </nav>
-        {page === 'roles' ? (
+        {page === 'general' ? (
+          <GeneralSettingsPane api={api} sessionId={sessionId} />
+        ) : page === 'roles' ? (
           <RolePresetsPane api={api} sessionId={sessionId} />
         ) : (
           <CliSettings

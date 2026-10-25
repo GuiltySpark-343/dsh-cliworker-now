@@ -5,6 +5,17 @@ export interface CliSettings {
   enabled: Record<CliId, boolean>
 }
 
+/** Bounds shared by the Host schema and the settings control. */
+export const MAX_CONCURRENT_LIMIT = 8
+
+/** Profile-wide plugin settings shown on the CLI Worker settings page. */
+export interface GeneralSettings {
+  /** Effective admission limit shared by all CLIs. */
+  maxConcurrent: number
+  /** Deployment value used when the user has not chosen one. */
+  defaultMaxConcurrent: number
+}
+
 /** Machine-local executable selection; separate from project model preferences. */
 export interface CliExecutablePathStatus {
   cli: CliId

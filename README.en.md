@@ -162,7 +162,7 @@ flowchart LR
 
 - **Runs what you chose**: a missing or failing CLI is never replaced by another one, and CLIs started outside the plugin are not taken over.
 - **Native permissions**: each CLI uses its own permission modes; no extra OS sandbox is added. Write tasks are refused while Harness is in plan or read-only mode.
-- **Two levels**: main conversation → direct child agents, two concurrent tasks by default, no recursive dispatch.
+- **Two levels**: main conversation → direct child agents, two concurrent tasks by default (adjustable in "CLI Worker 设置", shared by all CLIs, up to 8), no recursive dispatch.
 - **Local records**: stored in `~/.dsh/cliworker-now` (folders `0700`, files `0600`). Each CLI still sends model requests to its provider according to its own configuration.
 - **Usage with a source**: only data the CLI provides or that can be checked is shown; unknown values show `—` and are never filled with zeros or guesses.
 

@@ -2605,3 +2605,22 @@ it.each(['read', 'save'] as const)(
     expect(t.text()).not.toContain('发送方式已保存')
   },
 )
+it('opens CLI Worker settings above agents and saves the shared concurrency limit', async () => {
+  let current = { maxConcurrent: 2, defaultMaxConcurrent: 2 }
+  const generalSettings = vi.fn(async () => remote(current))
+  const saveGeneralSettings = vi.fn(async (_session, raw: string) => {
+    current = { ...current, ...JSON.parse(raw) }
+    return remote(current)
+  })
+  const t = await setup({ generalSettings, saveGeneralSettings })
+  const labels = t.r.root.findAllByType('nav')[0]!.findAllByType('button').map((b) => b.props['aria-label'])
+  expect(labels.indexOf('CLI Worker 设置')).toBeLessThan(labels.indexOf('智能体设置'))
+  expect(generalSettings).not.toHaveBeenCalled()
+  await t.click('CLI Worker 设置')
+  expect(t.button('CLI Worker 设置').props['aria-pressed']).toBe(true)
+  expect(t.text()).toContain('最高同时对话数')
+  await t.click('最高同时对话数')
+  await t.click('4')
+  expect(saveGeneralSettings).toHaveBeenCalledWith('simulation-parent', '{"maxConcurrent":4}', expect.any(AbortSignal))
+  expect(t.text()).toContain('同时对话数已保存')
+})
