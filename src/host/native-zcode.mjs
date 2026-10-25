@@ -364,8 +364,16 @@ export async function runNativeZcode(config, io) {
       if (payload.kind === 'batch') {
         const deniedInBatch = (Array.isArray(payload.toolCallIds) ? payload.toolCallIds : []).filter((id) =>
           deniedTools.has(id),
-        ).length
-        if (payload.errorCount > deniedInBatch) failure('ZCode 工具批次失败')
+        )
+        if (payload.errorCount > deniedInBatch.length) failure('ZCode 工具批次失败')
+        // A denied call gets no result frame of its own; the batch closes it.
+        for (const id of deniedInBatch) {
+          const value = tools.get(id)
+          if (!value || value.done) continue
+          tools.set(id, { ...value, done: true })
+          io.event({ kind: 'tool', step: value.step, text: value.name, state: 'FAILED', detail: JSON.stringify(payload),
+            toolCall: { callId: id, name: value.name, ...(value.input === undefined ? {} : { input: value.input }) } })
+        }
       } else if (nonempty(payload.toolCallId)) {
         assistantSegmentOpen = false
         const previous = tools.get(payload.toolCallId) ?? { step: step++, name: '工具', done: false }

@@ -92,7 +92,7 @@ createInterface({input:process.stdin}).on('line',line=>{
   if(scenario==='changed-model'){event('session.updated',{providerId:'wrong',modelId:'wrong'});return;}
   event('model.streaming',{kind:'text_delta',delta:'HELLO'},{eventId:'delta-one'});
   if(scenario==='cancel')return;
-  if(scenario.startsWith('permission'))return out({id:'permission',method:'interaction/requestPermission',params:{sessionId,toolCallId:'denied-tool',toolName:'Bash'}});
+  if(scenario.startsWith('permission')){event('tool.updated',{toolCallId:'denied-tool',toolName:'Bash',kind:'scheduled'});return out({id:'permission',method:'interaction/requestPermission',params:{sessionId,toolCallId:'denied-tool',toolName:'Bash'}});}
   if(scenario==='missing-terminal')return out({method:'state.updated',params:{sessionId,reason:'prompt_completed'}});
   finish();return;
  }
@@ -288,10 +288,12 @@ describe('Native ZCode app-server (simulated native processes)', () => {
     expect(records.some((record) => record.method === 'session/send')).toBe(false)
   })
   it('denies additional permissions and reports a natively completed turn as unverified, not success', async () => {
-    const { result, records } = await fixture('permission')
+    const { result, records, frames } = await fixture('permission')
     expect(result).toMatchObject({ status: 'UNCERTAIN', response: 'HELLO' })
     expect(result.error).toMatch(/额外权限请求已拒绝.*结果待核实/)
     expect(records.find((record) => record.id === 'permission').result.decision).toBe('deny')
+    // The denied call is closed by its batch, so it does not stay running in the timeline.
+    expect(frames.filter((frame) => frame.event?.toolCall?.callId === 'denied-tool').at(-1)?.event.state).toBe('FAILED')
   })
   it('keeps an error when another tool in the batch fails besides the denied one', async () => {
     const { result } = await fixture('permission-other-failure')
