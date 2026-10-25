@@ -47,4 +47,6 @@
 - [x] 7.1 只读私有配置改为 `[permission] deny = ["Edit", "Write", "Bash(mkdir)", "Bash(touch)"]`，不再写 `[ui] permission_mode`；工具桥 allow 不变。
 - [x] 7.2 `tests/grok-adapter.test.ts` 改为断言四条 deny 且无 `permission_mode`；离线 `grok inspect --json` 读回只读 4 条、带工具桥 5 条，无 skipped。
 - [x] 7.3 全量 225 文件 4410 通过、13 跳过；类型检查、`build:preview`、OpenSpec 严格校验通过。
-- [ ] 7.4 Desktop 只读 Grok 写文件任务真实复验（用户已授权 1 个）。
+- [x] 7.4 Desktop 只读 Grok 写文件任务真实复验（用户已授权 1 个）。
+  - 2026-10-26 00:16（d0ecd63 正式构建，新 Host 00:16:10）：首条消息「请调用 1 次 CLI Worker 派遣工具，使用 Grok（Grok Build）…」未派遣任何任务——插件 `invocationResolution` 把「1 次」当作 CLI 名，返回 unknown，提示主 Agent 不启动（另行处理的路由缺陷，与本变更无关）。改为「用 Grok CLI 派遣 1 个只读任务…」后（离线确认解析为 grok）派遣 grok-17（grok-4.6·low，规划（只读））。私有配置含四条 deny 与工具桥 allow；`write` 未发审批请求（`session/request_permission` 0 次），工具返回 `Denied by permission policy: deny rule on edit`，Grok 未取消本轮，如实回复写入被拒且未绕过；任务因工具失败证据显示 failed「CLI 工具执行失败」。项目目录清单与 shasum 前后一致。
+  - 结论：通过。写文件、touch、mkdir 均由 Grok 按私有配置的 deny 规则直接拒绝；其余需审批的调用仍由插件拒绝。被拒的只读写入任务显示为失败。
