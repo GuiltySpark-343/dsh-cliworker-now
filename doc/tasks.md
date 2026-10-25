@@ -2691,4 +2691,10 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - Desktop 复验（2026-10-26 00:09，用户授权，新 Host 00:07:52）：并行 4 个只读 Grok。问好 completed；`touch`/`mkdir` 被 Grok 原生拒绝（`Denied by permission policy: deny rule on bash matching …`），无审批请求，任务显示 failed（工具失败）；写文件仍请求审批，插件拒绝，Grok cancelled，failed。项目目录清单与 shasum 前后一致。
 - 结论与遗留：deny 规则生效，touch/mkdir 缺口已补上；`permission_mode = "dontAsk"` 未生效，其余写入仍靠插件拒绝审批。被拒的只读写入任务均显示失败。只读运行调用 DSH 工具桥未验证。
 - 2026-10-26 00:20 复验（d0ecd63，去掉无效 dontAsk，只读私有配置 deny `Edit`、`Write`、`Bash(mkdir)`、`Bash(touch)`；用户授权 1 个写文件任务）：grok-17 的 `write` 未发审批请求，被 Grok 原生拒绝（`Denied by permission policy: deny rule on edit`），Grok 未取消本轮并如实说明；任务显示 failed（工具失败）。项目目录清单与 shasum 前后一致。
-- 另发现路由缺陷：消息含「调用 1 次 CLI Worker 派遣工具」时，`invocationResolution` 把「1 次」当作 CLI 名，返回 unknown，主 Agent 按提示不派遣。未修复。
+- 另发现路由缺陷：消息含「调用 1 次 CLI Worker 派遣工具」时，`invocationResolution` 把「1 次」当作 CLI 名，返回 unknown，主 Agent 按提示不派遣。已由 OpenSpec `fix-routing-invocation-count` 修复（见下节）。
+
+## 2026-10-26 路由把「调用 N 次」当作 CLI 名（`feat/general-settings`，未发布）
+
+- 修复（OpenSpec `fix-routing-invocation-count`）：`invocationResolution` 识别明确调用前去掉紧跟调用动词的次数/数量词（排除「一次性」）。
+- 验证：`tests/routing.test.ts` 新增 4 个解析与 3 个无提示用例，撤掉修复时 5 个失败；离线对 Desktop 失败的原消息运行路由，修复前 unknown、修复后无提示，改写消息仍解析为 grok。全量 4417 通过、13 跳过；类型检查、OpenSpec 严格校验通过。
+- 未执行（用户只要求单元测试与离线验证）：正式构建、Desktop 真实复验。名称后紧跟全角括号（「使用 Grok（Grok Build）」）仍不产生提示，未处理。

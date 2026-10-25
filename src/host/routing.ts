@@ -228,7 +228,9 @@ export function invocationResolution(messages: readonly UserMessage[]): CliResol
     for (const clause of text.split(
       /[\n。;；!?！？]|[,，](?=\s*(?:请|然后|顺便|同时|并且|只|仅|调用|使用|用|让))/u,
     )) {
+      // A leading count ("调用 1 次 …", "使用两个 …") says how often, never which CLI.
       const request = clause.trim().match(command)?.[1]
+        ?.replace(/^(?:\d+|[一二两三四五六七八九十几多]+)\s*(?:次|个|回|遍)(?!性)\s*/u, '')
       if (!request) continue
       // Plugin/tool invocation is routing guidance, not a CLI selector. In
       // particular, a later "参数 cli" must not turn cliworker_start into one.
