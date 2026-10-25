@@ -67,6 +67,7 @@ export async function runNativeAcp(config, io, settings) {
     response = '',
     thought = '',
     failure,
+    denied = false,
     ended = false
   let step = 0, assistantStep = 0, assistantSegmentOpen = false, thoughtStep = 0
   const responses = settings.responseTracker?.(io)
@@ -74,6 +75,8 @@ export async function runNativeAcp(config, io, settings) {
     ? responses.emit(event, event.kind === 'tool' ? `tool:${event.toolCall.callId}` : `${event.kind}:${event.step}`)
     : io.event(event)
   const tools = new Map(),
+    // Tool calls whose permission was denied; their failure is the denial itself.
+    deniedTools = new Set(),
     seen = new Set(),
     early = []
   const fail = (message) => {
@@ -104,7 +107,9 @@ export async function runNativeAcp(config, io, settings) {
             result: { outcome: { outcome: 'selected', optionId: approved } } })
         }
         if (active && message.params?.sessionId === sessionId) {
-          fail('CLI 请求的额外权限已拒绝')
+          // The CLI may recover from a denial; the turn then ends as unverified, not failed.
+          denied = true
+          if (nonempty(message.params?.toolCall?.toolCallId)) deniedTools.add(message.params.toolCall.toolCallId)
           io.event({ kind: 'diagnostic', text: 'CLI 额外权限请求已拒绝' })
         }
         const reject = message.params?.options?.find((option) => option.kind === 'reject_once')
@@ -185,7 +190,7 @@ export async function runNativeAcp(config, io, settings) {
         ...(nonempty(update.status) ? { status: update.status } : {}),
       }
       tools.set(update.toolCallId, value)
-      if (value.status === 'failed') fail('CLI 工具执行失败')
+      if (value.status === 'failed' && !deniedTools.has(update.toolCallId)) fail('CLI 工具执行失败')
       emit({
         kind: 'tool',
         step: value.step,
@@ -303,9 +308,14 @@ export async function runNativeAcp(config, io, settings) {
       fail('CLI 工具缺少终态')
     if (io.signal.aborted) fail('任务已停止')
     io.result(
-      failure ? 'ERROR' : response ? 'SUCCESS' : 'UNCERTAIN',
+      failure ? 'ERROR' : response && !denied ? 'SUCCESS' : 'UNCERTAIN',
       response,
-      failure ?? (response ? undefined : 'CLI 未返回可核查的本轮正文'),
+      failure ??
+        (denied
+          ? 'CLI 额外权限请求已拒绝，但 CLI 报告本轮已完成；结果待核实，请先核查实际产物，不要自动重试'
+          : response
+            ? undefined
+            : 'CLI 未返回可核查的本轮正文'),
       'run',
     )
   } finally {

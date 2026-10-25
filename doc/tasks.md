@@ -2622,3 +2622,10 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 设置「同目录写任务并行」说明缩为一行，开关保存成功不再显示确认文字；设置窗口左右两侧滚动条只在滚动时（及指针在滑块上时）显示，900ms 后隐藏。
 - 验证：相关回归 + 新增 `tests/isolated-merge-decisions.test.ts`、`tests/settings-scrollbar.test.tsx`；`build:preview` 隔离类型检查与构建通过；全量 `vitest run` 222 文件通过、3 跳过（4366 通过、13 跳过）；OpenSpec 严格校验 26/26。
 - 未执行：真实主 Agent 合并与冲突询问（需真实模型调用）；暗色主题与窄屏；Windows/Linux。
+
+## 2026-10-25 主 Agent 整合实测与额外授权拒绝后标为待核实（`feat/general-settings`，未发布）
+
+- 整合方案实测（Desktop 重启后新 Host 12:49；Codex gpt-6-astra high 驱动界面；ZCode 沿用 GLM-5.3-Flash·Low，用户授权真实调用）：两个 ZCode 任务各在 merge.txt 末尾加一行，A 在主目录、B 在隔离副本。主 Agent 调用 `cliworker_merge` 两次：首次返回 `needs_integration`（原因“两边改动了相同或相邻的行”，choices project/copy/content），第二次 `use=content` 写入整合内容，返回 merged。落盘核对（本会话直接读文件）：merge.txt 为原 5 行 + `A done` + `B done`；副本状态 `released`。界面未出现“冲突”字样和问题卡，任务卡无副本状态与合并按钮。
+- 同次实测两张任务卡均为「失败」：ZCode 尝试 shell 追加被插件拒绝（`ZCode 额外权限请求已拒绝`）后改用编辑完成。原始帧：requestPermission(toolCallId) → permission.resolved(deny) → batch errorCount 1。按用户决定改为结果待核实（OpenSpec `report-denied-permission-as-unverified`）。Codex/Hermes/HTTP 两个 runner 由 Codex gpt-6.1-sol 子代理并行实施，主会话审阅并补充 Codex 被拒条目豁免。
+- 验证：runner 相关 5 个测试文件 243 通过；`build:preview` 类型检查与构建通过；全量 222 文件通过、3 跳过（4384 通过、13 跳过）；OpenSpec 严格校验 27/27。
+- 未执行：拒绝后标为待核实的真实 CLI 复验（需重启 Desktop）；Hermes/HTTP 系审批不带工具身份，有拒绝时其他工具失败也只到待核实。

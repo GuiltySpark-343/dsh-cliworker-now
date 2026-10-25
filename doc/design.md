@@ -1112,3 +1112,12 @@ OpenSpec 变更 `add-isolated-parallel-writes`，设计细节见该变更的 `de
 - 合并只由主 Agent 调用 `cliworker_merge`（2026-10-25 起任务卡不再显示副本状态与合并/丢弃按钮；完成通知提示主 Agent 改动待合并、不要在原目录重做）。逐文件三方合并：只有副本改动的直接写回，两边都改的文本 diff3；仍需整合的文件不称冲突，返回 `needs_integration` 与基线、项目、副本三个版本，由主 Agent 按任务目标整合后带 `resolutions`（content / copy / project）再调用，目标矛盾时主 Agent 用 `ask_user_question` 问用户；结构性改动只能保留项目版本；决定齐全前主目录一个文件都不写，副本保留。写回为未提交改动，绝不提交。丢弃（`cliworker_discard` 原生询问）只在副本目录确认删除后报告成功。
 - 原生会话与工作目录绑定，故合并/丢弃后对话仍绑定同一路径（`released`），续聊时在原路径重建副本。
 - 重启时 `preparing` 删除、`merging` 恢复为可再次合并；停止只结束进程不删副本；归档保留副本。
+
+## 2026-10-25 额外授权被拒绝后标为结果待核实（未发布）
+
+OpenSpec 变更 `report-denied-permission-as-unverified`。
+
+- 插件仍拒绝全部额外权限/授权请求。拒绝后 CLI 本轮自身正常结束、无其他失败时，结果为结果待核实（`uncertain`），提示核查实际产物、不要自动重试；不报告成功。
+- 被拒绝工具因拒绝报告的失败不单独判失败：ZCode 按请求与 `permission.resolved` 的 `toolCallId`（批次 `errorCount` 只扣除批内被拒工具），ACP 按 `toolCall.toolCallId`，Codex 按审批 `itemId`（`declined` 完成）。Hermes 与原生 HTTP 会话系审批不带工具身份，有拒绝时整体为结果待核实。
+- Claude Code 拒绝即中断本轮，仍为失败；需要额外交互输入的请求仍为失败。
+- 起因：实测 ZCode shell 被拒后改用编辑工具完成，任务却显示失败。

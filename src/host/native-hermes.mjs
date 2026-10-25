@@ -456,11 +456,12 @@ export async function runNativeHermes(config, io) {
       throw new Error('Hermes 实际执行模型与明确选型不一致')
     if (typeof final.output !== 'string') throw new Error('Hermes 运行结果缺失')
     if ([...activeTools.values()].some((queue) => queue.length)) throw new Error('Hermes 工具缺少完成事件')
-    if (permissionDenied || toolFailed)
-      throw new Error(permissionDenied ? 'Hermes 额外授权已拒绝' : 'Hermes 工具执行失败')
+    if (toolFailed && !permissionDenied) throw new Error('Hermes 工具执行失败')
     if (!assistantSegmentOpen && final.output) assistant(final.output)
     response = final.output
-    io.result('SUCCESS', response, undefined, 'response')
+    if (permissionDenied)
+      io.result('UNCERTAIN', response, 'Hermes 额外授权已拒绝，但 CLI 报告本轮已完成；结果待核实，请先核查实际产物，不要自动重试', 'response')
+    else io.result('SUCCESS', response, undefined, 'response')
   } catch (error) {
     if (runID && !terminal) await stopRun()
     throw error

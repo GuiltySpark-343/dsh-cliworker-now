@@ -508,9 +508,11 @@ export async function runNativeSessionHttp(original, io, cli) {
     response = finalText || response
     await readSessionUsage()
     signal.throwIfAborted()
-    if (toolFailed || permissionDenied || failure)
-      throw new Error(failure ?? (permissionDenied ? '原生额外授权已拒绝' : '原生工具执行失败'))
-    io.result('SUCCESS', response, undefined, 'run')
+    if (failure) throw new Error(failure)
+    if (permissionDenied)
+      io.result('UNCERTAIN', response, '原生额外授权已拒绝，但 CLI 报告本轮已完成；结果待核实，请先核查实际产物，不要自动重试', 'run')
+    else if (toolFailed) throw new Error('原生工具执行失败')
+    else io.result('SUCCESS', response, undefined, 'run')
   } catch (error) {
     if (submitted && !terminal && !stopped) await abortRun()
     throw error

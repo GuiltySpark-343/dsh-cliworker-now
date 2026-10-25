@@ -307,9 +307,10 @@ describe('Native ACP runners (simulated native processes)', () => {
       expect(records.some((record) => record.method === 'session/prompt')).toBe(false)
     },
   )
-  it.each(['kimi', 'grok'] as const)('%s denies permission despite a clean ACP end_turn', async (cli) => {
+  it.each(['kimi', 'grok'] as const)('%s denies permission and reports a clean end_turn as unverified', async (cli) => {
     const { result, records } = await fixture(cli, 'permission')
-    expect(result).toMatchObject({ status: 'ERROR', response: 'HELLO' })
+    expect(result).toMatchObject({ status: 'UNCERTAIN', response: 'HELLO' })
+    expect(result.error).toMatch(/额外权限请求已拒绝.*结果待核实/)
     expect(records.find((record) => record.id === 'permission-fixture')?.result).toEqual({
       outcome: { outcome: 'selected', optionId: 'reject' },
     })

@@ -29,7 +29,11 @@ function codexTurn(){
  note('turn/started',{threadId:id,turn:{id:turn,status:'inProgress',items:[]}});
  note('item/agentMessage/delta',{threadId:'other-session',turnId:turn,itemId:'other',delta:'MUST NOT APPEAR'});
  note('item/agentMessage/delta',{threadId:id,turnId:'old-turn',itemId:'old',delta:'MUST NOT APPEAR'});
- if(scenario==='deny'){send({id:'synthetic-approval',method:'item/commandExecution/requestApproval',params:{threadId:id,turnId:turn,itemId:'command'}});return;}
+ if(scenario.startsWith('deny')){
+  const method=scenario==='deny-file'?'item/fileChange/requestApproval':scenario==='deny-permissions'?'item/permissions/requestApproval':'item/commandExecution/requestApproval';
+  send({id:'synthetic-approval',method,params:{threadId:id,turnId:turn,itemId:'command'}});return;
+ }
+ if(['user-input','unknown-request'].includes(scenario)){send({id:'synthetic-interaction',method:scenario==='user-input'?'item/tool/requestUserInput':'synthetic/unknownRequest',params:{threadId:id,turnId:turn}});return;}
  if(scenario==='cancel'){note('item/agentMessage/delta',{threadId:id,turnId:turn,itemId:'reply',delta:'运行中'});waiting=true;return;}
  if(scenario.startsWith('steer-')){note('item/agentMessage/delta',{threadId:id,turnId:turn,itemId:'reply',delta:'运行中'});return;}
  for(const delta of scenario==='fragmented'?['合','成']:['合成'])note('item/agentMessage/delta',{threadId:id,turnId:turn,itemId:'reply',delta});
@@ -135,7 +139,12 @@ lines.on('line',line=>{
    else send({id:value.id,result:{turnId:scenario==='steer-wrong-turn'?'other-turn':turn}});
    setTimeout(()=>codexEnd(),30);
   }
-  else if(value.id==='synthetic-approval')codexEnd();
+  else if(['synthetic-approval','synthetic-interaction'].includes(value.id)){
+   if(value.id==='synthetic-approval'&&scenario!=='deny-permissions')note('item/completed',{threadId:id,turnId:turn,item:{id:'command',type:scenario==='deny-file'?'fileChange':'commandExecution',status:'declined'}});
+   note('item/completed',{threadId:id,turnId:turn,item:{id:'reply',type:'agentMessage',text:'合成回复'}});
+   if(scenario==='deny-tool-failure')note('item/completed',{threadId:id,turnId:turn,item:{id:'tool',type:'commandExecution',status:'failed',exitCode:1}});
+   codexEnd(scenario==='deny-failed'?'failed':scenario==='deny-interrupted'?'interrupted':'completed');
+  }
   else if(value.method==='turn/interrupt'){send({id:value.id,result:{}});codexEnd('interrupted');}
  } else if(cli==='claude'){
   if(value.request?.subtype==='initialize'){
@@ -151,7 +160,7 @@ lines.on('line',line=>{
   else if(value.request?.subtype==='interrupt'){send({type:'control_response',response:{subtype:'success',request_id:value.request_id,response:{}}});claudeEnd(true);}
  }else if(value.event==='user')agyTurn();
 });
-lines.on('close',()=>{process.exit(scenario==='nonzero-exit'?7:0);});
+lines.on('close',()=>{process.exit(['nonzero-exit','deny-nonzero-exit'].includes(scenario)?7:0);});
 `
 
 function setup(cli: 'codex' | 'claude' | 'antigravity', scenario = 'success', resume = true) {
@@ -344,11 +353,30 @@ describe('native primary runners (synthetic protocol processes, no real accounts
     })
     expect(events.filter((event) => event.kind === 'reasoning')).toHaveLength(0)
   })
-  it.each(['codex', 'claude'] as const)('denies %s reverse permission requests without upgrading successful native status', async (cli) => {
-    const { result, messages } = await run(cli, 'deny')
+  it.each(['deny', 'deny-file', 'deny-permissions'])('denies Codex %s approval and reports a completed turn as uncertain', async (scenario) => {
+    const { result, messages, frames } = await run('codex', scenario)
+    expect(result).toMatchObject({ status: 'UNCERTAIN', response: '合成回复', resultScope: 'response', error: 'Codex 额外授权已拒绝，但 CLI 报告本轮已完成；结果待核实，请先核查实际产物，不要自动重试' })
+    expect(messages.find((value) => value.id === 'synthetic-approval').result)
+      .toEqual(scenario === 'deny-permissions' ? { permissions: { network: null, fileSystem: null }, scope: 'turn' } : { decision: 'decline' })
+    const diagnostic = frames.find((frame) => frame.event?.kind === 'diagnostic')?.event
+    expect(diagnostic?.text).toBe('Codex 原生交互请求已拒绝')
+    expect(diagnostic?.state).not.toBe('FAILED')
+  })
+  it.each(['deny-failed', 'deny-interrupted', 'deny-tool-failure', 'deny-nonzero-exit'])('keeps Codex %s as an error despite a denied approval', async (scenario) => {
+    const { result } = await run('codex', scenario)
     expect(result.status).toBe('ERROR')
-    const decision = cli === 'codex' ? messages.find((value) => value.id === 'synthetic-approval').result.decision : messages.find((value) => value.type === 'control_response').response.response.behavior
-    expect(decision).toBe(cli === 'codex' ? 'decline' : 'deny')
+  })
+  it.each(['user-input', 'unknown-request'])('keeps Codex %s server requests as failures even when the turn completes', async (scenario) => {
+    const { result, messages, frames } = await run('codex', scenario)
+    expect(result).toMatchObject({ status: 'ERROR', error: 'CLI 请求额外交互授权，插件未批准' })
+    expect(messages.find((value) => value.id === 'synthetic-interaction').error.code).toBe(-32601)
+    expect(frames.find((frame) => frame.event?.kind === 'diagnostic')?.event)
+      .toMatchObject({ text: 'Codex 原生交互请求已拒绝', state: 'FAILED' })
+  })
+  it('denies Claude reverse permission requests without upgrading successful native status', async () => {
+    const { result, messages } = await run('claude', 'deny')
+    expect(result.status).toBe('ERROR')
+    expect(messages.find((value) => value.type === 'control_response').response.response.behavior).toBe('deny')
   })
   it.each(['codex', 'claude', 'antigravity'] as const)('%s never promotes native failure, failed tools, nonzero exit, missing or duplicate terminal to success', async (cli) => {
     for (const scenario of ['failure', 'tool-failure', 'unfinished-tool', 'nonzero-exit', 'no-terminal', 'duplicate-terminal']) {

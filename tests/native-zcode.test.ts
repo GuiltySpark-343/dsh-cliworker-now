@@ -25,7 +25,7 @@ const event=(type,payload,extra={})=>out({method:'session/event',params:{session
 const finish=()=>{event('turn.completed',{inputId,resultType:stopped?'cancelled':'success',response:scenario==='tool-boundary'||scenario==='model-usage'?'AFTER':'HELLO',usage:scenario==='model-usage'?{inputTokens:99999,outputTokens:1}:undefined});out({method:'state.updated',params:{sessionId,reason:'prompt_completed'}});};
 createInterface({input:process.stdin}).on('line',line=>{
  const q=JSON.parse(line);log(q);
- if(!q.method){if(q.id==='preferences'){if(q.result?.memoryEnabled!==false)process.exit(23);reply(awaiting,state);awaiting=undefined;}else if(q.id==='permission'||q.id==='headers')finish();return;}
+ if(!q.method){if(q.id==='preferences'){if(q.result?.memoryEnabled!==false)process.exit(23);reply(awaiting,state);awaiting=undefined;}else if(q.id==='permission'){event('permission.resolved',{toolCallId:'denied-tool',decision:q.result?.decision});event('tool.updated',{kind:'batch',toolCallIds:scenario==='permission-other-failure'?['denied-tool','other-tool']:['denied-tool'],successCount:0,errorCount:scenario==='permission-other-failure'?2:1});if(scenario==='permission-failed'){event('turn.failed',{inputId});out({method:'state.updated',params:{sessionId,reason:'prompt_failed'}});}else finish();}else if(q.id==='headers')finish();return;}
  if(q.jsonrpc!==undefined)process.exit(20);
  if(q.method==='runtime/capabilities')return reply(q,{protocol:{name:'zcode',version:1}});
  if(q.method==='provider/updateAccountConfig')return reply(q,{receivedRevision:q.params.revision,providerCount:1,status:'received'});
@@ -92,7 +92,7 @@ createInterface({input:process.stdin}).on('line',line=>{
   if(scenario==='changed-model'){event('session.updated',{providerId:'wrong',modelId:'wrong'});return;}
   event('model.streaming',{kind:'text_delta',delta:'HELLO'},{eventId:'delta-one'});
   if(scenario==='cancel')return;
-  if(scenario==='permission')return out({id:'permission',method:'interaction/requestPermission',params:{sessionId}});
+  if(scenario.startsWith('permission'))return out({id:'permission',method:'interaction/requestPermission',params:{sessionId,toolCallId:'denied-tool',toolName:'Bash'}});
   if(scenario==='missing-terminal')return out({method:'state.updated',params:{sessionId,reason:'prompt_completed'}});
   finish();return;
  }
@@ -287,9 +287,19 @@ describe('Native ZCode app-server (simulated native processes)', () => {
     expect(result.status).toBe('ERROR')
     expect(records.some((record) => record.method === 'session/send')).toBe(false)
   })
-  it('denies additional permissions and retains an error despite native success', async () => {
+  it('denies additional permissions and reports a natively completed turn as unverified, not success', async () => {
     const { result, records } = await fixture('permission')
-    expect(result).toMatchObject({ status: 'ERROR', response: 'HELLO' })
+    expect(result).toMatchObject({ status: 'UNCERTAIN', response: 'HELLO' })
+    expect(result.error).toMatch(/额外权限请求已拒绝.*结果待核实/)
+    expect(records.find((record) => record.id === 'permission').result.decision).toBe('deny')
+  })
+  it('keeps an error when another tool in the batch fails besides the denied one', async () => {
+    const { result } = await fixture('permission-other-failure')
+    expect(result).toMatchObject({ status: 'ERROR', error: 'ZCode 工具批次失败' })
+  })
+  it('keeps an error when the turn fails after a denied permission', async () => {
+    const { result, records } = await fixture('permission-failed')
+    expect(result.status).toBe('ERROR')
     expect(records.find((record) => record.id === 'permission').result.decision).toBe('deny')
   })
   it('does not interpret send admission/state updates as a missing turn result', async () => {
