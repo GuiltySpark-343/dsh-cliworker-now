@@ -205,34 +205,19 @@ describe('Native ACP runners (simulated native processes)', () => {
     expect(calls).toEqual(['initialize', 'session/new', 'end'])
     expect(closed).toBe(true)
   })
-  it('runs a read-only Grok turn under deny-by-default with mkdir/touch denied when its ACP lists no modes', async () => {
+  it('runs a read-only Grok turn from its private config, without ignored global flags, when its ACP lists no modes', async () => {
     const { records, result } = await fixture('grok', 'no-modes')
     expect(result.status).toBe('SUCCESS')
     const argv = records.find(record => record.argv).argv
-    expect(argv.slice(-9)).toEqual(['--permission-mode', 'dontAsk', '--deny', 'Bash(mkdir)', '--deny', 'Bash(touch)',
-      'agent', '--no-leader', 'stdio'])
-    expect(argv.filter((arg: string) => arg === '--permission-mode')).toHaveLength(1)
+    expect(argv.slice(-3)).toEqual(['agent', '--no-leader', 'stdio'])
+    expect(argv.filter((arg: string) => ['--permission-mode', '--deny', '--allow'].includes(arg))).toEqual([])
     expect(records.some(record => record.method === 'session/set_mode')).toBe(false)
   })
-  it('keeps writable Grok on acceptEdits without read-only deny rules, and replaces any earlier mode', () => {
+  it('keeps writable Grok on acceptEdits and replaces any earlier mode', () => {
     const argv = ['grok', '--cwd', '/synthetic', '--permission-mode', 'default', '--single', 'task']
     expect(grokAcpArgv({ argv, mode: 'accept-edits' })).toEqual(['grok', '--cwd', '/synthetic',
       '--permission-mode', 'acceptEdits', 'agent', '--no-leader', 'stdio'])
-    expect(grokAcpArgv({ argv, mode: 'plan' }).filter((arg: string) => arg === '--permission-mode')).toHaveLength(1)
-  })
-  it('pre-approves only a ready DSH bridge bound to Grok for read-only runs (synthetic connection)', () => {
-    const argv = ['grok', '--single', 'task']
-    const connection = (cli: string, executionReady: boolean) => ({ url: 'http://127.0.0.1:1/rpc', token: 'A'.repeat(43),
-      binding: { parentSessionId: 'p', harnessSessionId: 'h', workerId: 'w', runId: 'r', cli }, executionReady })
-    const allows = (config: Record<string, unknown>) => {
-      const result = grokAcpArgv({ argv, ...config })
-      return result.flatMap((arg: string, index: number) => arg === '--allow' ? [result[index + 1]] : [])
-    }
-    expect(allows({ mode: 'plan', harnessTools: connection('grok', true) })).toEqual(['MCPTool(dsh_worker_tools__*)'])
-    expect(allows({ mode: 'plan', harnessTools: connection('grok', false) })).toEqual([])
-    expect(allows({ mode: 'plan', harnessTools: connection('kimi', true) })).toEqual([])
-    expect(allows({ mode: 'plan' })).toEqual([])
-    expect(allows({ mode: 'accept-edits', harnessTools: connection('grok', true) })).toEqual([])
+    expect(grokAcpArgv({ argv, mode: 'plan' })).toEqual(['grok', '--cwd', '/synthetic', 'agent', '--no-leader', 'stdio'])
   })
   it('still requires an ACP that lists modes to confirm plan, and never assumes it for other CLIs', async () => {
     const listed = await fixture('grok')

@@ -9,6 +9,8 @@ import { EFFORTS, type Effort, type ModelChoice, type TaskMode } from '../shared
 import type { EventInput, ProtocolResult } from './protocol.ts'
 import { assertGrokNativeEnvironment, discoverGrokAccountModels } from './grok-models.ts'
 import { GrokResponseTracker, grokResponseUsage } from './grok-response.mjs'
+import { HARNESS_MCP_SERVER, nativeHarnessReadyConnection } from './native-harness-injection.mjs'
+import type { NativeHarnessConnection } from './native-harness-tools.ts'
 
 export interface GrokInput {
   executable: string
@@ -18,17 +20,28 @@ export interface GrokInput {
   prompt: string
   conversationId?: string
   stateDirectory: string
+  harnessTools?: NativeHarnessConnection
 }
 const record = (x: unknown): x is Record<string, unknown> =>
   typeof x === 'object' && x !== null && !Array.isArray(x)
-const config = `[cli]\nauto_update = false\nuse_leader = false\n[features]\nsupport_permission = true\ntelemetry = false\nfeedback = false\ncodebase_indexing = false\n[telemetry]\ntrace_upload = false\nmixpanel_enabled = false\n[subagents]\nenabled = false\n[session]\nload_envrc = false\n[shell_environment_policy]\ninherit = "core"\nignore_default_excludes = false\n`
+const baseConfig = `[cli]\nauto_update = false\nuse_leader = false\n[features]\nsupport_permission = true\ntelemetry = false\nfeedback = false\ncodebase_indexing = false\n[telemetry]\ntrace_upload = false\nmixpanel_enabled = false\n[subagents]\nenabled = false\n[session]\nload_envrc = false\n[shell_environment_policy]\ninherit = "core"\nignore_default_excludes = false\n`
+// `grok agent stdio` ignores the global --permission-mode/--deny flags, so a
+// read-only run sets them in this run's private config. dontAsk denies every
+// call it would prompt for; bare mkdir/touch skip prompts in every mode and are
+// denied by rule. A ready DSH bridge is pre-approved, as dontAsk never asks;
+// the Host still approves each execution.
+function grokConfig(readOnly?: { bridge: boolean }) {
+  if (!readOnly) return baseConfig
+  const allow = readOnly.bridge ? `allow = ["MCPTool(${HARNESS_MCP_SERVER}__*)"]\n` : ''
+  return `${baseConfig}[ui]\npermission_mode = "dontAsk"\n[permission]\ndeny = ["Bash(mkdir)", "Bash(touch)"]\n${allow}`
+}
 function bridgePath() {
   const here = dirname(fileURLToPath(import.meta.url))
   for (const path of [join(here, 'grok-catalog.mjs'), resolve(here, '../../grok-catalog.mjs')])
     if (existsSync(path)) return path
   throw new Error('Grok catalog bridge 未安装，请重新构建插件')
 }
-async function state(stateDirectory: string, project?: string) {
+async function state(stateDirectory: string, project?: string, readOnly?: { bridge: boolean }) {
   await mkdir(stateDirectory, { recursive: true, mode: 0o700 })
   if ((await lstat(stateDirectory)).isSymbolicLink()) throw new Error('Unsafe Grok state symlink')
   await chmod(stateDirectory, 0o700)
@@ -58,7 +71,7 @@ async function state(stateDirectory: string, project?: string) {
   const temporary = (path: string) => `${path}.${randomUUID()}.tmp`
   const configTemporary = temporary(configPath)
   try {
-    await writeFile(configTemporary, config, { mode: 0o600, flag: 'wx' })
+    await writeFile(configTemporary, grokConfig(readOnly), { mode: 0o600, flag: 'wx' })
     await rename(configTemporary, configPath)
   } finally {
     await rm(configTemporary, { force: true })
@@ -118,7 +131,9 @@ export async function prepareGrok(
   if (!EFFORTS.includes(input.preference.effort)) throw new Error('Invalid Grok effort')
   if (!['plan', 'accept-edits'].includes(input.mode)) throw new Error('Invalid Grok mode')
   if (!input.prompt.trim()) throw new Error('Prompt must not be empty')
-  const prepared = await state(input.stateDirectory, input.project)
+  const prepared = await state(input.stateDirectory, input.project, input.mode === 'plan'
+    ? { bridge: !!nativeHarnessReadyConnection({ cli: 'grok', harnessTools: input.harnessTools }, {}) }
+    : undefined)
   return {
     argv: [
       input.executable,

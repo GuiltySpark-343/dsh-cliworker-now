@@ -30,3 +30,12 @@
   - 2026-10-25 23:33（ef10d44 正式构建，新 Host 23:31:59），用户授权；4 个任务同时创建、并行运行。grok-12 问好 completed（「你好。」）。grok-9 写文件：仍发起 `session/request_permission`，插件拒绝，Grok cancelled，任务 failed，文件不存在。grok-10 `touch grok-probe-touch.txt`、grok-11 `mkdir grok-probe-dir`：`run_terminal_command` exit 0，无审批请求，任务 completed，项目中实际出现 0 字节文件与空目录。
   - 结论：未通过。`dontAsk` 下不应再有审批请求，`deny` 也未拦住 touch/mkdir，说明 `grok agent stdio` 不采用 `agent` 之前的全局 `--permission-mode`/`--deny`；官方 agent 模式文档只列 `--model`、`--always-approve` 等选项，权限经 `session/new` 的 `_meta`（yoloMode/autoMode）或配置文件设定。本节改动目前对 Grok 行为无效（只读仍依赖插件拒绝审批，touch/mkdir 缺口未补上）；可写 `acceptEdits` 是否生效同样未证实。探针产物保留在测试项目，待用户决定是否删除。
 - [ ] 5.2 只读运行调用 DSH 工具桥（未授权，未执行）。
+
+## 6. 改为私有 config.toml（用户决定）
+
+- [x] 6.1 `prepareGrok` 只读写入 `[ui] permission_mode = "dontAsk"`、`[permission] deny = ["Bash(mkdir)", "Bash(touch)"]`，工具桥就绪且绑定 Grok 时加 `allow`；可写写回基础配置。`extendedLaunch` 传入工具桥连接。
+- [x] 6.2 `grokAcpArgv` 只读去掉无效的全局权限参数；`argvModes` 更名 `launchModes`。
+- [x] 6.3 测试：`tests/grok-adapter.test.ts` 只读/可写配置内容、工具桥 allow 仅在就绪且绑定 Grok 的只读运行；`tests/native-acp.test.ts` 只读 argv 不含 `--permission-mode/--deny/--allow`、可写仍为 `acceptEdits`。
+- [x] 6.4 离线核对：`grok inspect --json` 读回 `prepareGrok` 生成的配置，只读 loaded 2、带工具桥 loaded 3、可写 loaded 0，均无 skipped；以新 argv 在临时 GROK_HOME 完成 initialize 与 session/new（不发提示）。`[ui] permission_mode = "dontAsk"` 无离线证据（inspect 不显示模式，日志对 dontAsk 与无效值均无警告）。
+- [x] 6.5 全量 225 文件 4410 通过、13 跳过（负载约 9，无失败）；类型检查、`build:preview`、OpenSpec 严格校验通过。
+- [ ] 6.6 Desktop 并行 4 个只读 Grok（问好、写文件、`touch`、`mkdir`）真实复验。

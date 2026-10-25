@@ -70,6 +70,32 @@ describe('Grok adapter (synthetic fixtures; real execution not subscription-vali
     expect(editing.env.GROK_HOME).toBe(prepared.env.GROK_HOME)
     expect(editing.argv[editing.argv.indexOf('--permission-mode') + 1]).toBe('acceptEdits')
   })
+  it('writes the read-only deny policy into the run config and drops it again for a writable run', async () => {
+    const input = { executable: '/bin/grok', project: directory(), stateDirectory: directory(), prompt: 'task',
+      preference: { model: 'grok-4.5', effort: 'low' as const }, mode: 'plan' as const }
+    const config = async (extra: Record<string, unknown>) =>
+      readFileSync(join((await prepareGrok({ ...input, ...extra })).env.GROK_HOME!, 'config.toml'), 'utf8')
+    const readOnly = await config({})
+    expect(readOnly).toContain('[ui]\npermission_mode = "dontAsk"\n')
+    expect(readOnly).toContain('[permission]\ndeny = ["Bash(mkdir)", "Bash(touch)"]\n')
+    expect(readOnly).not.toContain('allow =')
+    expect(readOnly).toContain('load_envrc = false')
+    const writable = await config({ mode: 'accept-edits' })
+    expect(writable).not.toContain('[permission]')
+    expect(writable).not.toContain('permission_mode')
+  })
+  it('pre-approves only a ready DSH bridge bound to Grok in the read-only config (synthetic connection)', async () => {
+    const input = { executable: '/bin/grok', project: directory(), stateDirectory: directory(), prompt: 'task',
+      preference: { model: 'grok-4.5', effort: 'low' as const }, mode: 'plan' as const }
+    const connection = (cli: string, executionReady: boolean) => ({ url: 'http://127.0.0.1:1/rpc', token: 'A'.repeat(43),
+      binding: { parentSessionId: 'p', harnessSessionId: 'h', workerId: 'w', runId: 'r', cli }, executionReady })
+    const allow = async (extra: Record<string, unknown>) => /^allow = .*$/m.exec(
+      readFileSync(join((await prepareGrok({ ...input, ...extra } as typeof input)).env.GROK_HOME!, 'config.toml'), 'utf8'))?.[0]
+    expect(await allow({ harnessTools: connection('grok', true) })).toBe('allow = ["MCPTool(dsh_worker_tools__*)"]')
+    expect(await allow({ harnessTools: connection('grok', false) })).toBeUndefined()
+    expect(await allow({ harnessTools: connection('kimi', true) })).toBeUndefined()
+    expect(await allow({ mode: 'accept-edits', harnessTools: connection('grok', true) })).toBeUndefined()
+  })
   it('never offers anonymous ACP models as current-account Worker entitlements and rejects invented effort tiers', async () => {
     const models = [{ id: 'grok-4.5', label: 'Grok 4.5', efforts: ['high', 'medium', 'low'] }]
     await expect(

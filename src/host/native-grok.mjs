@@ -1,22 +1,16 @@
 import { replaceNativeArguments, runNativeAcp } from './native-acp.mjs'
-import { HARNESS_MCP_SERVER, nativeHarnessReadyConnection } from './native-harness-injection.mjs'
 import { GrokResponseTracker, grokResponseUsage, grokPromptUsage, grokModelContext, grokContextStatus } from './grok-response.mjs'
 import { GrokDurableContextObserver } from './grok-durable-context.mjs'
 
-// The native process fixes its permission mode by argument; 1.0.62's ACP no
-// longer lists or switches modes. `--permission-mode plan` is only a Claude
-// compatibility value, so read-only uses dontAsk, which denies every call not
-// pre-approved. dontAsk still runs bare mkdir/touch, so deny those as well.
-// dontAsk never asks, so the ready DSH bridge is pre-approved instead of being
-// admitted through the ACP callback; the Host still approves each execution.
-const readOnly = (config) => ['--permission-mode', 'dontAsk', '--deny', 'Bash(mkdir)', '--deny', 'Bash(touch)',
-  ...(nativeHarnessReadyConnection({ ...config, cli: 'grok' }) ? ['--allow', `MCPTool(${HARNESS_MCP_SERVER}__*)`] : [])]
+// `grok agent stdio` ignores the global permission flags before `agent`; the
+// read-only policy lives in the run's private config (prepareGrok). The flag
+// is only replaced, never duplicated, and 1.0.62's ACP lists no modes.
 export const grokAcpArgv = (config) =>
   replaceNativeArguments(
     config.argv,
     ['--output-format', '--resume', '--single', '--tools', '--permission-mode'],
     [],
-    [...(config.mode === 'plan' ? readOnly(config) : ['--permission-mode', 'acceptEdits']), 'agent', '--no-leader', 'stdio'],
+    [...(config.mode === 'plan' ? [] : ['--permission-mode', 'acceptEdits']), 'agent', '--no-leader', 'stdio'],
   )
 
 export const runNativeGrok = (config, io) => {
@@ -30,8 +24,8 @@ export const runNativeGrok = (config, io) => {
     off: 'none',
     // acceptEdits is retained in the native global argv. Never invent an ACP mode id.
     editMode: undefined,
-    // Read-only is also set by argv; an ACP that lists modes must still confirm plan.
-    argvModes: ['plan'],
+    // Read-only is set by the private config; an ACP that lists modes must still confirm plan.
+    launchModes: ['plan'],
     // Installed 1.0.50 accepts the ACP scalar string. Its bundled guide still
     // shows { value }, which the live SessionConfigOptionValue decoder rejects.
     encode: (value) => value,

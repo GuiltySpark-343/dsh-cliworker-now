@@ -270,8 +270,8 @@ export async function runNativeAcp(config, io, settings) {
     if (wantedMode && settings.modeConfigId) {
       state = await selectOption(peer, sessionId, state, settings.modeConfigId, wantedMode, settings.encode)
     } else if (wantedMode && state?.modes?.currentModeId !== wantedMode) {
-      // Only a CLI whose launch argument fixed this mode may omit ACP modes entirely.
-      if (!(settings.argvModes?.includes(wantedMode) && state?.modes == null)) {
+      // Only a CLI whose launch already fixed this mode may omit ACP modes entirely.
+      if (!(settings.launchModes?.includes(wantedMode) && state?.modes == null)) {
         if (!state?.modes?.availableModes?.some((mode) => mode.id === wantedMode))
           throw new Error('ACP does not advertise the selected permission mode')
         await peer.request('session/set_mode', { sessionId, modeId: wantedMode }, { jsonrpc: true })

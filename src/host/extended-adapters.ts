@@ -175,7 +175,7 @@ export async function extendedLaunch(
           : cli === 'hermes'
             ? await prepareHermes({ ...input, hermesHome: effectiveHermesHome(config), renewal })
             : cli === 'grok'
-              ? await prepareGrok(input)
+              ? await prepareGrok({ ...input, ...(config.harnessTools ? { harnessTools: config.harnessTools } : {}) })
               : undefined
   if (!prepared) throw new Error('未知 CLI')
   let launch = prepared
