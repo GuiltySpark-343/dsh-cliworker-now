@@ -9,6 +9,8 @@ import {
 import { NativeChoice } from './native-settings-choice.tsx'
 import { operationMessage } from './operation-error.ts'
 import { value, type API } from './workers.ts'
+import { t, useT, type MessageKey } from './i18n.ts'
+import { hostText } from './operation-error.ts'
 
 function readSettings(raw: string, cli: CliId): RunningMessageSettings {
   const next = JSON.parse(raw)
@@ -18,11 +20,11 @@ function readSettings(raw: string, cli: CliId): RunningMessageSettings {
     typeof next.canSteer !== 'boolean' ||
     (next.mode === 'steer' && !next.canSteer)
   )
-    throw new Error('收到不匹配的运行中发送设置，请重试')
+    throw new Error(t('收到不匹配的运行中发送设置，请重试'))
   return next
 }
 
-const descriptions: Record<RunningMessageMode, string> = {
+const descriptions: Record<RunningMessageMode, MessageKey> = {
   steer: '立即交给 CLI 在当前运行中处理，不保证打断正在生成的内容。',
   interrupt: '先停止当前轮，确认停止后沿原对话优先发送。',
   queue: '等待当前轮正常结束后，沿原对话按顺序发送。',
@@ -44,6 +46,7 @@ export function RunningMessageChoice({
   blocked: boolean
   onBusyChange: (busy: boolean) => void
 }) {
+  useT()
   const [settings, setSettings] = useState<RunningMessageSettings>()
   const [selected, setSelected] = useState<RunningMessageMode>()
   const [loading, setLoading] = useState(false)
@@ -108,7 +111,7 @@ export function RunningMessageChoice({
         cli,
       )
       if (controller.signal.aborted) return
-      if (next.mode !== mode) throw new Error('发送方式未保存，请重新选择重试')
+      if (next.mode !== mode) throw new Error(t('发送方式未保存，请重新选择重试'))
       setSettings(next)
       setSaved(true)
     } catch (error) {
@@ -126,21 +129,21 @@ export function RunningMessageChoice({
     <div className="cwn-settings-form cwn-running-message-settings">
       <div className="cwn-setting-row">
         <span className="cwn-setting-row-text">
-          <span>运行中发送</span>
+          <span>{t('运行中发送')}</span>
           <span className="cwn-setting-description" id={hintId}>
-            {selected ? descriptions[selected] : '选择对话运行中发送新消息的方式。'}
-            {settings && !settings.canSteer ? ' 当前 CLI 不支持引导。' : ''}
+            {selected ? t(descriptions[selected]) : t('选择对话运行中发送新消息的方式。')}
+            {settings && !settings.canSteer ? t(' 当前 CLI 不支持引导。') : ''}
           </span>
         </span>
         <NativeChoice
-          label="运行中发送"
+          label={t('运行中发送')}
           describedBy={hintId}
           selected={selected ?? ''}
-          placeholder={loading ? '正在读取…' : '选择发送方式'}
+          placeholder={loading ? t('正在读取…') : t('选择发送方式')}
           choices={[
-            { id: 'steer', label: RUNNING_MESSAGE_LABELS.steer, disabled: !settings?.canSteer },
-            { id: 'interrupt', label: RUNNING_MESSAGE_LABELS.interrupt },
-            { id: 'queue', label: RUNNING_MESSAGE_LABELS.queue },
+            { id: 'steer', label: hostText(RUNNING_MESSAGE_LABELS.steer), disabled: !settings?.canSteer },
+            { id: 'interrupt', label: hostText(RUNNING_MESSAGE_LABELS.interrupt) },
+            { id: 'queue', label: hostText(RUNNING_MESSAGE_LABELS.queue) },
           ]}
           disabled={blocked || loading || saving || !settings}
           onChange={(mode) => void save(mode as RunningMessageMode)}
@@ -150,7 +153,7 @@ export function RunningMessageChoice({
         <div className="cwn-settings-save">
           <span className="cwn-settings-feedback-slot" role="status">
             {(loading || saving) && <StateDot state="ongoing" size={14} />}
-            {error || (loading ? '正在读取发送方式…' : saving ? '正在保存发送方式…' : '发送方式已保存')}
+            {error || (loading ? t('正在读取发送方式…') : saving ? t('正在保存发送方式…') : t('发送方式已保存'))}
           </span>
           {error && !settings && (
             <Button
@@ -160,7 +163,7 @@ export function RunningMessageChoice({
               disabled={blocked || loading}
               onClick={() => retry((old) => old + 1)}
             >
-              重试读取发送方式
+              {t('重试读取发送方式')}
             </Button>
           )}
         </div>

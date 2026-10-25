@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Tooltip, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useT, type MessageKey } from './i18n.ts'
 
 /** Independent name action: copying never activates the neighboring conversation button. */
 export function NameCopy({ name, disabled = false }: { name: string; disabled?: boolean }) {
-  const [feedback, setFeedback] = useState('')
+  const t = useT()
+  const [feedback, setFeedback] = useState<'' | MessageKey>('')
   const [busy, setBusy] = useState(false)
   const alive = useRef(true)
   const current = useRef(name)
@@ -12,14 +14,14 @@ export function NameCopy({ name, disabled = false }: { name: string; disabled?: 
   const keyboard = useRef(true)
   const generation = useRef(0)
   const pending = useRef(false)
-  const currentFeedback = useRef('')
+  const currentFeedback = useRef<'' | MessageKey>('')
   const timer = useRef<ReturnType<typeof setTimeout>>()
   current.current = name
   const clearTimer = () => {
     clearTimeout(timer.current)
     timer.current = undefined
   }
-  const updateFeedback = (text: string) => {
+  const updateFeedback = (text: '' | MessageKey) => {
     currentFeedback.current = text
     setFeedback(text)
   }
@@ -56,11 +58,11 @@ export function NameCopy({ name, disabled = false }: { name: string; disabled?: 
   }, [])
   return (
     <span className="cwn-name-copy">
-      <Tooltip label={feedback || '点击复制名称'} side="bottom" portal>
+      <Tooltip label={feedback ? t(feedback) : t('点击复制名称')} side="bottom" portal>
         <button
           type="button"
           className="cwn-worker-name"
-          aria-label={`复制名称 ${name}`}
+          aria-label={t('复制名称 {name}', { name })}
           title={name}
           data-copied={feedback === '已复制'}
           disabled={disabled || !name}
@@ -112,12 +114,12 @@ export function NameCopy({ name, disabled = false }: { name: string; disabled?: 
             })()
           }}
         >
-          <span>{feedback === '已复制' ? '已复制' : name}</span>
+          <span>{feedback === '已复制' ? t('已复制') : name}</span>
         </button>
       </Tooltip>
       {feedback && (
         <span role="status" className={feedback === '已复制' ? 'cwn-sr-only' : 'cwn-name-copy-failure'}>
-          {feedback}
+          {t(feedback)}
         </span>
       )}
     </span>

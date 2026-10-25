@@ -1,6 +1,7 @@
 import { createElement, forwardRef, type ReactNode } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, expect, it, vi } from 'vitest'
+import { setLanguagePreference } from '../src/client/i18n.ts'
 import { Panel } from '../src/client/panel.tsx'
 import type { API, Snapshot } from '../src/client/workers.ts'
 import { CLI_IDS, type Worker, type HistoryPage } from '../src/shared/types.ts'
@@ -125,6 +126,7 @@ afterEach(async () => {
   await act(async () => {
     for (const r of mounted.splice(0)) r.unmount()
   })
+  setLanguagePreference('follow')
 })
 const deferred = () => {
   let resolve!: (value: any) => void, reject!: (reason: unknown) => void
@@ -3196,3 +3198,16 @@ it.each(['before', 'after'] as const)(
     expect(sendRunningMessage).toHaveBeenCalledOnce()
   },
 )
+
+it('adopts a streamed interface language in every open view without reloading', async () => {
+  const t = await setup(false, undefined, [])
+  expect(t.r.root.findAllByProps({ 'aria-label': '筛选子 Agent' })).not.toHaveLength(0)
+  await act(async () => t.streams.at(-1)!.push({ ...t.snapshot(), workers: [], language: 'en' }))
+  expect(t.r.root.findAllByProps({ 'aria-label': 'Filter sub-agents' })).not.toHaveLength(0)
+  expect(t.text()).toContain('Hand your work to the right partner.')
+  expect(t.text()).toContain('Active')
+  expect(t.text()).not.toContain('进行中')
+  // A snapshot without the field is `follow` again: Chinese with no DSH locale.
+  await act(async () => t.streams.at(-1)!.push({ ...t.snapshot(), workers: [] }))
+  expect(t.text()).toContain('把想做的事，交给合适的伙伴。')
+})

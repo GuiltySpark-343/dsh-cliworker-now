@@ -18,6 +18,8 @@ import { messageClock } from '../shared/telemetry.ts'
 import { UsageIndicator } from './telemetry.tsx'
 import { useNativePresentation } from './native-presentation.tsx'
 import { nativeFileDiffs } from './tool-viewers.ts'
+import { t, useT } from './i18n.ts'
+import { hostText } from './operation-error.ts'
 
 export const runOf = (item: TimelineItem) => item.admittedRunId ?? item.id.split(':')[0]
 export const completedEmptyReply = (item: TimelineItem, worker?: Worker) =>
@@ -27,35 +29,35 @@ export const completedEmptyReply = (item: TimelineItem, worker?: Worker) =>
     !!item.runEndedAt ||
     (!!item.runOutcome && !active(item.runOutcome)) ||
     (worker?.runId === runOf(item) && !active(worker.status)))
-const markdownLabels = { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' }
-const jsonLabels = {
-  copyValue: '复制值',
-  copyJson: '复制 JSON',
-  copyPath: '复制路径',
-  copyPrettyJson: '复制格式化 JSON',
-  copyCompactJson: '复制紧凑 JSON',
-  copied: '已复制',
-  copyFailed: '复制失败',
-  collapseNode: '收起',
-  expandNode: '展开',
+const markdownLabels = () => ({ code: { copyLabel: t('复制'), copiedLabel: t('已复制') }, footnotes: t('脚注') })
+const jsonLabels = () => ({
+  copyValue: t('复制值'),
+  copyJson: t('复制 JSON'),
+  copyPath: t('复制路径'),
+  copyPrettyJson: t('复制格式化 JSON'),
+  copyCompactJson: t('复制紧凑 JSON'),
+  copied: t('已复制'),
+  copyFailed: t('复制失败'),
+  collapseNode: t('收起'),
+  expandNode: t('展开'),
   copyButtonTitle: (action: string) => action,
-}
-const terminalLabels = {
-  commandLine: (line: number) => `命令第 ${line} 行`,
-  signal: (signal: string) => `信号 ${signal}`,
-  exitCode: (code: number) => `退出码 ${code}`,
-  noExitCode: '未提供退出码',
-  running: '运行中',
-  failed: '失败',
-  done: '已完成',
-  copy: '复制',
-  copied: '已复制',
-  noOutput: '没有输出',
-  collapseAria: '收起输出',
-  collapse: '收起',
-  expandAria: (n: number) => `展开 ${n} 行输出`,
-  expand: (n: number) => `展开 ${n} 行`,
-}
+})
+const terminalLabels = () => ({
+  commandLine: (line: number) => t('命令第 {line} 行', { line }),
+  signal: (signal: string) => t('信号 {signal}', { signal }),
+  exitCode: (code: number) => t('退出码 {code}', { code }),
+  noExitCode: t('未提供退出码'),
+  running: t('运行中'),
+  failed: t('失败'),
+  done: t('已完成'),
+  copy: t('复制'),
+  copied: t('已复制'),
+  noOutput: t('没有输出'),
+  collapseAria: t('收起输出'),
+  collapse: t('收起'),
+  expandAria: (n: number) => t('展开 {n} 行输出', { n }),
+  expand: (n: number) => t('展开 {n} 行', { n }),
+})
 export function processClosed(rows: TimelineItem[], worker?: Worker) {
   return (
     !!rows.some((row) => row.runEndedAt || (row.runOutcome && !active(row.runOutcome))) ||
@@ -104,6 +106,7 @@ export function WorkerProcessHeader({
   open: boolean
   toggle: () => void
 }) {
+  useT()
   const policy = useNativePresentation()
   if (!processClosed(rows, worker)) return null
   const first = rows[0]!,
@@ -123,15 +126,15 @@ export function WorkerProcessHeader({
     seconds === undefined
       ? ''
       : seconds < 60
-        ? `，用时 ${seconds}秒`
-        : `，用时 ${Math.floor(seconds / 60)}分 ${seconds % 60}秒`
-  const label = stopped ? '已停止' : failed ? '失败' : `已完成${duration}`
+        ? t('，用时 {seconds}秒', { seconds })
+        : t('，用时 {minutes}分 {seconds}秒', { minutes: Math.floor(seconds / 60), seconds: seconds % 60 })
+  const label = stopped ? t('已停止') : failed ? t('失败') : t('已完成{duration}', { duration })
   const foldable =
     policy.foldCompletedTurns && !processAlwaysOpen(rows, worker) && processContent(rows, worker).length > 0
   return (
     <div className="cwn-progress" data-process-run={runOf(first)}>
       <span className="cwn-sr-only" role="status">
-        {stopped ? '已停止' : failed ? '失败' : '已完成'}
+        {stopped ? t('已停止') : failed ? t('失败') : t('已完成')}
       </span>
       <button
         type="button"
@@ -154,16 +157,16 @@ export function WorkerProcessHeader({
 function rowState(item: TimelineItem) {
   const state = (item.state ?? '').toLowerCase()
   if (['completed', 'done', 'success', 'succeeded'].includes(state))
-    return { state: 'done' as const, label: '已完成', running: false }
+    return { state: 'done' as const, label: t('已完成'), running: false }
   if (['error', 'failed', 'failure'].includes(state))
-    return { state: 'error' as const, label: '失败', running: false }
+    return { state: 'error' as const, label: t('失败'), running: false }
   if (item.runStatus || (item.runEndedAt && ['running', 'pending', 'in_progress', 'started'].includes(state)))
-    return { state: 'warning' as const, label: '未收到最终状态', running: false }
+    return { state: 'warning' as const, label: t('未收到最终状态'), running: false }
   if (['stopped', 'interrupted', 'cancelled', 'canceled'].includes(state))
-    return { state: 'warning' as const, label: '已停止', running: false }
+    return { state: 'warning' as const, label: t('已停止'), running: false }
   if (['running', 'pending', 'in_progress', 'started'].includes(state))
-    return { state: 'ongoing' as const, label: '进行中', running: true }
-  return { state: 'idle' as const, label: '状态未提供', running: false }
+    return { state: 'ongoing' as const, label: t('进行中'), running: true }
+  return { state: 'idle' as const, label: t('状态未提供'), running: false }
 }
 function reasoningSummary(text: string, running: boolean) {
   if (!running) return text.split(/\r?\n/, 1)[0]!.replaceAll('**', '')
@@ -189,7 +192,7 @@ function Reasoning({ item }: { item: TimelineItem }) {
     >
       <DisclosureRow
         icon={<IconThinkOutlineRegular size={14} />}
-        title="思考"
+        title={t('思考')}
         open={open}
         expandable
         expandOnRowClick
@@ -211,7 +214,7 @@ function Reasoning({ item }: { item: TimelineItem }) {
             <MarkdownText
               text={text}
               streaming={observed.running}
-              labels={markdownLabels}
+              labels={markdownLabels()}
               variant="compact"
             />
           </div>
@@ -222,7 +225,7 @@ function Reasoning({ item }: { item: TimelineItem }) {
 }
 function Value({ value, label }: { value: unknown; label: string }) {
   if (value !== null && typeof value === 'object')
-    return <JsonTree data={value as object} label={label} labels={jsonLabels} expandTopLevel copyable />
+    return <JsonTree data={value as object} label={label} labels={jsonLabels()} expandTopLevel copyable />
   return <pre className="cwn-tool-raw">{typeof value === 'string' ? value : JSON.stringify(value)}</pre>
 }
 function detailValue(detail: string) {
@@ -262,7 +265,7 @@ function Tool({ item, rows, worker }: { item: TimelineItem; rows: TimelineItem[]
   const hasInput = call?.input !== undefined,
     hasOutput = call?.output !== undefined
   const expandable = hasInput || hasOutput || !!call?.command || !!item.detail
-  const title = call?.name || item.text
+  const title = call?.name || hostText(item.text)
   const summary =
     call?.command ??
     (hasInput ? (typeof call!.input === 'string' ? call!.input : JSON.stringify(call!.input)) : '')
@@ -275,7 +278,7 @@ function Tool({ item, rows, worker }: { item: TimelineItem; rows: TimelineItem[]
       data-parent-tool-call-id={call?.parentCallId}
       data-state={observed.state}
       style={chain.depth ? { marginLeft: `${chain.depth * 22}px` } : undefined}
-      title={chain.unresolved ? '父调用未在当前记录内或关系无法核对' : undefined}
+      title={chain.unresolved ? t('父调用未在当前记录内或关系无法核对') : undefined}
     >
       <DisclosureRow
         icon={<StateDot state={observed.state} size={14} />}
@@ -303,44 +306,44 @@ function Tool({ item, rows, worker }: { item: TimelineItem; rows: TimelineItem[]
                 exitCode={call.exitCode}
                 running={observed.running}
                 runStateDot={false}
-                labels={terminalLabels}
+                labels={terminalLabels()}
               />
             ) : null}
             {!terminal && hasInput && (
               <section className="cwn-tool-io">
-                <span>参数</span>
-                <Value value={call!.input} label={`${title} 参数`} />
+                <span>{t('参数')}</span>
+                <Value value={call!.input} label={t('{title} 参数', { title })} />
               </section>
             )}
             {diffs && (
               <section className="cwn-tool-diff">
-                <p className="cwn-process-note">CLI 提供的局部补丁，非文件完整内容。</p>
+                <p className="cwn-process-note">{t('CLI 提供的局部补丁，非文件完整内容。')}</p>
                 <DiffBlock
                   diffs={diffs}
                   labels={{
-                    codeLabel: '代码',
-                    wrapLabel: '自动换行',
-                    unwrapLabel: '保持原列',
-                    copy: '复制',
-                    copied: '已复制',
-                    collapseAria: '收起差异',
-                    collapse: '收起',
-                    expandAria: (n) => `展开其余 ${n} 行差异`,
-                    expand: (n) => `… 其余 ${n} 行`,
+                    codeLabel: t('代码'),
+                    wrapLabel: t('自动换行'),
+                    unwrapLabel: t('保持原列'),
+                    copy: t('复制'),
+                    copied: t('已复制'),
+                    collapseAria: t('收起差异'),
+                    collapse: t('收起'),
+                    expandAria: (n) => t('展开其余 {n} 行差异', { n }),
+                    expand: (n) => t('… 其余 {n} 行', { n }),
                   }}
                 />
               </section>
             )}
             {hasOutput && !diffs && (!terminal || typeof call!.output !== 'string') && (
               <section className="cwn-tool-io">
-                <span>结果</span>
-                <Value value={call!.output} label={`${title} 结果`} />
+                <span>{t('结果')}</span>
+                <Value value={call!.output} label={t('{title} 结果', { title })} />
               </section>
             )}
             {!hasInput && !hasOutput && !terminal && item.detail && (
-              <Value value={detailValue(item.detail)} label={`${title} 详情`} />
+              <Value value={detailValue(item.detail)} label={t('{title} 详情', { title })} />
             )}
-            {chain.unresolved && <p className="cwn-process-note">父调用关系未完整提供；按已有顺序展示。</p>}
+            {chain.unresolved && <p className="cwn-process-note">{t('父调用关系未完整提供；按已有顺序展示。')}</p>}
           </div>
         )}
       </DisclosureRow>
@@ -354,16 +357,16 @@ function ProcessItem({ item, rows, worker }: { item: TimelineItem; rows: Timelin
   if (item.kind === 'assistant')
     return (
       <div className="cwn-process-event" data-empty-reply-id={item.id}>
-        无正文回复 · <UsageIndicator usage={item.usage} providerCredits={item.providerCredits} creditsBased={worker?.preference.cli === 'qoder' || worker?.preference.cli === 'qodercn'} reply />
-        {item.durationSeconds !== undefined && ` · CLI 报告耗时：${item.durationSeconds}秒`} ·{' '}
+        {t('无正文回复')} · <UsageIndicator usage={item.usage} providerCredits={item.providerCredits} creditsBased={worker?.preference.cli === 'qoder' || worker?.preference.cli === 'qodercn'} reply />
+        {item.durationSeconds !== undefined && t(' · CLI 报告耗时：{seconds}秒', { seconds: item.durationSeconds })} ·{' '}
         <time dateTime={item.time}>{messageClock(item.time)}</time>
-        {item.sessionDurationSeconds !== undefined && ` · CLI 会话累计耗时：${item.sessionDurationSeconds}秒`}
+        {item.sessionDurationSeconds !== undefined && t(' · CLI 会话累计耗时：{seconds}秒', { seconds: item.sessionDurationSeconds })}
       </div>
     )
   return (
     <DisclosureRow
       icon={<IconCodeOutlineRegular size={14} />}
-      title={item.text}
+      title={hostText(item.text)}
       open={open}
       expandable={!!item.detail}
       expandOnRowClick
@@ -371,7 +374,7 @@ function ProcessItem({ item, rows, worker }: { item: TimelineItem; rows: Timelin
     >
       {open && item.detail && (
         <div className="cwn-reasoning-body">
-          <MarkdownText text={item.detail} labels={markdownLabels} variant="compact" />
+          <MarkdownText text={item.detail} labels={markdownLabels()} variant="compact" />
         </div>
       )}
     </DisclosureRow>
@@ -392,6 +395,7 @@ export function WorkerProcessGroup({
   hidden: boolean
   first: boolean
 }) {
+  useT()
   const [open, setOpen] = useState(false),
     policy = useNativePresentation(),
     bodyId = useId()
@@ -413,13 +417,13 @@ export function WorkerProcessGroup({
   const label =
     !closed && latestRunning
       ? latestRunning.kind === 'tool'
-        ? '正在调用工具'
-        : '正在分析请求'
+        ? t('正在调用工具')
+        : t('正在分析请求')
       : tools.length
-        ? '已调用工具'
+        ? t('已调用工具')
         : content.some((row) => row.kind === 'reasoning')
-          ? '已完成分析'
-          : '工作记录'
+          ? t('已完成分析')
+          : t('工作记录')
   const title = liveDetail ? `${label} · ${liveDetail}` : label
   const running = content.some((row) => rowState(row).running)
   const show = !hidden && (!grouped || open)
@@ -455,7 +459,7 @@ export function WorkerProcessGroup({
         {show && (
           <>
             {first && !rows.some((row) => row.kind === 'reasoning' && row.detail?.trim()) && (
-              <p className="cwn-process-note">CLI 未提供公开思考摘要。</p>
+              <p className="cwn-process-note">{t('CLI 未提供公开思考摘要。')}</p>
             )}
             {content.map((item) => (
               <ProcessItem key={item.id} item={item} rows={rows} worker={worker} />

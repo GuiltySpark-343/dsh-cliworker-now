@@ -6,6 +6,8 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { HarnessConversationBinding, HarnessConversationFeature, Worker } from '../shared/types.ts'
 import { value, type API } from './workers.ts'
 import type { HarnessBindingRegistry, HarnessNativeBinding } from './harness-binding-registry.ts'
+import { t, type MessageKey, useT } from './i18n.ts'
+import { hostText } from './operation-error.ts'
 
 declare module '@deepseek-ai/dsh-api-session-controller/client' {
   interface SessionReferenceSourceMap {
@@ -24,7 +26,7 @@ interface HarnessConversationProps {
   attachProjections?: (reference: SessionReference, binding: HarnessNativeBinding) => () => void
 }
 
-const featureLabels: Record<HarnessConversationFeature, string> = {
+const featureLabels: Record<HarnessConversationFeature, MessageKey> = {
   send: '发送',
   queue: '原生排队',
   steer: '原生引导',
@@ -41,7 +43,7 @@ const featureLabels: Record<HarnessConversationFeature, string> = {
   tools: '工具共享',
 }
 const bridgedFeatures = new Set<HarnessConversationFeature>(['goal', 'feedback', 'forkEarlier'])
-const fallbackReason = '当前 CLI 的此项原生操作尚未接通，操作已禁用。'
+const fallbackReason: MessageKey = '当前 CLI 的此项原生操作尚未接通，操作已禁用。'
 const composerHolds = new WeakMap<
   object,
   Map<string, { owners: Map<symbol, string>; previous: unknown; current: unknown }>
@@ -89,7 +91,7 @@ export function readHarnessConversationBinding(
   raw: unknown,
   parentSessionId: string,
 ): HarnessConversationBinding {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('原生会话绑定无效')
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(t('原生会话绑定无效'))
   const candidate = raw as Partial<HarnessConversationBinding>
   if (
     typeof candidate.sessionId !== 'string' ||
@@ -104,14 +106,14 @@ export function readHarnessConversationBinding(
         typeof candidate.capabilities?.[feature as HarnessConversationFeature] !== 'boolean',
     )
   )
-    throw new Error('原生会话身份或能力与当前子 Agent 不一致')
+    throw new Error(t('原生会话身份或能力与当前子 Agent 不一致'))
   if (
     candidate.reasons &&
     (typeof candidate.reasons !== 'object' ||
       Array.isArray(candidate.reasons) ||
       Object.values(candidate.reasons).some((reason) => typeof reason !== 'string'))
   )
-    throw new Error('原生会话能力说明无效')
+    throw new Error(t('原生会话能力说明无效'))
   // An older Host omits the bridged features; treat them as unavailable rather than invalid.
   const capabilities = { ...candidate.capabilities } as HarnessConversationBinding['capabilities']
   for (const feature of bridgedFeatures) capabilities[feature as HarnessConversationFeature] ||= false
@@ -119,26 +121,27 @@ export function readHarnessConversationBinding(
 }
 
 export function harnessComposerBlock(binding: HarnessConversationBinding): string | undefined {
-  if (!binding.capabilities.send) return binding.reasons?.send || '原生消息发送尚未接通。'
+  if (!binding.capabilities.send) return hostText(binding.reasons?.send) || t('原生消息发送尚未接通。')
   return undefined
 }
 
 /** Displayed inside the existing Worker details menu, never as extra composer controls. */
 export function HarnessCapabilityNotes({ binding }: { binding: HarnessConversationBinding }) {
+  useT()
   const unavailable = (Object.keys(featureLabels) as HarnessConversationFeature[]).filter(
     (feature) => !binding.capabilities[feature],
   )
   return (
-    <div className="cwn-native-capabilities" aria-label="原生功能支持范围">
-      <p>对话使用 DSH 原生输入、队列和停止操作；实际回复由当前 CLI Agent 生成。</p>
-      {binding.capabilities.steer && binding.reasons?.steer && <p>{binding.reasons.steer}</p>}
-      <p>共享工具、MCP 与技能以当前子 Agent 获准的目录及 CLI 接入能力为准。</p>
+    <div className="cwn-native-capabilities" aria-label={t('原生功能支持范围')}>
+      <p>{t('对话使用 DSH 原生输入、队列和停止操作；实际回复由当前 CLI Agent 生成。')}</p>
+      {binding.capabilities.steer && binding.reasons?.steer && <p>{hostText(binding.reasons.steer)}</p>}
+      <p>{t('共享工具、MCP 与技能以当前子 Agent 获准的目录及 CLI 接入能力为准。')}</p>
       <dl>
         {unavailable.map((feature) => {
-          const reason = binding.reasons?.[feature] || fallbackReason
+          const reason = hostText(binding.reasons?.[feature]) || t(fallbackReason)
           return (
             <div key={feature}>
-              <dt>{featureLabels[feature]}</dt>
+              <dt>{t(featureLabels[feature])}</dt>
               <dd>{reason}</dd>
             </div>
           )
@@ -158,6 +161,7 @@ export function HarnessConversation({
   renderConversation,
   attachProjections,
 }: HarnessConversationProps) {
+  useT()
   const key = `${parentSessionId}:${worker.id}`
   const [attempt, setAttempt] = useState(0)
   const [repairing, setRepairing] = useState(false)
@@ -211,7 +215,7 @@ export function HarnessConversation({
             ? JSON.parse(value(await api.cliworker.ensureHarnessConversation(parentSessionId, worker.id)))
             : (stored ??
               (() => {
-                throw new Error('当前 Host 尚未提供原生会话入口，请更新插件后重开。')
+                throw new Error(t('当前 Host 尚未提供原生会话入口，请更新插件后重开。'))
               })()))
         const binding = readHarnessConversationBinding(raw, parentSessionId)
         if (!current) return
@@ -223,10 +227,10 @@ export function HarnessConversation({
           },
           { source: 'cliworkerConversation', signal: controller.signal },
         )
-        if (reference.sessionId !== binding.sessionId) throw new Error('原生会话引用与 Host 绑定不一致')
+        if (reference.sessionId !== binding.sessionId) throw new Error(t('原生会话引用与 Host 绑定不一致'))
         stage = 'history'
         const opened = await reference.ready
-        if (opened.sessionId !== binding.sessionId) throw new Error('原生会话读取返回了其他身份')
+        if (opened.sessionId !== binding.sessionId) throw new Error(t('原生会话读取返回了其他身份'))
         if (!current) return
         stage = 'sources'
         bindings.publish(binding, worker)
@@ -241,7 +245,7 @@ export function HarnessConversation({
             snapshot.openState === 'error'
               ? snapshot.openError
                 ? `${snapshot.openError.message} (${snapshot.openError.code})`
-                : '原生会话历史读取失败。'
+                : t('原生会话历史读取失败。')
               : undefined
           setState((previous) =>
             previous.key === key &&
@@ -256,7 +260,7 @@ export function HarnessConversation({
         publish()
       } catch (error) {
         release()
-        if (current) setState({ key, error: error instanceof Error ? error.message : '无法打开原生会话', historyFailure: stage === 'history' })
+        if (current) setState({ key, error: error instanceof Error ? hostText(error.message) : t('无法打开原生会话'), historyFailure: stage === 'history' })
       }
     })()
     return () => {
@@ -285,7 +289,7 @@ export function HarnessConversation({
       binding = readHarnessConversationBinding(stored, parentSessionId)
     } catch (error) {
       binding = undefined
-      bindingError = error instanceof Error ? error.message : '原生会话绑定无效'
+      bindingError = error instanceof Error ? error.message : t('原生会话绑定无效')
     }
   }
   if (
@@ -295,7 +299,7 @@ export function HarnessConversation({
     stored.sessionId !== repair?.previousSessionId
   ) {
     binding = undefined
-    bindingError = 'Host 原生会话绑定已改变，请重新打开确认。'
+    bindingError = t('Host 原生会话绑定已改变，请重新打开确认。')
   }
   useLayoutEffect(() => {
     if (!binding || current?.error || bindingError) return
@@ -340,7 +344,7 @@ export function HarnessConversation({
               })
               .catch((error) => {
                 if (!controller.signal.aborted)
-                  setState({ key, error: error instanceof Error ? error.message : '显示会话修复失败', historyFailure: true })
+                  setState({ key, error: error instanceof Error ? hostText(error.message) : t('显示会话修复失败'), historyFailure: true })
               })
               .finally(() => {
                 if (repairRequest.current === controller) {
@@ -351,10 +355,10 @@ export function HarnessConversation({
           }}
         >
           {repairing
-            ? '正在修复…'
+            ? t('正在修复…')
             : canRepairHistory && failedSessionId && api.cliworker.repairHarnessConversation
-              ? '修复显示会话'
-              : '重新打开'}
+              ? t('修复显示会话')
+              : t('重新打开')}
         </Button>
       </div>
     )
@@ -363,7 +367,7 @@ export function HarnessConversation({
   else
     body = (
       <p className="cwn-notice" role="status">
-        正在打开原生子会话…
+        {t('正在打开原生子会话…')}
       </p>
     )
   return (

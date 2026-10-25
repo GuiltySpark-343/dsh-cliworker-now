@@ -22,6 +22,7 @@ import {
 import { shadowHarnessSlot } from './harness-slot-shadow.ts'
 import { useWorkers, value, type API } from './workers.ts'
 import { harnessGoalEditor } from './harness-goal-editor.ts'
+import { t, type MessageKey, useT } from './i18n.ts'
 
 /** Plugin state and CAS only: never reaches Harness goals or its automatic round driver. */
 export function WorkerGoalBar({
@@ -33,6 +34,7 @@ export function WorkerGoalBar({
   binding: HarnessNativeBinding
   bindings: HarnessBindingRegistry
 }) {
+  useT()
   const { snapshot, connecting, error } = useWorkers(api, binding.parentSessionId, binding.workerId!)
   const worker = snapshot.selected?.id === binding.workerId ? snapshot.selected : undefined
   const baseline = JSON.stringify(worker?.goal)
@@ -69,7 +71,7 @@ export function WorkerGoalBar({
   const reason =
     harnessFeatureReason(binding, 'goal') ||
     error ||
-    (connecting || !worker ? '正在读取当前 CLI 目标' : undefined)
+    (connecting || !worker ? t('正在读取当前 CLI 目标') : undefined)
   const run = async (action: 'edit' | 'active' | 'paused' | 'clear') => {
     if (reason || request.current || !worker) return
     const controller = (request.current = new AbortController())
@@ -79,7 +81,7 @@ export function WorkerGoalBar({
     try {
       let next: WorkerGoal | undefined
       if (action === 'edit') {
-        if (!api.cliworker.setWorkerGoal) throw new Error('Host 尚未提供 CLI 目标设置')
+        if (!api.cliworker.setWorkerGoal) throw new Error(t('Host 尚未提供 CLI 目标设置'))
         next = JSON.parse(
           value(
             await api.cliworker.setWorkerGoal(
@@ -92,7 +94,7 @@ export function WorkerGoalBar({
           ),
         )
       } else if (action === 'clear') {
-        if (!api.cliworker.clearWorkerGoal) throw new Error('Host 尚未提供 CLI 目标设置')
+        if (!api.cliworker.clearWorkerGoal) throw new Error(t('Host 尚未提供 CLI 目标设置'))
         value(
           await api.cliworker.clearWorkerGoal(
             binding.parentSessionId,
@@ -102,7 +104,7 @@ export function WorkerGoalBar({
           ),
         )
       } else {
-        if (!api.cliworker.setWorkerGoalStatus) throw new Error('Host 尚未提供 CLI 目标设置')
+        if (!api.cliworker.setWorkerGoalStatus) throw new Error(t('Host 尚未提供 CLI 目标设置'))
         next = JSON.parse(
           value(
             await api.cliworker.setWorkerGoalStatus(
@@ -129,17 +131,17 @@ export function WorkerGoalBar({
   if (!goal && !editing) return null
   const locked = !!reason || pending
   const action = (
-    label: string,
+    key: MessageKey,
     Icon: typeof IconGoalOutlineRegular,
     onClick: () => void,
     disabled = locked,
   ) => (
-    <Tooltip label={reason || label} side="bottom" portal>
+    <Tooltip label={reason || t(key)} side="bottom" portal>
       <span tabIndex={disabled ? 0 : undefined} aria-label={disabled ? reason : undefined}>
         <button
           type="button"
           className="cwn-goal-icon"
-          aria-label={label}
+          aria-label={t(key)}
           disabled={disabled}
           onClick={onClick}
         >
@@ -154,7 +156,7 @@ export function WorkerGoalBar({
         {editing ? (
           <InlineEditor
             value={draft}
-            label="目标"
+            label={t('目标')}
             onChange={setDraft}
             onSave={() => {
               if (!locked) void run('edit')
@@ -169,7 +171,7 @@ export function WorkerGoalBar({
               <IconGoalOutlineRegular size={14} />
             </span>
             <span className="cwn-goal-label">
-              {goal?.status === 'paused' ? '已暂停的目标' : '进行中的目标'}
+              {goal?.status === 'paused' ? t('已暂停的目标') : t('进行中的目标')}
             </span>
             <span className="cwn-goal-objective">{goal?.objective}</span>
           </>

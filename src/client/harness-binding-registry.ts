@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { cliOf, type CliId, type HarnessConversationBinding, type Worker } from '../shared/types.ts'
+import { t } from './i18n.ts'
 
 export type HarnessNativeBinding = HarnessConversationBinding & {
   /** Exact owning Worker; never inferred from a CLI conversation id. */
@@ -23,7 +24,7 @@ export class HarnessBindingRegistry {
   }
   publish(binding: HarnessConversationBinding, worker?: Pick<Worker, 'id' | 'preference' | 'observedModel'>): void {
     if (!binding.sessionId || binding.sessionId === binding.parentSessionId)
-      throw new Error('不能把主会话登记为 CLI 子会话')
+      throw new Error(t('不能把主会话登记为 CLI 子会话'))
     const cliSelection = worker?.preference
       ? {
           cli: cliOf(worker.preference),

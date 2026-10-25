@@ -5,6 +5,8 @@ import type { CliExecutablePathStatus } from '../shared/cli-settings.ts'
 import { operationMessage } from './operation-error.ts'
 import { value, type API } from './workers.ts'
 import { RunningMessageChoice } from './running-message-settings.tsx'
+import { t } from './i18n.ts'
+import { hostText } from './operation-error.ts'
 
 type PathAction = 'manual' | 'refresh' | 'auto'
 function readPath(raw: string, cli: CliId): CliExecutablePathStatus {
@@ -16,7 +18,7 @@ function readPath(raw: string, cli: CliId): CliExecutablePathStatus {
     !['auto', 'manual', 'configured', 'none'].includes(next.source) ||
     (next.error !== undefined && typeof next.error !== 'string')
   )
-    throw new Error('收到不匹配的 CLI 路径信息，请刷新重试')
+    throw new Error(t('收到不匹配的 CLI 路径信息，请刷新重试'))
   return next
 }
 
@@ -125,8 +127,8 @@ export function CliExecutableSettings({
         draftRef.current = next.path
         setDraft(next.path)
       }
-      setError(next.error || (!next.available ? '未找到可用 CLI，请检查路径后重试' : ''))
-      setFeedback(next.available ? (action === 'auto' ? '已恢复自动识别' : 'CLI 路径已刷新') : '')
+      setError(hostText(next.error) || (!next.available ? t('未找到可用 CLI，请检查路径后重试') : ''))
+      setFeedback(next.available ? (action === 'auto' ? t('已恢复自动识别') : t('CLI 路径已刷新')) : '')
       // A saved but unavailable manual path must also invalidate the previous
       // account and models; the Host retains that explicit choice.
       callbacks.current.onApplied()
@@ -141,15 +143,15 @@ export function CliExecutableSettings({
   }
 
   return (
-    <section className="cwn-settings-section" aria-label="高级设置">
+    <section className="cwn-settings-section" aria-label={t('高级设置')}>
       <div className="cwn-settings-section-head">
-        <h3 className="cwn-settings-advanced-heading">高级设置</h3>
+        <h3 className="cwn-settings-advanced-heading">{t('高级设置')}</h3>
         <Button
           type="button"
           variant="ghost"
           size="md"
           className="cwn-settings-advanced-toggle"
-          aria-label="高级设置"
+          aria-label={t('高级设置')}
           aria-expanded={expanded}
           aria-controls={contentId}
           onClick={() => {
@@ -181,9 +183,9 @@ export function CliExecutableSettings({
               />
               <div className="cwn-cli-path-settings">
                 <label className="cwn-setting-row-text" htmlFor={inputId}>
-                  <span>CLI 路径管理</span>
+                  <span>{t('CLI 路径管理')}</span>
                   <span className="cwn-setting-description" id={hintId}>
-                    自动识别安装位置，也可输入 CLI 可执行文件的完整路径。
+                    {t('自动识别安装位置，也可输入 CLI 可执行文件的完整路径。')}
                   </span>
                 </label>
                 <form
@@ -195,13 +197,13 @@ export function CliExecutableSettings({
                   <Input
                     id={inputId}
                     className="cwn-control-input cwn-cli-path-input"
-                    aria-label={`${CLI_LABELS[cli]} CLI 路径`}
+                    aria-label={t('{cli} CLI 路径', { cli: CLI_LABELS[cli] })}
                     aria-describedby={hintId}
                     value={draft}
                     disabled={pathBlocked || saving}
                     spellCheck={false}
                     autoComplete="off"
-                    placeholder="输入 CLI 可执行文件的完整路径"
+                    placeholder={t('输入 CLI 可执行文件的完整路径')}
                     onChange={(event) => {
                       revision.current++
                       draftRef.current = event.target.value
@@ -218,23 +220,23 @@ export function CliExecutableSettings({
                       disabled={pathBlocked || saving}
                       onClick={() => void refresh('auto')}
                     >
-                      恢复自动识别
+                      {t('恢复自动识别')}
                     </Button>
                     <Button
                       type="submit"
                       variant="outline"
                       size="md"
-                      aria-label="刷新 CLI 路径"
+                      aria-label={t('刷新 CLI 路径')}
                       disabled={pathBlocked || saving}
                     >
                       {(loading || saving) && <StateDot state="ongoing" size={14} />}
-                      刷新
+                      {t('刷新')}
                     </Button>
                   </div>
                   <p className="cwn-cli-path-feedback" role="status">
                     {pathBlocked
-                      ? '请先结束当前账号操作或设置保存'
-                      : error || feedback || (loading ? '正在检查 CLI 路径…' : '')}
+                      ? t('请先结束当前账号操作或设置保存')
+                      : error || feedback || (loading ? t('正在检查 CLI 路径…') : '')}
                   </p>
                 </form>
               </div>

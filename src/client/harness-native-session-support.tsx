@@ -6,6 +6,7 @@ import { installHarnessSessionDomGuard, type GuardedNativeControl } from './harn
 import { HarnessNativeTooltips } from './harness-native-tooltip.tsx'
 import { useWorkers, type API } from './workers.ts'
 import type { HarnessWorkerFork } from './harness-worker-fork.tsx'
+import { t } from './i18n.ts'
 
 export function HarnessNativeSessionSupports({
   bindings,
@@ -61,7 +62,7 @@ export function HarnessNativeSessionSupport({
     if (!binding || typeof document === 'undefined') return
     const cut = (button: HTMLButtonElement) => {
       const turn = button.closest('[data-turn-tail]')?.getAttribute('data-turn-tail')
-      return turn == null ? { atMessageId: '', reason: '只能从已完成的助手轮次分支' } : forks!.cut(sessionId, { turn: Number(turn) })
+      return turn == null ? { atMessageId: '', reason: t('只能从已完成的助手轮次分支') } : forks!.cut(sessionId, { turn: Number(turn) })
     }
     return installHarnessSessionDomGuard(document, binding, (next) =>
       setTargets((previous) =>
