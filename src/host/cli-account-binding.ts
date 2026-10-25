@@ -22,7 +22,7 @@ import { readPiOmpAccountMaterial, safePiOmpAncestors } from './pi-omp-native.ts
 import { readOpenCodeProfile, OPENCODE_OAUTH_UNSUPPORTED } from './opencode-native.ts'
 import { openCodeAuthDirectory } from './opencode-adapter.ts'
 import { effectiveHermesHome } from './hermes-account-context.ts'
-import { assertHermesOwnAccounts, hermesPoolEntryUnavailable } from './hermes-models.ts'
+import { assertHermesOwnAccounts, HermesAccountSourceError, hermesPoolEntryUnavailable } from './hermes-models.ts'
 import { HermesNousError, selectHermesNousSource } from './hermes-nous.ts'
 import { hermesUnsuppressedEnvironment, projectHermesUnsuppressedAuth } from './hermes-suppression.ts'
 import { readZCodeBindingMaterial, zcodeAuthDirectory } from './zcode-adapter.ts'
@@ -598,6 +598,8 @@ export async function readCliAccountBinding(
       || error instanceof QoderAccountError
     )
       throw error
+    // Keep the binding contract (CLI_OWN_ACCOUNT_REQUIRED) with the actionable reason.
+    if (error instanceof HermesAccountSourceError) throw new CliAccountBindingError(cli, error.message)
     throw new CliAccountBindingError(cli)
   }
 }

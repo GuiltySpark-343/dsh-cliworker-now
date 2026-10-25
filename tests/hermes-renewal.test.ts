@@ -16,7 +16,8 @@ import { readCliAccountBinding } from '../src/host/cli-account-binding.ts'
 import { discoverHermes, prepareHermes } from '../src/host/hermes-adapter.ts'
 import { DEFAULT_CONFIG, ProcessCleanupUnconfirmedError, type ProcessBackend } from '../src/host/process.ts'
 import { AccountManager } from '../src/host/accounts.ts'
-import { effectiveHermesHome } from '../src/host/hermes-account-context.ts'
+import { effectiveHermesHome, prepareHermesAccountHome } from '../src/host/hermes-account-context.ts'
+import { HermesAccountSourceError } from '../src/host/hermes-models.ts'
 import { hermesNativeCommand } from '../src/host/hermes-installation.ts'
 
 vi.mock('../src/host/hermes-installation.ts', async (load) => ({
@@ -493,5 +494,98 @@ describe('shared native Hermes Nous renewal', () => {
     })
     expect(launch.argv).toContain('chat')
     expect(bo.spawn).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Native credential_pool._seed_copilot_singleton writes this row (no secret, only a
+// fingerprint) into any HERMES_HOME whenever a picker loads the Copilot pool while the
+// user's `gh` CLI is logged in, regardless of auth.adopt_external_logins. Synthetic data.
+const ambientCopilot = {
+  id: 'synthetic-copilot',
+  label: 'gh auth token',
+  auth_type: 'api_key',
+  priority: 0,
+  source: 'gh_cli',
+  base_url: 'https://api.githubcopilot.com',
+  request_count: 0,
+  secret_fingerprint: 'synthetic-fingerprint',
+}
+function terminalBackend(b: ProcessBackend) {
+  const output = new PassThrough()
+  const done = deferred<any>()
+  const spawnTerminal = vi.fn(
+    async () =>
+      ({
+        pid: 100,
+        output,
+        done: done.promise,
+        write: vi.fn(async () => {}),
+        resize: vi.fn(async () => {}),
+        terminate: vi.fn(async () => {
+          output.end()
+          done.resolve({ exitCode: 0, signal: null })
+        }),
+      }) as any,
+  )
+  return { ...b, spawnTerminal }
+}
+
+describe('Hermes ambient Copilot row seeded by the native picker', () => {
+  it('still renews an expired own Nous login and reports it authenticated', async () => {
+    const f = fixture(),
+      b = backend(f)
+    f.raw.credential_pool.copilot = [ambientCopilot]
+    f.save()
+    await start(f, b)
+    expect(b.spawn).toHaveBeenCalledTimes(1)
+    const manager = new AccountManager(b, f.runtime)
+    managers.push(manager)
+    expect((await manager.status('hermes', f.home, signal())).state).toBe('authenticated')
+    expect(b.spawn).toHaveBeenCalledTimes(1)
+  })
+  it('opens the account terminal on the plugin home that already holds the row', async () => {
+    const f = fixture(600),
+      b = backend(f)
+    const own = prepareHermesAccountHome(f.runtime)
+    writeFileSync(join(own, 'config.yaml'), JSON.stringify(f.config), { mode: 0o600 })
+    writeFileSync(
+      join(own, 'auth.json'),
+      JSON.stringify({ ...f.raw, credential_pool: { ...f.raw.credential_pool, copilot: [ambientCopilot] } }),
+      { mode: 0o600 },
+    )
+    const host = terminalBackend(b)
+    const manager = new AccountManager(host, f.runtime)
+    managers.push(manager)
+    for (const action of ['login', 'manage'] as const) {
+      const terminal = await manager.start('synthetic-parent', 'hermes', action, f.home, signal())
+      await manager.stop('synthetic-parent', terminal.id)
+    }
+    expect(host.spawnTerminal).toHaveBeenCalledTimes(2)
+  })
+  it.each([
+    ['model', { provider: 'copilot', default: 'synthetic/model' }],
+    ['auxiliary', { vision: { provider: 'copilot' } }],
+    ['fallback_providers', ['copilot']],
+  ])('keeps refusing the gh login once %s selects Copilot, with a specific reason', async (key, value) => {
+    const f = fixture(),
+      b = backend(f)
+    const config: any = { ...f.config, [key]: value }
+    if (key === 'model') f.raw.active_provider = 'copilot'
+    writeFileSync(join(f.home, 'config.yaml'), JSON.stringify(config))
+    f.raw.credential_pool.copilot = [ambientCopilot]
+    f.save()
+    const manager = new AccountManager(terminalBackend(b), f.runtime)
+    managers.push(manager)
+    if (key !== 'model') {
+      await expect(start(f, b)).rejects.toBeInstanceOf(HermesAccountSourceError)
+      expect(await manager.status('hermes', f.home, signal())).toMatchObject({
+        state: 'unavailable',
+        summary: 'Hermes 含外部账号来源，请使用自身登录',
+      })
+    }
+    expect(b.spawn).not.toHaveBeenCalled()
+    await expect(
+      manager.start('synthetic-parent', 'hermes', 'logout', f.home, signal()),
+    ).rejects.toThrow('Hermes 含外部账号来源，请使用自身登录')
   })
 })

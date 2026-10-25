@@ -2639,3 +2639,11 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 用户要求待核实轮次不显示「处理失败 / CLI_RUN_FAILED」（b5f50f2）：Harness 只有 stop/tool-calls/max-tokens/aborted/error 五种结束原因，error 固定渲染为处理失败；改为 uncertain 与 completed 同样以 stop 收尾，说明由插件已有警示提示显示。新增流测试（撤掉修改时失败）；相关 80 个测试文件 1341 通过、4 跳过；`build:preview`、正式构建、OpenSpec 严格校验 27/27 通过。
 - Desktop 复验（新 Host 15:05，ZCode 沿用 GLM-5.3-Flash·Low）：任务卡「结果待核实」，详情只有待核实警示，未见处理失败、本轮运行失败或 CLI_RUN_FAILED；Worker `uncertain`，deny.txt 实际为 alpha、beta、gamma。主 Agent 独立读文件后报告为“已完成”，并注明后台状态为待核实。
 
+## 2026-10-25 Hermes 账号终端空白与无法续期（`claude/fix-hermes-account-8d26ac`，未发布）
+
+- 现象：Hermes 登录设置的账号终端空白，提示「无法启动账号终端，请检查 CLI 安装」；此前账号显示过期，点登录后提示无法续期。其他 CLI 正常。
+- 根因（本机只读核查，未打印凭据）：Hermes Agent v0.21.7 安装正常（入口校验、`hermesNativeCommand` 均通过）。插件账号目录 `~/.dsh/cliworker-now/accounts/hermes/auth.json` 的凭据池多了 `copilot` 记录（`source: gh_cli`、`api_key`，只有指纹无令牌），14:59 由原生 Hermes 进程写入（agent.log 同刻记录）。原生 `_seed_copilot_singleton` 在 `gh` 已登录时写入该记录，不受 `adopt_external_logins: false` 约束，未选择 Copilot 时不路由模型。插件 `assertHermesOwnAccounts` 把它当外部账号拒绝：账号终端准备阶段的普通 Error 被统一改写成「检查 CLI 安装」；状态查询的续期快照同样被拒，被改写成「Hermes 登录暂时无法续期，请稍后刷新」。在该目录用复现脚本调用 `prepareHermesAccount` 得到「Hermes 含外部账号来源，请使用自身登录」。
+- 续期链路干跑：用真实插件账号目录运行 `hermes-nous-refresh.py` 的 `_run`，原生刷新函数替换为桩：配置、主体摘要、凭据池与 shared 镜像一致性、原生锁及 API 签名全部通过，到达刷新调用；`auth.json` 修改时间不变。另以错误摘要调用 `--cliworker-nous-refresh` 返回 `changed`、退出码 0。说明除插件守卫外续期无其他阻断。
+- 修复：放行未被选择的环境 Copilot 记录（`auth.active_provider` 或 `config.yaml` 任意位置为 `copilot` 即视为已选择，仍拒绝）；守卫拒绝改为 `HermesAccountSourceError`，账号终端、状态、续期、绑定显示真实原因；Client 启动白名单与英文词典补充固定文案。OpenSpec `fix-hermes-ambient-copilot-source`。
+- 实际执行：`tests/hermes-renewal.test.ts` 新增 5 项（撤掉守卫修复时 5 项全部失败）；Hermes/账号/绑定/i18n 相关 31 个测试文件 **628 通过、1 跳过**；`node scripts/build-preview.mjs` 通过；`build.mjs --typecheck-only` 的 Host 部分通过，Client 部分在本工作树报 9 个错误，均因自引用 `dsh-cliworker-now/remote` 声明需正式构建生成（报错文件均未改动），未在正式构建后复核；OpenSpec 严格校验 28/28。
+- 未执行：正式构建与 DSH Desktop 实机（账号终端出现原生菜单）；真实 Nous 续期（会消耗一次性刷新令牌，需用户在 Desktop 操作；若服务端拒绝，应显示需重新登录并能打开登录终端）。插件账号目录中的 `copilot` 记录保留未动。

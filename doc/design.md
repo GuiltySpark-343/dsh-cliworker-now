@@ -1121,3 +1121,10 @@ OpenSpec 变更 `report-denied-permission-as-unverified`。
 - 被拒绝工具因拒绝报告的失败不单独判失败：ZCode 按请求与 `permission.resolved` 的 `toolCallId`（批次 `errorCount` 只扣除批内被拒工具），ACP 按 `toolCall.toolCallId`，Codex 按审批 `itemId`（`declined` 完成）。Hermes 与原生 HTTP 会话系审批不带工具身份，有拒绝时整体为结果待核实。
 - Claude Code 拒绝即中断本轮，仍为失败；需要额外交互输入的请求仍为失败。
 - 起因：实测 ZCode shell 被拒后改用编辑工具完成，任务却显示失败。
+
+## 2026-10-25 Hermes 原生环境 Copilot 记录不再阻断自身账号（未发布）
+
+OpenSpec 变更 `fix-hermes-ambient-copilot-source`。
+
+- 原生 Hermes 在 `gh` 已登录时，会把无令牌的 `copilot`/`gh_cli`/`api_key` 记录写进任何 HERMES_HOME（不受 `auth.adopt_external_logins` 约束），未选择 Copilot 时不路由模型。插件守卫此前把它当成外部账号，导致账号终端误报「检查 CLI 安装」、Nous 续期误报「稍后刷新」。
+- 现在只放行该形态且未被 `auth.active_provider` 或 `config.yaml` 任何位置选择的记录；选择 Copilot 后仍拒绝。守卫拒绝改为固定文案的 `HermesAccountSourceError`，在账号终端、状态、续期与绑定中显示真实原因。
