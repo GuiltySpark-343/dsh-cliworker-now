@@ -2654,5 +2654,5 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 根因：抓取账号终端进程环境，`NO_PROXY`/`no_proxy` 为 `localhost,127.0.0.1,::1,.local,[::1]`（Desktop 主进程只有 `::1`，`[::1]` 由 DSH 发布给子进程的代理环境追加）。Hermes 自带 httpx 0.28.1 遇 `[::1]` 抛 `InvalidURL: Invalid port: ':1]'`，裸 `::1` 正常；插件续期子进程同样继承，异常被归为 unavailable。插件 Nous 账号访问令牌 2026-10-20 过期、刷新令牌仍在；主会话在干净环境运行同一续期操作返回 ready（真实刷新成功并保存，用户已授权验证）。
 - 修复：`hermesAccountEnvironment` 合入 `hermesNoProxyEnvironment`，把带括号/端口/CIDR 的 IPv6 旁路改为裸地址并去重（与 Hermes 自身规则一致），覆盖账号终端、续期与任务运行。OpenSpec `fix-hermes-bracketed-ipv6-no-proxy`。
 - 验证：`tests/hermes-no-proxy.test.ts` 4 项；Hermes/账号/绑定相关 44 个测试文件（957 通过、1 跳过）；`build:preview`、正式构建、OpenSpec 严格校验 29/29。Desktop 重启（新 Host 15:38）：终端进程 NO_PROXY 不再含 `[::1]`；状态「Nous账号登录」；选择 Nous Portal 后出现模型列表，无 Invalid port；未选模型，config.yaml 未变。
-- 未执行：修复后插件自身触发的过期续期（需令牌再次过期）；设置页 Hermes 模型下拉持续显示「正在读取 Hermes Agent 模型…」是否为独立问题未查。
+- 未执行：修复后插件自身触发的过期续期（需令牌再次过期）；设置页 Hermes 模型下拉曾持续显示「正在读取 Hermes Agent 模型…」，用户自行检查后确认没有问题。
 

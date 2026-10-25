@@ -13,4 +13,4 @@
 - [x] 3.1 Desktop 重启后：Hermes 状态不再显示“暂时无法续期”，账号终端选择 Nous Portal 不再报 `Invalid port`。
   - 2026-10-25 新 Host 15:38（e923fee）：账号终端进程环境 `NO_PROXY`/`no_proxy` 为 `localhost,127.0.0.1,::1,.local`（此前带 `[::1]`），代理地址不变；状态为「Nous账号登录」；选择 Nous Portal 后显示 Current model / Active provider 与模型列表，未出现 Could not verify credentials 或 Invalid port；未选模型即关闭，config.yaml 未变。
   - 说明：本次过期令牌的续期由主会话在干净环境中运行同一续期操作完成（回执 ready）；修复后由插件自身触发的续期尚未在真实过期场景复验（需等令牌再次过期）。
-- [ ] 3.2 设置页 Hermes 模型下拉曾持续显示「正在读取 Hermes Agent 模型…」，未确认是否为独立问题。
+- [x] 3.2 设置页 Hermes 模型下拉曾持续显示「正在读取 Hermes Agent 模型…」：用户 2026-10-25 自行检查后确认没有问题，未改代码。
