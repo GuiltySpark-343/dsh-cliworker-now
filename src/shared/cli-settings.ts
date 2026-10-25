@@ -8,12 +8,18 @@ export interface CliSettings {
 /** Bounds shared by the Host schema and the settings control. */
 export const MAX_CONCURRENT_LIMIT = 8
 
+/** `follow` uses the current DSH language; the others override it for this plugin only. */
+export const LANGUAGE_PREFERENCES = ['follow', 'zh', 'en'] as const
+export type LanguagePreference = (typeof LANGUAGE_PREFERENCES)[number]
+
 /** Profile-wide plugin settings shown on the CLI Worker settings page. */
 export interface GeneralSettings {
   /** Effective admission limit shared by all CLIs. */
   maxConcurrent: number
   /** Deployment value used when the user has not chosen one. */
   defaultMaxConcurrent: number
+  /** Interface language preference; `follow` when never chosen. */
+  language: LanguagePreference
 }
 
 /** Machine-local executable selection; separate from project model preferences. */

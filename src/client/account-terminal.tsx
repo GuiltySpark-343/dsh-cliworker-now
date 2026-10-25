@@ -8,6 +8,8 @@ import { value, type API } from './workers.ts'
 import { accountTerminalCSS } from './account-terminal-css.ts'
 import { createZcodeLoginLinkParser } from './zcode-login-link.ts'
 import { createZcodeLoginLinkProvider } from './zcode-login-link-provider.ts'
+import { t, type MessageKey, useT } from './i18n.ts'
+import { hostText } from './operation-error.ts'
 
 const STARTUP_TIMEOUT_MS = 20_000
 const CLEANUP_TIMEOUT_MS = 12_000
@@ -36,7 +38,7 @@ export type AccountCloseControl = MutableRefObject<(() => Promise<boolean>) | un
 // cross this boundary; never display arbitrary exception text from a CLI.
 function startupMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : ''
-  const safe = [
+  const safe: MessageKey[] = [
     '此 CLI 已有账号终端，请先关闭后重试',
     '当前宿主不支持交互终端',
     '账号终端尚未确认完全退出，请重启应用',
@@ -63,9 +65,9 @@ function startupMessage(error: unknown): string {
     'Windows CLI 安装目录配置无效',
     'Windows 系统目录配置无效',
   ]
-  return (
+  return t(
     safe.find((item) => message === item || message === `Error: ${item}`) ??
-    '账号终端暂不可用，请确认此 CLI 没有运行任务且当前项目允许执行，再重试'
+      '账号终端暂不可用，请确认此 CLI 没有运行任务且当前项目允许执行，再重试',
   )
 }
 
@@ -105,6 +107,7 @@ export function AccountTerminal({
   onFinished: () => void
   closeControl?: AccountCloseControl
 }) {
+  useT()
   const element = useRef<HTMLDivElement>(null)
   const callbacks = useRef({ onClose, onFinished })
   callbacks.current = { onClose, onFinished }
@@ -193,7 +196,7 @@ export function AccountTerminal({
         finish(true)
       }
       void stopSession().catch(() => {
-        if (alive) setNotice('终端尚未完成清理，请点击关闭终端后重试')
+        if (alive) setNotice(t('终端尚未完成清理，请点击关闭终端后重试'))
       })
       void disposeStream().catch(() => undefined)
     }
@@ -248,7 +251,7 @@ export function AccountTerminal({
           // browser handler on both Mac and Windows; no shell command is used.
           window.open(url, '_blank', 'noopener,noreferrer')
         } catch {
-          setNotice('无法打开登录网页，请在终端中查看原生登录提示')
+          setNotice(t('无法打开登录网页，请在终端中查看原生登录提示'))
         }
       }
       if (loginLinkParser)
@@ -258,7 +261,7 @@ export function AccountTerminal({
       const pasteText = (text: string) => {
         if (!canWrite()) return
         if (!text) {
-          setNotice('剪贴板中没有可粘贴的文本')
+          setNotice(t('剪贴板中没有可粘贴的文本'))
           return
         }
         setNotice('')
@@ -278,14 +281,14 @@ export function AccountTerminal({
           try {
             const copied = await writeClipboard(text)
             if (!canCopy()) return
-            if (!copied) setNotice('复制失败，请重新选择文本后重试')
+            if (!copied) setNotice(t('复制失败，请重新选择文本后重试'))
             else {
               setNotice('')
               view.clearSelection()
               view.focus()
             }
           } catch {
-            if (canCopy()) setNotice('复制失败，请重新选择文本后重试')
+            if (canCopy()) setNotice(t('复制失败，请重新选择文本后重试'))
           } finally {
             readingClipboard = false
           }
@@ -298,7 +301,7 @@ export function AccountTerminal({
           const text = await navigator.clipboard.readText()
           pasteText(text)
         } catch {
-          if (canWrite()) setNotice('无法读取剪贴板，请聚焦终端后按 Ctrl+V（Mac 为 ⌘V）粘贴')
+          if (canWrite()) setNotice(t('无法读取剪贴板，请聚焦终端后按 Ctrl+V（Mac 为 ⌘V）粘贴'))
         } finally {
           readingClipboard = false
         }
@@ -320,7 +323,7 @@ export function AccountTerminal({
         event.stopPropagation()
         if (!canWrite()) return
         if (!event.clipboardData) {
-          setNotice('无法读取粘贴内容，请右键重试')
+          setNotice(t('无法读取粘贴内容，请右键重试'))
           return
         }
         pasteText(event.clipboardData.getData('text/plain'))
@@ -340,7 +343,7 @@ export function AccountTerminal({
             cursorAccent: css.getPropertyValue('--dsw-alias-bg-layer-2').trim() || '#ffffff',
           }
         } catch {
-          fail('账号终端显示未能初始化，请重试')
+          fail(t('账号终端显示未能初始化，请重试'))
         }
       }
       theme()
@@ -359,7 +362,7 @@ export function AccountTerminal({
             if (id && !startup.signal.aborted)
               void api.cliworker.accountResize(sessionId, id, view.cols, view.rows).catch(() => undefined)
           } catch {
-            fail('账号终端显示未能初始化，请重试')
+            fail(t('账号终端显示未能初始化，请重试'))
           }
         })
       }
@@ -370,7 +373,7 @@ export function AccountTerminal({
         if (!canWrite()) return
         const bytes = new TextEncoder().encode(data).byteLength
         if (queuedBytes + bytes > MAX_INPUT_BYTES) {
-          setNotice('输入过长或仍在发送，请缩短内容后重试')
+          setNotice(t('输入过长或仍在发送，请缩短内容后重试'))
           return
         }
         queuedBytes += bytes
@@ -380,18 +383,19 @@ export function AccountTerminal({
               value(await api.cliworker.accountWrite(sessionId, id, data))
           })
           .catch(() => {
-            if (alive) setNotice('输入未能送达，请关闭终端后重试')
+            if (alive) setNotice(t('输入未能送达，请关闭终端后重试'))
           })
           .finally(() => {
             queuedBytes -= bytes
           })
       })
       startupTimer = setTimeout(() => {
-        fail('启动超过 20 秒，已取消本次请求。请确认 CLI 可用后重试')
+        fail(t('启动超过 20 秒，已取消本次请求。请确认 CLI 可用后重试'))
       }, STARTUP_TIMEOUT_MS)
       void (async () => {
         try {
           if (provider && typeof api.cliworker.accountStartForProvider !== 'function')
+            // Matched by startupMessage's allowlist, which translates it.
             throw new Error('当前插件 Host 不支持 ZCode 授权来源选择，请更新插件后重试')
           const result = JSON.parse(
             value(
@@ -416,7 +420,7 @@ export function AccountTerminal({
           const accountStream = api.$stream<string>({
             name: 'CLI 账号终端',
             open: (signal) => api.cliworker.accountWatch(sessionId, id, signal),
-            ended: () => new Error('账号终端连接已结束'),
+            ended: () => new Error(t('账号终端连接已结束')),
           })
           stream = accountStream
           for await (const item of accountStream) {
@@ -434,7 +438,7 @@ export function AccountTerminal({
                   }
                 }
               }
-              if (frame.message) setNotice(frame.message)
+              if (frame.message) setNotice(hostText(frame.message))
             }
             item.accept()
             if (frame.status === 'closed' || frame.status === 'failed') {
@@ -444,7 +448,7 @@ export function AccountTerminal({
             }
           }
           if (!ended) {
-            if (alive) setNotice('账号终端连接已结束，请重试')
+            if (alive) setNotice(t('账号终端连接已结束，请重试'))
             finish(true)
             void stopSession().catch(() => undefined)
           }
@@ -462,7 +466,7 @@ export function AccountTerminal({
         }
       })()
     } catch {
-      fail('账号终端显示未能初始化，请重试')
+      fail(t('账号终端显示未能初始化，请重试'))
       disposeView()
       focus.current = () => {}
       contextClipboard.current = async () => {}
@@ -493,7 +497,7 @@ export function AccountTerminal({
       } catch {
         if (generation.current !== ownGeneration) return false
         setPhase('failed')
-        setNotice('终端关闭失败，请重试')
+        setNotice(t('终端关闭失败，请重试'))
         return false
       }
     })()
@@ -516,22 +520,22 @@ export function AccountTerminal({
       <style>{accountTerminalCSS}</style>
       <style>{`.cwn-account-terminal-view:focus-within { outline: none; }`}</style>
       <div className="cwn-account-terminal-head">
-        <strong>{CLI_LABELS[cli]} 账号终端</strong>
+        <strong>{t('{cli} 账号终端', { cli: CLI_LABELS[cli] })}</strong>
         <Button variant="ghost" size="md" onClick={() => void close()} disabled={phase === 'stopping'}>
-          关闭终端
+          {t('关闭终端')}
         </Button>
       </div>
       {(phase === 'loading' || phase === 'stopping') && (
         <div className="cwn-loading" role="status">
           <StateDot state="ongoing" size={14} />
-          {phase === 'loading' ? '正在启动账号终端…' : '正在关闭终端…'}
+          {phase === 'loading' ? t('正在启动账号终端…') : t('正在关闭终端…')}
         </div>
       )}
-      {instruction && <p className="cwn-account-instruction">{instruction}</p>}
+      {instruction && <p className="cwn-account-instruction">{hostText(instruction)}</p>}
       <div
         className="cwn-account-terminal-view"
         ref={element}
-        aria-label={`${CLI_LABELS[cli]} 原生账号终端`}
+        aria-label={t('{cli} 原生账号终端', { cli: CLI_LABELS[cli] })}
         onClick={() => focus.current()}
         onContextMenuCapture={(event) => {
           event.preventDefault()
@@ -541,7 +545,7 @@ export function AccountTerminal({
       />
       {(phase === 'failed' || phase === 'closed') && (
         <Button variant="ghost" size="md" onClick={() => void close(true)}>
-          {phase === 'closed' ? '重新打开终端' : '重试'}
+          {phase === 'closed' ? t('重新打开终端') : t('重试')}
         </Button>
       )}
       {notice && (

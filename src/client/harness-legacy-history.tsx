@@ -4,8 +4,10 @@ import type { HistoryPage, QueuedFollowup, TimelineItem, Worker } from '../share
 import { ConversationTimeline } from './conversation-timeline.tsx'
 import { operationMessage } from './operation-error.ts'
 import { value, type API } from './workers.ts'
+import { t, type MessageKey, useT } from './i18n.ts'
+import { hostText } from './operation-error.ts'
 
-export const harnessLegacyHistoryNotice = '原生对话从本次挂接开始；更早记录见旧历史。'
+export const harnessLegacyHistoryNotice: MessageKey = '原生对话从本次挂接开始；更早记录见旧历史。'
 
 /** Reads the existing WorkerStorage Gateway only; never imports, copies or replays a turn. */
 export function HarnessLegacyHistory({
@@ -23,6 +25,7 @@ export function HarnessLegacyHistory({
   truncated: boolean
   queuedFollowups?: readonly QueuedFollowup[]
 }) {
+  useT()
   const [opened, setOpened] = useState<{ items: TimelineItem[]; truncated: boolean; queuedFollowups: readonly QueuedFollowup[] }>()
   const [page, setPage] = useState<HistoryPage>()
   const [error, setError] = useState('')
@@ -49,7 +52,7 @@ export function HarnessLegacyHistory({
       const next = JSON.parse(
         value(await api.cliworker.history(parentSessionId, worker.id, anchor, direction)),
       ) as HistoryPage
-      if (next.workerId !== worker.id || !Array.isArray(next.items)) throw new Error('收到不匹配的旧历史记录')
+      if (next.workerId !== worker.id || !Array.isArray(next.items)) throw new Error(t('收到不匹配的旧历史记录'))
       if (!controller.signal.aborted) setPage(next)
     } catch (cause) {
       if (!controller.signal.aborted) setError(operationMessage(cause))
@@ -62,7 +65,7 @@ export function HarnessLegacyHistory({
   }
   return (
     <>
-      <p>{harnessLegacyHistoryNotice}</p>
+      <p>{t(harnessLegacyHistoryNotice)}</p>
       <Button
         type="button"
         size="sm"
@@ -73,25 +76,25 @@ export function HarnessLegacyHistory({
           setError('')
         }}
       >
-        旧历史
+        {t('旧历史')}
       </Button>
       <Modal
         open={!!opened}
-        title="旧历史"
-        closeLabel="关闭旧历史"
+        title={t('旧历史')}
+        closeLabel={t('关闭旧历史')}
         onClose={close}
         className="cwn-legacy-history-dialog"
         contentClassName="cwn-legacy-history-content"
       >
-        <p>此处只读原 Worker 记录，不重新发送任务。页面保持本次读取时的内容。</p>
+        <p>{t('此处只读原 Worker 记录，不重新发送任务。页面保持本次读取时的内容。')}</p>
         {!!opened?.queuedFollowups.length && (
-          <section aria-label="只读旧待发消息">
-            <p>旧待发消息仅供核对，不会加入原生队列或自动发送。</p>
+          <section aria-label={t('只读旧待发消息')}>
+            <p>{t('旧待发消息仅供核对，不会加入原生队列或自动发送。')}</p>
             <ul>{opened.queuedFollowups.map((item) => (
               <li key={item.id}>
-                <span>{item.state === 'paused' ? '已暂停' : '旧待发消息'}</span>
+                <span>{item.state === 'paused' ? t('已暂停') : t('旧待发消息')}</span>
                 <p style={{ whiteSpace: 'pre-wrap' }}>{item.prompt}</p>
-                {item.pauseReason && <small>{item.pauseReason}</small>}
+                {item.pauseReason && <small>{hostText(item.pauseReason)}</small>}
               </li>
             ))}</ul>
           </section>
@@ -104,7 +107,7 @@ export function HarnessLegacyHistory({
             disabled={pending || !(page?.hasOlder ?? opened?.truncated) || !visible.length}
             onClick={() => void load('before')}
           >
-            更早记录
+            {t('更早记录')}
           </Button>
           <Button
             type="button"
@@ -113,7 +116,7 @@ export function HarnessLegacyHistory({
             disabled={pending || !page?.hasNewer || !visible.length}
             onClick={() => void load('after')}
           >
-            较新记录
+            {t('较新记录')}
           </Button>
           {page && (
             <Button
@@ -126,23 +129,23 @@ export function HarnessLegacyHistory({
                 setError('')
               }}
             >
-              返回打开时记录
+              {t('返回打开时记录')}
             </Button>
           )}
           <span>
             {pending
-              ? '正在读取…'
+              ? t('正在读取…')
               : page
-                ? `历史记录 ${page.start + 1}–${page.end} · 读取时共 ${page.total} 条`
-                : '本次打开时的最近记录'}
+                ? t('历史记录 {start}–{end} · 读取时共 {total} 条', { start: page.start + 1, end: page.end, total: page.total })
+                : t('本次打开时的最近记录')}
           </span>
         </div>
         {error && <p role="alert">{error}</p>}
-        <div className="cwn-legacy-history-rows" aria-label="只读旧历史">
+        <div className="cwn-legacy-history-rows" aria-label={t('只读旧历史')}>
           {visible.length ? (
             <ConversationTimeline items={visible} latestItems={visible} />
           ) : (
-            <p>没有可显示的旧记录。</p>
+            <p>{t('没有可显示的旧记录。')}</p>
           )}
         </div>
       </Modal>

@@ -13,7 +13,9 @@ import {
   processContent,
 } from './worker-process.tsx'
 import { useNativePresentation } from './native-presentation.tsx'
-const markdownLabels = { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '脚注' }
+import { formatLocale, t, useT } from './i18n.ts'
+import { hostText } from './operation-error.ts'
+const markdownLabels = () => ({ code: { copyLabel: t('复制'), copiedLabel: t('已复制') }, footnotes: t('脚注') })
 export function ConversationTimeline({
   items,
   latestItems = items,
@@ -25,6 +27,7 @@ export function ConversationTimeline({
   worker?: Worker
   messageFeedback?: Record<string, ReactNode>
 }) {
+  const t = useT()
   const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({})
   const policy = useNativePresentation()
   // Match rc.2 UserMessageNodeView / TurnTailNodeView. A newer user turn
@@ -103,7 +106,7 @@ export function ConversationTimeline({
               >
                 <div className={item.kind === 'assistant' ? 'cwn-markdown' : 'cwn-text'}>
                   {item.kind === 'assistant' ? (
-                    <MarkdownText text={item.text} labels={markdownLabels} />
+                    <MarkdownText text={item.text} labels={markdownLabels()} />
                   ) : (
                     item.text
                   )}
@@ -116,25 +119,25 @@ export function ConversationTimeline({
                 >
                   <div className="cwn-message-label">
                     <span className="cwn-sr-only">
-                      {item.kind === 'user' ? '你' : worker ? CLI_LABELS[cliOf(worker.preference)] : 'CLI'}
+                      {item.kind === 'user' ? t('你') : worker ? CLI_LABELS[cliOf(worker.preference)] : 'CLI'}
                     </span>
                     {item.kind === 'assistant' && item.text && (
-                      <CopyText text={item.text} label="复制回复" iconOnly />
+                      <CopyText text={item.text} label={t('复制回复')} iconOnly />
                     )}
                     {item.kind === 'assistant' && <UsageIndicator usage={item.usage} providerCredits={item.providerCredits} creditsBased={worker?.preference.cli === 'qoder' || worker?.preference.cli === 'qodercn'} reply />}
-                    <time dateTime={item.time} title={new Date(item.time).toLocaleString('zh-CN')}>
+                    <time dateTime={item.time} title={new Date(item.time).toLocaleString(formatLocale())}>
                       {messageClock(item.time)}
                     </time>
                     {item.kind === 'user' && item.text && (
-                      <CopyText text={item.text} label="复制消息" iconOnly />
+                      <CopyText text={item.text} label={t('复制消息')} iconOnly />
                     )}
                   </div>
                   {messageFeedback?.[item.id] ??
                     (item.kind === 'user' && item.deliveryState && item.deliveryState === 'failed' ? (
                       <span role="status">
                         {item.deliveryError?.includes('结果待确认')
-                          ? item.deliveryError
-                          : `发送失败：${item.deliveryError || '插队未完成'}`}
+                          ? hostText(item.deliveryError)
+                          : t('发送失败：{reason}', { reason: hostText(item.deliveryError) || t('插队未完成') })}
                       </span>
                     ) : null)}
                 </div>

@@ -1,6 +1,8 @@
 import type { HarnessConversationBinding, HarnessConversationFeature } from '../shared/types.ts'
+import { t, type MessageKey } from './i18n.ts'
+import { hostText } from './operation-error.ts'
 
-const reasons: Partial<Record<HarnessConversationFeature, string>> = {
+const reasons: Partial<Record<HarnessConversationFeature, MessageKey>> = {
   goal: '当前 CLI 不支持目标',
   plan: '当前 CLI 不支持规划模式',
   feedback: '当前 CLI 不支持反馈',
@@ -14,10 +16,10 @@ export function harnessFeatureReason(
 ) {
   return binding.capabilities[feature]
     ? undefined
-    : binding.reasons?.[feature] || reasons[feature] || '当前 CLI 不支持此功能'
+    : hostText(binding.reasons?.[feature]) || t(reasons[feature] ?? '当前 CLI 不支持此功能')
 }
 
 /** Without plan mode, accept-edits is the only permission mode, so there is nothing to switch. */
 export function harnessPermissionReason(binding: HarnessConversationBinding) {
-  return binding.capabilities.plan ? undefined : '当前 CLI 只有“允许编辑”一种权限模式'
+  return binding.capabilities.plan ? undefined : t('当前 CLI 只有“允许编辑”一种权限模式')
 }

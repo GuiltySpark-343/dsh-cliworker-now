@@ -40,7 +40,29 @@ it('persists the shared concurrency limit privately and restores the deployment 
   expect(storage.generalSettings()).toEqual({})
 })
 
-it.each([{ maxConcurrent: 0 }, { maxConcurrent: 9 }, { maxConcurrent: 2.5 }, { unknown: true }, null])(
+it('persists the interface language next to the limit and restores follow on null', () => {
+  const state = join(directory(), 'state')
+  let storage = new WorkerStorage(state)
+  storage.setGeneralSettings({ maxConcurrent: 2 })
+  expect(storage.setGeneralSettings({ language: 'en' })).toEqual({ maxConcurrent: 2, language: 'en' })
+  if (process.platform !== 'win32') expect(statSync(join(state, 'general-settings.json')).mode & 0o777).toBe(0o600)
+  storage.close()
+  storage = new WorkerStorage(state)
+  cleanup.push(() => storage.close())
+  expect(storage.generalSettings()).toEqual({ maxConcurrent: 2, language: 'en' })
+  expect(storage.setGeneralSettings({ language: null })).toEqual({ maxConcurrent: 2 })
+})
+
+it.each([
+  { maxConcurrent: 0 },
+  { maxConcurrent: 9 },
+  { maxConcurrent: 2.5 },
+  { unknown: true },
+  null,
+  { language: 'fr' },
+  { language: '' },
+  { language: 1 },
+])(
   'rejects an invalid patch without changing the stored value (%j)',
   (patch) => {
     const storage = new WorkerStorage(join(directory(), 'state'))
@@ -77,9 +99,20 @@ it('uses the saved limit over the config and admits queued work as soon as it is
   runtime.submit(worker.parentSessionId, project, worker.title, 'synthetic continuation', worker.preference,
     worker.mode, worker.id, undefined, 'synthetic-account')
   await vi.waitFor(() => expect(storage.workers.get(worker.id)?.status).toBe('queued'))
-  expect(runtime.generalSettings()).toEqual({ maxConcurrent: 0, defaultMaxConcurrent: 0 })
+  expect(runtime.generalSettings()).toEqual({ maxConcurrent: 0, defaultMaxConcurrent: 0, language: 'follow' })
   expect(backend.resolveExecutable).not.toHaveBeenCalled()
 
-  expect(runtime.setGeneralSettings({ maxConcurrent: 1 })).toEqual({ maxConcurrent: 1, defaultMaxConcurrent: 0 })
+  expect(runtime.setGeneralSettings({ maxConcurrent: 1 })).toEqual({ maxConcurrent: 1, defaultMaxConcurrent: 0, language: 'follow' })
   await vi.waitFor(() => expect(storage.workers.get(worker.id)?.status).not.toBe('queued'))
+})
+
+it('streams a saved interface language to every snapshot and omits follow', () => {
+  const storage = new WorkerStorage(join(directory(), 'state'))
+  const runtime = new WorkerRuntime(storage, { resolveExecutable: vi.fn(), spawn: vi.fn() } as unknown as ProcessBackend, DEFAULT_CONFIG)
+  cleanup.push(() => runtime.close())
+  expect(runtime.snapshot('synthetic-parent').language).toBeUndefined()
+  expect(runtime.setGeneralSettings({ language: 'en' })).toMatchObject({ language: 'en' })
+  expect(runtime.snapshot('synthetic-parent').language).toBe('en')
+  expect(runtime.setGeneralSettings({ language: null })).toMatchObject({ language: 'follow' })
+  expect(runtime.snapshot('synthetic-parent').language).toBeUndefined()
 })

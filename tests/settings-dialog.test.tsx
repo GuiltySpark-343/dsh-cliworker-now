@@ -1,6 +1,7 @@
 import { createElement, forwardRef, useEffect } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, expect, it, vi } from 'vitest'
+import { setLanguagePreference } from '../src/client/i18n.ts'
 import { SettingsDialog } from '../src/client/settings-dialog.tsx'
 import type { API } from '../src/client/workers.ts'
 import type { AccountStatus } from '../src/shared/accounts.ts'
@@ -95,6 +96,7 @@ afterEach(async () => {
   await act(async () => {
     for (const r of mounted.splice(0)) r.unmount()
   })
+  setLanguagePreference('follow')
   vi.clearAllMocks()
 })
 function deferred() {
@@ -2623,4 +2625,34 @@ it('opens CLI Worker settings above agents and saves the shared concurrency limi
   await t.click('4')
   expect(saveGeneralSettings).toHaveBeenCalledWith('simulation-parent', '{"maxConcurrent":4}', expect.any(AbortSignal))
   expect(t.text()).toContain('同时对话数已保存')
+})
+it('switches the whole dialog to English as soon as the language is saved', async () => {
+  let current: Record<string, unknown> = { maxConcurrent: 2, defaultMaxConcurrent: 2 }
+  const generalSettings = vi.fn(async () => remote(current))
+  const saveGeneralSettings = vi.fn(async (_session, raw: string) => {
+    current = { ...current, ...JSON.parse(raw) }
+    return remote(current)
+  })
+  const t = await setup({ generalSettings, saveGeneralSettings })
+  await t.click('CLI Worker 设置')
+  // An older Host without the field reads as follow; Chinese without a DSH locale.
+  expect(visibleText(t.button('界面语言'))).toContain('跟随 DSH')
+  await t.click('界面语言')
+  await t.click('English')
+  expect(saveGeneralSettings).toHaveBeenCalledWith('simulation-parent', '{"language":"en"}', expect.any(AbortSignal))
+  expect(t.text()).toContain('Interface language saved')
+  expect(t.text()).toContain('Maximum concurrent conversations')
+  expect(t.button('Agent settings')).toBeDefined()
+  expect(t.text()).not.toContain('最高同时对话数')
+  await t.click('Interface language')
+  await t.click('中文')
+  expect(saveGeneralSettings).toHaveBeenLastCalledWith('simulation-parent', '{"language":"zh"}', expect.any(AbortSignal))
+  expect(t.text()).toContain('界面语言已保存')
+})
+it('rejects an unknown language from the Host and keeps the current interface', async () => {
+  const generalSettings = vi.fn(async () => remote({ maxConcurrent: 2, defaultMaxConcurrent: 2, language: 'fr' }))
+  const t = await setup({ generalSettings })
+  await t.click('CLI Worker 设置')
+  expect(t.text()).toContain('收到无效的通用设置，请重试')
+  expect(t.button('重试读取通用设置')).toBeDefined()
 })

@@ -2574,3 +2574,17 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 实际执行：`vitest run tests/general-settings.test.ts tests/cli-settings.test.ts tests/settings-dialog.test.tsx tests/storage.test.ts` **4 文件 335 项通过**（含新增导航测试）；`node scripts/build-preview.mjs` 通过（Host/Client 类型检查与隔离构建）；`openspec validate add-general-settings-page --strict` 通过。
 - 说明：根目录 `typecheck` 读取的是 Desktop 链接的 `lib/` 生成类型，未正式构建前会报新增 Remote 不存在；本次未运行正式 `build`，未更新 Desktop。
 - 未执行：Desktop 实机界面（明暗主题、窄屏）；真实 CLI 多任务并发；全量 suite。
+
+
+## 2026-10-25 界面中英双语与语言切换（分支 `claude/i18n-english-482e08`，未发布）
+
+- 范围：「CLI Worker 设置」新增「语言」分区（跟随 DSH / 中文 / English，默认跟随），与并发上限同存 `general-settings.json`；Host 快照附带非默认语言，所有已打开面板实时同步。Client 接入 Harness locale（`cliworker` 命名空间，生命周期内注册/订阅、卸载注销），抽取 `src/client` 用户可见中文并提供完整英文（词典 627 条，其中约 90 条为 Host 原文映射）。OpenSpec `add-client-i18n`。版本号未改。
+- 基线（改动前，本工作树）：全量 `vitest run` **10 失败 / 4283 通过 / 13 跳过**；失败为 `tests/build-dependencies.test.ts` 2 项（缺少正式构建生成的 `lib/types/host/index.js`）与 `tests/native-zcode.test.ts` 8 项（模拟账号 header；改动后同文件通过，判定为不稳定）。
+- 实际执行：
+  - 全量 `node node_modules/vitest/vitest.mjs run`：**215 文件通过、1 失败、3 跳过；4312 通过、2 失败、13 跳过**。仅上述 build-dependencies 2 项失败，与基线相同；既有中文断言测试在默认语言下通过。
+  - 收尾修改后复跑 `tests/client-i18n.test.tsx tests/general-settings.test.ts tests/settings-dialog.test.tsx tests/panel.test.tsx tests/client-conversation-features.test.tsx`：**5 文件 362 项通过**。
+  - `node scripts/build-preview.mjs`：通过（Host/Client 类型检查与隔离构建）。
+  - `openspec validate add-client-i18n --strict --no-interactive`：通过。`git diff --check`：通过。
+- 新增测试：语言持久化（0600、重载、`null` 恢复默认）与非法补丁；Runtime 快照字段；词典完整性（英文非空、占位符一致、英文不含中文）；跟随/显式/非法偏好；模拟 locale 服务下随 Harness 语言实时切换与卸载注销；Host 文案映射与未知原文保留；设置窗口保存 English 后整体切换；面板随快照语言切换。locale 服务与 Cordis 上下文均为测试内模拟。
+- 未执行：DSH Desktop 实机英文界面（窄栏换行、明暗主题、Windows）；真实 Harness 语言切换下的 `ctx.locale` 行为；正式 `build`（未更新 Desktop）；真实模型调用。
+- 已知限制（保持中文）：未收录的 Host/CLI 错误、Host 生成的标题与摘要、内置角色预设名称与内容、默认名称 `智能体-xxx`、发给 CLI 的附件说明；给主 Agent 的工具描述与提示词不在范围内。并行会话（同目录写任务隔离副本并行）的新增文案在合并时补入词典。

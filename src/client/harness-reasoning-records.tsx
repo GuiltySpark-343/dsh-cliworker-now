@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { PropsRuntime, StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
 import { CLI_IDS } from '../shared/types.ts'
 import { useHarnessSessionBinding, type HarnessBindingRegistry } from './harness-binding-registry.ts'
+import { useT } from './i18n.ts'
 
 // Chat owns this optional keyed seat. Keep its native renderer, injected hooks,
 // grouping and owner props intact without importing private Chat components.
@@ -26,12 +27,13 @@ export function HarnessReasoningRecords({ Native, bindings, props }: {
     && !!cli && CLI_IDS.some(id => id === cli)
     && binding.sessionId === props.sessionId && binding.parentSessionId !== props.sessionId
     && address?.childSessionId === binding.sessionId && address.parentSessionId === binding.parentSessionId
+  const own = useT()
   const t = useMemo(() => (key: string, ...args: unknown[]) =>
-    key === 'message.think' ? '思考记录' : props.t(key, ...args), [props.t])
+    key === 'message.think' ? own('思考记录') : props.t(key, ...args), [props.t, own])
   const renderSlot = useMemo(() => (name: string, owner: unknown, ...args: unknown[]) => {
     const content = props.renderSlot(name, owner, ...args)
     return name === 'conversation.chat.reasoning.body'
-      ? <div className="cwn-reasoning-records-body" data-reasoning-records role="region" aria-label="思考记录">{content}</div>
+      ? <div className="cwn-reasoning-records-body" data-reasoning-records role="region" aria-label={own('思考记录')}>{content}</div>
       : content
   }, [props.renderSlot])
   return createElement(Native, enabled ? { ...props, t, renderSlot } : props)

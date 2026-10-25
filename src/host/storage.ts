@@ -23,7 +23,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import { z } from 'zod'
 import { conversationTelemetrySchema, lastRunUsageSnapshotSchema } from './conversation-telemetry.ts'
 import { contextTelemetrySchema } from './context-telemetry.ts'
-import { MAX_CONCURRENT_LIMIT, type CliSettings } from '../shared/cli-settings.ts'
+import { LANGUAGE_PREFERENCES, MAX_CONCURRENT_LIMIT, type CliSettings } from '../shared/cli-settings.ts'
 import { parseNativeResponse } from './native-response.mjs'
 import {
   RUNNING_MESSAGE_MODES,
@@ -101,6 +101,7 @@ const cliSettingsSchema = z.object({ enabled: z.partialRecord(storedCliSchema, z
 /** Every field is optional: an absent value keeps the deployment default. */
 const generalSettingsSchema = z.object({
   maxConcurrent: z.int().min(1).max(MAX_CONCURRENT_LIMIT).optional(),
+  language: z.enum(LANGUAGE_PREFERENCES).optional(),
 })
 export type StoredGeneralSettings = z.infer<typeof generalSettingsSchema>
 const enabledByDefault = () => Object.fromEntries(CLI_IDS.map((cli) => [cli, true])) as CliSettings['enabled']
@@ -502,13 +503,16 @@ export class WorkerStorage {
   /** Merges one validated patch; `null` restores that field's deployment default. */
   setGeneralSettings(patch: unknown): StoredGeneralSettings {
     const changes = z
-      .object({ maxConcurrent: z.int().min(1).max(MAX_CONCURRENT_LIMIT).nullable().optional() })
+      .object({
+        maxConcurrent: z.int().min(1).max(MAX_CONCURRENT_LIMIT).nullable().optional(),
+        language: z.enum(LANGUAGE_PREFERENCES).nullable().optional(),
+      })
       .strict()
       .parse(patch)
     const next: StoredGeneralSettings = { ...this.general }
-    for (const [key, value] of Object.entries(changes) as [keyof StoredGeneralSettings, number | null][]) {
+    for (const [key, value] of Object.entries(changes) as [keyof StoredGeneralSettings, unknown][]) {
       if (value === null) delete next[key]
-      else next[key] = value
+      else Object.assign(next, { [key]: value })
     }
     atomicJSON(join(this.directory, 'general-settings.json'), generalSettingsSchema.parse(next))
     this.general = next

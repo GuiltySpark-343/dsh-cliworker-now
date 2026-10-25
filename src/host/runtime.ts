@@ -907,7 +907,11 @@ export class WorkerRuntime {
     return this.storage.generalSettings().maxConcurrent ?? this.config.maxConcurrent
   }
   generalSettings(): GeneralSettings {
-    return { maxConcurrent: this.maxConcurrent, defaultMaxConcurrent: this.config.maxConcurrent }
+    return {
+      maxConcurrent: this.maxConcurrent,
+      defaultMaxConcurrent: this.config.maxConcurrent,
+      language: this.storage.generalSettings().language ?? 'follow',
+    }
   }
   setGeneralSettings(patch: unknown): GeneralSettings {
     if (this.disposed) throw new Error('插件正在关闭')
@@ -1301,6 +1305,8 @@ export class WorkerRuntime {
       timeline: timeline.slice(-this.config.maxTimelineItems),
       revision: this.revision,
       truncated: timeline.length > this.config.maxTimelineItems,
+      // Absent means `follow`; every open view adopts a saved language live.
+      ...(this.storage.generalSettings().language ? { language: this.storage.generalSettings().language } : {}),
     }
   }
   private timeline(worker: Worker): TimelineItem[] {
