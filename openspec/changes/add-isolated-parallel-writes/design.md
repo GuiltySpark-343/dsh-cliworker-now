@@ -3,7 +3,7 @@
 ## 背景与约束
 
 - 现状：`WorkerRuntime.drain()` 以 `worker.project` 判定冲突，同项目只要一方是 `accept-edits` 即串行。
-- 用户决定：并行写通过插件自管的“隔离副本”实现；不依赖 Git、不在用户项目 `git init`、不替用户提交；合并由用户在任务卡点击或主 Agent 调用工具触发；有冲突保留副本并提示。
+- 用户决定：并行写通过插件自管的“隔离副本”实现；不依赖 Git、不在用户项目 `git init`、不替用户提交；合并最初由任务卡按钮或主 Agent 触发；2026-10-25 用户改为只由主 Agent 合并，不确定的冲突用原生询问交给用户决定，任务卡不再显示副本状态与按钮。
 - 各 CLI 的原生会话与工作目录绑定（Claude 按 cwd 存会话、Codex app-server 校验线程 cwd、ZCode 校验 workspace），因此不能把已有会话换目录恢复。
 
 ## 模块边界
@@ -14,8 +14,9 @@
 | `src/host/isolated-workspace.ts` | 副本路径与校验、扫描、复制、清单（哈希/基线）、合并写回、删除 |
 | `src/host/runtime.ts` | 调度决策、副本准备阶段、执行目录、合并/丢弃互斥、重启恢复 |
 | `src/host/storage.ts` | `isolatedParallelWrites` 设置字段；`Worker.isolation` / `isolationNotice` 校验 |
-| `src/host/index.ts` | Remote `mergeIsolation` / `discardIsolation`；主 Agent 工具；隔离运行不接工具桥 |
-| Client | 设置开关、任务卡状态与按钮、合并/丢弃对话框 |
+| `src/host/index.ts` | 主 Agent 工具 `cliworker_merge`（含冲突询问）/ `cliworker_discard`；完成通知与状态中的副本提示；隔离运行不接工具桥 |
+| `src/host/isolated-merge-decisions.ts` | 纯函数：副本提示、冲突问题、把回答换成逐文件决定 |
+| Client | 设置开关（一行说明）；不显示副本状态或合并入口 |
 
 ## 存储布局
 
@@ -66,6 +67,14 @@
 5. 成功后删除整个副本目录并核实不存在，状态改为 `released`（Worker 从未产生原生会话时直接解除绑定）。
 
 diff3：Myers O(ND)（仅保留每步 V 数组，D 上限 2000，超出视为无法自动合并），按基线区间分组，相邻或重叠的两边改动为一个区域；两边结果相同则采用，否则冲突。
+
+
+### 主 Agent 合并与冲突询问（2026-10-25 调整）
+
+- 任务完成通知的 `guidance` 与 `cliworker_status` 对 `ready`/`conflict` 的 Worker 写明副本路径、主目录未改动、核查后调用 `cliworker_merge`、不要让 CLI 改到原目录重做。起因：实测主 Agent 不知道改动待合并，让 ZCode 用绝对路径直接改了原项目。
+- `mergeIsolatedWorkspace` 接受 `resolutions: Record<路径, 'copy' | 'project'>`。冲突项带 `resolvable`：内容冲突可取副本版本（写入、删除、链接或目录照副本执行，仍带 `expected` 校验）；结构性冲突只能保留项目版本。未决定的冲突存在时整体不写。
+- `cliworker_merge` 先无决定合并；有冲突时询问用户，≤6 个逐文件提问，更多则一次性提问；全部决定后带决定重新合并（期间主目录变化会再次得到冲突，返回给主 Agent 重新询问）。暂不合并、未作答或自由文本：不写、保留副本，把状态与说明返回主 Agent。
+- 移除 Remote `mergeIsolation` / `discardIsolation`、`IsolationDialog` 与任务卡隔离状态行；Host 端诊断仍写入时间线。
 
 ## 互斥与生命周期
 

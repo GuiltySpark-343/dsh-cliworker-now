@@ -34,7 +34,6 @@ import { WorkerModelMenu } from './worker-model-menu.tsx'
 import { SettingsDialog } from './settings-dialog.tsx'
 import { RenameWorker } from './rename-worker.tsx'
 import { WorkerCard, type WorkerManagementAction } from './worker-card.tsx'
-import { IsolationDialog, type IsolationAction } from './isolation-dialog.tsx'
 import { RUNNING_MESSAGE_LABELS } from '../shared/running-message.ts'
 import { useMessageSubmissions } from './message-submissions.ts'
 import { FollowupQueuePresence } from './followup-queue-presence.tsx'
@@ -153,8 +152,6 @@ function SessionPanel({
   const [settingsCli, setSettingsCli] = useState<CliId>('antigravity')
   const [settings, setSettings] = useState(false)
   const [renaming, setRenaming] = useState<{ worker: Worker; mode: 'name' | 'title' }>()
-  const [isolating, setIsolating] = useState<{ workerId: string; action: IsolationAction }>()
-  const isolatingWorker = isolating && snapshot.workers.find((w) => w.id === isolating.workerId)
   const [restartFor, setRestartFor] = useState('')
   const nativeSettingsRequested = useRef(false)
   useEffect(() => {
@@ -595,16 +592,6 @@ function SessionPanel({
           onClose={() => setRenaming(undefined)}
         />
       )}
-      {isolating && isolatingWorker && (
-        <IsolationDialog
-          key={`${isolating.workerId}:${isolating.action}`}
-          api={api}
-          sessionId={sessionId}
-          worker={isolatingWorker}
-          action={isolating.action}
-          onClose={() => setIsolating(undefined)}
-        />
-      )}
       <SettingsDialog
         openNativeSettings={
           openNativeSettings
@@ -749,7 +736,6 @@ function SessionPanel({
                               busy={busy}
                               onOpen={() => openWorker(w.id)}
                               onManage={(action) => manageWorker(w, action)}
-                              onIsolation={(action) => setIsolating({ workerId: w.id, action })}
                             />
                           ))}
                         </div>

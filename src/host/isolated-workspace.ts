@@ -353,9 +353,13 @@ function same(left: Side | Main | undefined, right: Side | Main | undefined): bo
 export interface MergeConflict {
   path: string
   reason: string
+  /** The user may take the copy's version; otherwise only keeping the project version is safe. */
+  resolvable: boolean
 }
+/** A user's decision for one conflicting path. */
+export type MergeResolution = 'copy' | 'project'
 export type MergeResult =
-  | { status: 'merged'; written: string[]; deleted: string[] }
+  | { status: 'merged'; written: string[]; deleted: string[]; kept: string[] }
   | { status: 'conflict'; conflicts: MergeConflict[]; copy: string }
 
 type Action =
@@ -426,6 +430,8 @@ export async function mergeIsolatedWorkspace(input: {
   workerId: string
   project: string
   signal?: AbortSignal
+  /** Per-path user decisions; a conflict without one keeps the project untouched. */
+  resolutions?: Readonly<Record<string, MergeResolution>>
 }): Promise<MergeResult> {
   const copy = assertIsolatedCopy(input.root, input.workerId, input.project)
   const paths = workspacePaths(realpathSync(input.root), input.workerId, input.project)
@@ -464,6 +470,14 @@ export async function mergeIsolatedWorkspace(input: {
     if (!same(baseSide, side)) changed.push({ path, base, copy: side })
   }
   const conflicts: MergeConflict[] = []
+  const kept: string[] = []
+  // A decided conflict becomes an action (copy) or is skipped (project); structural ones only allow skipping.
+  const conflict = (path: string, reason: string, take?: () => void) => {
+    const decision = input.resolutions?.[path]
+    if (decision === 'project') kept.push(path)
+    else if (decision === 'copy' && take) take()
+    else conflicts.push({ path, reason, resolvable: !!take })
+  }
   // Case-only renames would delete the new name on case-insensitive filesystems.
   const byCase = new Map<string, string[]>()
   for (const { path } of changed) byCase.set(path.toLowerCase(), [...(byCase.get(path.toLowerCase()) ?? []), path])
@@ -474,32 +488,31 @@ export async function mergeIsolatedWorkspace(input: {
     input.signal?.throwIfAborted()
     const { path, base, copy: side } = change
     if (caseRenames.has(path)) {
-      conflicts.push({ path, reason: '仅大小写不同的改名，请手动处理' })
+      conflict(path, '仅大小写不同的改名，请手动处理')
       continue
     }
     const current = await main.entry(path)
     if (current?.type === 'unsafe') {
-      conflicts.push({ path, reason: '主目录中该路径经过符号链接、不是目录或大小写不一致' })
+      conflict(path, '主目录中该路径经过符号链接、不是目录或大小写不一致')
       continue
     }
     const baseSide: Side | undefined =
       base?.type === 'file' ? { type: 'file', hash: base.hash, exec: base.exec, mode: base.mode, size: base.size, path: '' } : base
     if (same(current, side)) continue
     if (side?.type === 'special') {
-      conflicts.push({ path, reason: '副本中出现了特殊文件' })
+      conflict(path, '副本中出现了特殊文件')
       continue
     }
     if (side?.type === 'link' && !insideTarget(path, side.target)) {
-      conflicts.push({ path, reason: '副本中的符号链接指向项目外' })
+      conflict(path, '副本中的符号链接指向项目外')
       continue
     }
     if (base && side && base.type !== side.type) {
-      conflicts.push({ path, reason: '副本改变了文件类型（文件、目录或链接），请手动处理' })
+      conflict(path, '副本改变了文件类型（文件、目录或链接），请手动处理')
       continue
     }
-    if (same(baseSide, current)) {
-      if (!side)
-        actions.push(current?.type === 'dir' ? { kind: 'rmdir', path } : { kind: 'delete', path, expected: current! })
+    const takeCopy = () => {
+      if (!side) actions.push(current?.type === 'dir' ? { kind: 'rmdir', path } : { kind: 'delete', path, expected: current! })
       else if (side.type === 'dir') actions.push({ kind: 'mkdir', path })
       else if (side.type === 'link') actions.push({ kind: 'link', path, target: side.target, expected: current })
       else if (side.type === 'file')
@@ -510,6 +523,9 @@ export async function mergeIsolatedWorkspace(input: {
           mode: finalMode(current, side, base?.type === 'file' ? base.exec : undefined),
           expected: current,
         })
+    }
+    if (same(baseSide, current)) {
+      takeCopy()
       continue
     }
     if (base?.type === 'file' && side?.type === 'file' && current?.type === 'file') {
@@ -533,19 +549,16 @@ export async function mergeIsolatedWorkspace(input: {
           })
           continue
         }
-        conflicts.push({
-          path,
-          reason: merged.reason === 'too-large' ? '改动过大，无法自动合并' : '两边改动了相同或相邻的行',
-        })
+        conflict(path, merged.reason === 'too-large' ? '改动过大，无法自动合并' : '两边改动了相同或相邻的行', takeCopy)
         continue
       }
-      conflicts.push({ path, reason: '二进制或超大文件两边都有改动' })
+      conflict(path, '二进制或超大文件两边都有改动', takeCopy)
       continue
     }
-    if (!side) conflicts.push({ path, reason: '副本删除了主目录中已修改的内容' })
-    else if (!base) conflicts.push({ path, reason: '两边都新增了同名内容且不一致' })
-    else if (!current) conflicts.push({ path, reason: '主目录已删除副本中修改过的内容' })
-    else conflicts.push({ path, reason: '两边的文件类型或内容不一致' })
+    if (!side) conflict(path, '副本删除了主目录中已修改的内容', takeCopy)
+    else if (!base) conflict(path, '两边都新增了同名内容且不一致', takeCopy)
+    else if (!current) conflict(path, '主目录已删除副本中修改过的内容', takeCopy)
+    else conflict(path, '两边的文件类型或内容不一致', takeCopy)
   }
   if (conflicts.length) return { status: 'conflict', conflicts: conflicts.sort((a, b) => (a.path < b.path ? -1 : 1)), copy }
   await applyActions(input.project, actions, input.signal)
@@ -553,6 +566,7 @@ export async function mergeIsolatedWorkspace(input: {
     status: 'merged',
     written: actions.filter((action) => action.kind === 'write' || action.kind === 'link').map((action) => action.path).sort(),
     deleted: actions.filter((action) => action.kind === 'delete').map((action) => action.path).sort(),
+    kept: kept.sort(),
   }
 }
 

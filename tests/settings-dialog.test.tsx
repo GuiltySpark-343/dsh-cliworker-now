@@ -2667,9 +2667,7 @@ it('explains and saves the same-directory isolated-copy switch, off by default',
   const t = await setup({ generalSettings: vi.fn(async () => remote(current)), saveGeneralSettings })
   await t.click('CLI Worker 设置')
   expect(t.button('同目录写任务并行').props['aria-checked']).toBe(false)
-  expect(t.text()).toContain('合并')
-  expect(t.text()).toContain('不会替你提交')
-  expect(t.text()).toContain('项目保持不变')
+  expect(t.text()).toContain('在项目副本中同时运行，完成后由主 Agent 合并回项目')
   await t.click('同目录写任务并行')
   expect(saveGeneralSettings).toHaveBeenCalledWith(
     'simulation-parent',
@@ -2677,5 +2675,7 @@ it('explains and saves the same-directory isolated-copy switch, off by default',
     expect.any(AbortSignal),
   )
   expect(t.button('同目录写任务并行').props['aria-checked']).toBe(true)
-  expect(t.text()).toContain('已开启同目录写任务并行')
+  // The switch itself shows the saved state; no extra confirmation line.
+  expect(t.text()).not.toContain('已开启')
+  expect(t.text()).not.toContain('正在保存同目录写任务并行')
 })

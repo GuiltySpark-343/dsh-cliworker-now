@@ -24,14 +24,23 @@
 
 - [x] 3.1 同步 AGENTS.md、`openspec/config.yaml` 同目录写规则例外，`doc/design.md` 新增章节，README 中英文功能条目，`doc/tasks.md` 验证记录。
 
+## 3b. 主 Agent 合并（2026-10-25 用户调整）
+
+- [x] 3b.1 任务卡去掉副本状态行、「合并」「丢弃」按钮与 `IsolationDialog`；移除对应 Remote 与字典条目。
+- [x] 3b.2 设置说明缩为一行；开关保存成功不再显示确认文字。
+- [x] 3b.3 完成通知与 `cliworker_status` 加入副本待合并提示。
+- [x] 3b.4 `resolutions` 逐文件决定；`cliworker_merge` 冲突时原生询问（逐个 / 超过 6 个一次性），暂不合并或自由文本不写入。
+- [x] 3b.5 测试：`tests/isolated-merge-decisions.test.ts`、`tests/isolated-workspace.test.ts`（决定写回、副本删除、结构性冲突）、`tests/isolation-ui.test.tsx`（任务卡无副本状态与按钮）、`tests/settings-dialog.test.tsx`。
+- [ ] 3b.6 Desktop 真实主 Agent 合并与冲突询问复验。
+
 ## 4. 未执行
 
 - [ ] 4.1 真实 CLI 多任务在副本中运行、追问与合并（未调用真实模型）。
-- [ ] 4.2 DSH Desktop 实机查看开关、任务卡与合并/丢弃弹窗（明暗主题、窄屏）。
-  - 2026-10-25 Mac 浅色默认窗口：开关、任务卡状态、合并/丢弃弹窗通过；暗色、窄屏未查。
-- [ ] 4.3 隔离被绕过：CLI 按提示词写入原项目绝对路径（ZCode Edit 实测成功），主 Agent 未被告知改动待合并而要求在真实目录重做。需修复后复验。
-- [ ] 4.3 Windows 实机（仅以平台条件单元测试覆盖路径分隔符；复制回退到普通复制未在 Windows 验证）。
-- [ ] 4.4 Linux reflink / 非 APFS 文件系统上的复制性能与回退。
+- [ ] 4.2 DSH Desktop 实机查看开关与任务卡（明暗主题、窄屏）。
+  - 2026-10-25 Mac 浅色默认窗口：开关、任务卡状态、合并/丢弃弹窗通过；暗色、窄屏未查。之后按用户要求移除任务卡状态与弹窗。
+- [ ] 4.3 隔离被绕过：CLI 按提示词写入原项目绝对路径（ZCode Edit 实测成功），主 Agent 未被告知改动待合并而要求在真实目录重做。已加完成通知提示（3b.3）；CLI 原生权限仍允许绝对路径写出副本，未做强制隔离，需复验提示是否足够。
+- [ ] 4.4 Windows 实机（仅以平台条件单元测试覆盖路径分隔符；复制回退到普通复制未在 Windows 验证）。
+- [ ] 4.5 Linux reflink / 非 APFS 文件系统上的复制性能与回退。
 
 ## Workflow follow-up
 

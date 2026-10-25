@@ -244,7 +244,7 @@ describe('copy lifecycle', () => {
     await expect(runtime.mergeIsolation('p', b.worker.id)).rejects.toThrow('主目录中有写任务正在运行')
     backend.finish(0, 'a')
     await a.done
-    expect(await runtime.mergeIsolation('p', b.worker.id)).toEqual({ status: 'merged', written: ['src/a.ts'], deleted: [] })
+    expect(await runtime.mergeIsolation('p', b.worker.id)).toEqual({ status: 'merged', written: ['src/a.ts'], deleted: [], kept: [] })
     expect(readFileSync(join(project, 'src', 'a.ts'), 'utf8')).toBe('ONE\ntwo\nthree\nfour\n')
     expect(existsSync(copy)).toBe(false)
     expect(b.worker.isolation).toEqual({ state: 'released', path: copy })

@@ -80,6 +80,7 @@ import {
   isolationRoot,
   IsolationUnavailableError,
   mergeIsolatedWorkspace,
+  type MergeResolution,
   removeIsolatedWorkspace,
   workspacePaths,
   type MergeResult,
@@ -2472,9 +2473,14 @@ export class WorkerRuntime {
   }
   /**
    * Three-way merge of the copy into the project as uncommitted changes.
-   * Nothing is written when any path conflicts; the copy is then kept.
+   * Nothing is written while any undecided path conflicts; the copy is then kept.
    */
-  async mergeIsolation(parent: string, id: string, signal?: AbortSignal): Promise<MergeResult> {
+  async mergeIsolation(
+    parent: string,
+    id: string,
+    signal?: AbortSignal,
+    resolutions?: Readonly<Record<string, MergeResolution>>,
+  ): Promise<MergeResult> {
     const worker = this.isolationTarget(parent, id)
     const project = worker.project
     if (this.mainWrites.has(project)) throw new Error('该项目正在写回另一个隔离副本，请稍后再试')
@@ -2489,7 +2495,7 @@ export class WorkerRuntime {
       this.storage.save(worker)
       this.changed()
       try {
-        const result = await mergeIsolatedWorkspace({ root, workerId: id, project, signal })
+        const result = await mergeIsolatedWorkspace({ root, workerId: id, project, signal, resolutions })
         if (result.status === 'conflict') {
           worker.isolation = { ...previous, state: 'conflict', conflicts: result.conflicts.slice(0, 200), message: undefined }
           this.storage.save(worker)

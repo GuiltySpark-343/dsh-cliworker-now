@@ -2,18 +2,13 @@ import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, expect, it, vi } from 'vitest'
 import { WorkerCard } from '../src/client/worker-card.tsx'
-import { IsolationDialog } from '../src/client/isolation-dialog.tsx'
-import type { API } from '../src/client/workers.ts'
 import { setLanguagePreference } from '../src/client/i18n.ts'
 import type { Worker } from '../src/shared/types.ts'
 
-// Explicit simulation: host primitives are stand-ins and the Remote calls are fakes.
+// Explicit simulation: host primitives are stand-ins.
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: ({ children, onClick, disabled }: any) => createElement('button', { onClick, disabled }, children),
   Menu: ({ anchor }: any) => anchor,
-  Modal: ({ open, title, children }: any) =>
-    open ? createElement('section', { role: 'dialog', 'aria-label': title }, children) : null,
-  StateDot: () => createElement('svg'),
 }))
 vi.mock('../src/client/name-copy.tsx', () => ({ NameCopy: ({ name }: any) => createElement('span', null, name) }))
 
@@ -46,7 +41,7 @@ function render(element: ReturnType<typeof createElement>) {
   const button = (label: string) => renderer.root.findAllByType('button').find((b) => b.children.includes(label))
   return { renderer, text, button }
 }
-const card = (target: Worker, onIsolation = vi.fn()) =>
+const card = (target: Worker) =>
   render(
     createElement(WorkerCard, {
       worker: target,
@@ -55,99 +50,18 @@ const card = (target: Worker, onIsolation = vi.fn()) =>
       busy: false,
       onOpen: vi.fn(),
       onManage: vi.fn(),
-      onIsolation,
     }),
   )
 
-it('offers merge and discard only for an idle Worker with a copy', () => {
-  const onIsolation = vi.fn()
-  const idle = card(worker({ isolation: { state: 'ready', path: '/simulation/copy' } }), onIsolation)
-  expect(idle.text()).toContain('隔离副本待合并')
-  act(() => idle.button('合并')!.props.onClick())
-  act(() => idle.button('丢弃')!.props.onClick())
-  expect(onIsolation.mock.calls).toEqual([['merge'], ['discard']])
-
-  const running = card(worker({ status: 'running', isolation: { state: 'ready', path: '/simulation/copy' } }))
-  expect(running.text()).toContain('在隔离副本中运行')
-  expect(running.button('合并')).toBeUndefined()
-
-  const conflict = card(
-    worker({ isolation: { state: 'conflict', path: '/c', conflicts: [{ path: 'a.ts', reason: 'x' }] } }),
-  )
-  expect(conflict.text()).toContain('合并冲突：1 个文件，项目未改动')
-  expect(conflict.button('合并')).toBeDefined()
-
-  const released = card(worker({ isolation: { state: 'released', path: '/c' } }))
-  expect(released.button('合并')).toBeUndefined()
-  expect(released.text()).not.toContain('隔离副本')
-})
-
-it('shows the real reason a queued task did not get a copy', () => {
-  const queued = card(worker({ status: 'queued', isolationNotice: '项目文件数超过隔离副本上限；已改为排队' }))
-  expect(queued.text()).toContain('项目文件数超过隔离副本上限')
-  expect(queued.button('合并')).toBeUndefined()
-})
-
-it('merges only after the explicit button and lists conflicts with the copy location', async () => {
-  const mergeIsolation = vi.fn(async () => ({
-    ok: true,
-    value: JSON.stringify({
-      status: 'conflict',
-      copy: '/simulation/copy',
-      conflicts: [{ path: 'src/a.ts', reason: '两边改动了相同或相邻的行' }],
-    }),
-  }))
-  const api = { cliworker: { mergeIsolation } } as unknown as API
-  const dialog = render(
-    createElement(IsolationDialog, { api, sessionId: 'simulation-parent', worker: worker(), action: 'merge', onClose: vi.fn() }),
-  )
-  expect(mergeIsolation).not.toHaveBeenCalled()
-  expect(dialog.text()).toContain('不会创建提交')
-  await act(async () => dialog.button('合并')!.props.onClick())
-  expect(mergeIsolation).toHaveBeenCalledWith('simulation-parent', worker().id, expect.any(AbortSignal))
-  expect(dialog.text()).toContain('项目没有任何改动')
-  expect(dialog.text()).toContain('src/a.ts')
-  expect(dialog.text()).toContain('/simulation/copy')
-})
-
-it('discards only after confirmation and closes once the Host reports the copy is gone', async () => {
-  const discardIsolation = vi.fn(async () => ({ ok: true, value: undefined }))
-  const onClose = vi.fn()
-  const api = { cliworker: { discardIsolation } } as unknown as API
-  const dialog = render(
-    createElement(IsolationDialog, { api, sessionId: 'simulation-parent', worker: worker(), action: 'discard', onClose }),
-  )
-  expect(dialog.text()).toContain('永久删除')
-  expect(discardIsolation).not.toHaveBeenCalled()
-  await act(async () => dialog.button('丢弃')!.props.onClick())
-  expect(discardIsolation).toHaveBeenCalledTimes(1)
-  expect(onClose).toHaveBeenCalledTimes(1)
-})
-
-it('shows the card, Host notices and conflict reasons in English when the plugin language is English', async () => {
+it.each([
+  ['an idle copy', worker({ isolation: { state: 'ready', path: '/simulation/copy' } })],
+  ['a running copy', worker({ status: 'running', isolation: { state: 'ready', path: '/simulation/copy' } })],
+  ['a conflict', worker({ isolation: { state: 'conflict', path: '/c', conflicts: [{ path: 'a.ts', reason: 'x' }] } })],
+  ['a queued notice', worker({ status: 'queued', isolationNotice: '项目文件数超过隔离副本上限；已改为排队' })],
+])('keeps the task card free of copy status and merge buttons for %s', (_name, target) => {
   setLanguagePreference('en')
-  const ready = card(worker({ isolation: { state: 'ready', path: '/simulation/copy' } }))
-  expect(ready.text()).toContain('Isolated copy ready to merge')
-  expect(ready.button('Merge')).toBeDefined()
-  expect(ready.button('Discard')).toBeDefined()
-  const queued = card(
-    worker({ status: 'queued', isolationNotice: '项目文件数超过隔离副本上限（20000 个）；已改为排队，等待主目录空闲' }),
-  )
-  expect(queued.text()).toContain('queued instead until the main folder is free')
-  const mergeIsolation = vi.fn(async () => ({
-    ok: true,
-    value: JSON.stringify({
-      status: 'conflict',
-      copy: '/simulation/copy',
-      conflicts: [{ path: 'src/a.ts', reason: '两边改动了相同或相邻的行' }],
-    }),
-  }))
-  const api = { cliworker: { mergeIsolation } } as unknown as API
-  const dialog = render(
-    createElement(IsolationDialog, { api, sessionId: 'simulation-parent', worker: worker(), action: 'merge', onClose: vi.fn() }),
-  )
-  expect(dialog.text()).toContain('no commit is created')
-  await act(async () => dialog.button('Merge')!.props.onClick())
-  expect(dialog.text()).toContain('src/a.ts — Both sides changed the same or adjacent lines')
-  expect(dialog.text()).not.toMatch(/[\u4e00-\u9fff]/)
+  const view = card(target)
+  for (const text of ['隔离副本', '排队', 'isolated', 'Merge', 'Discard']) expect(view.text()).not.toContain(text)
+  expect(view.button('合并')).toBeUndefined()
+  expect(view.button('丢弃')).toBeUndefined()
 })

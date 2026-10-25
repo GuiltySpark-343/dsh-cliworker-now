@@ -27,6 +27,7 @@ import { operationMessage } from './operation-error.ts'
 import { value, type API } from './workers.ts'
 import { RolePresetsPane } from './role-presets.tsx'
 import { GeneralSettingsPane } from './general-settings.tsx'
+import { useScrollingMark } from './scrolling-mark.ts'
 import { AccountQueryQueue } from './account-query-queue.ts'
 import { CliExecutableSettings } from './cli-executable-settings.tsx'
 import { NativeChoice } from './native-settings-choice.tsx'
@@ -131,6 +132,7 @@ function OpenSettingsDialog({
   fallbackSaves,
 }: SettingsDialogProps & { fallbackSaves: SettingsPreferenceSaves }) {
   useT()
+  const scrolling = useScrollingMark()
   const [cli, setCli] = useState<CliId>(isRetiredCli(initialCli) ? 'hermes' : initialCli)
   const [page, setPage] = useState<'cli' | 'roles' | 'general'>('cli')
   const [cliExpanded, setCliExpanded] = useState(true)
@@ -318,7 +320,7 @@ function OpenSettingsDialog({
       className="cwn-settings-dialog"
       contentClassName="cwn-settings-content"
     >
-      <div className="cwn-settings-layout">
+      <div className="cwn-settings-layout" ref={scrolling}>
         <nav className="cwn-settings-nav" aria-label={t('CLI 设置导航')}>
           <Button
             type="button"

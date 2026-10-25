@@ -671,37 +671,11 @@ export const en = {
   '外部 Harness CLI 入口已移除；历史记录仅供查看。请新建 Hermes Agent 任务。': 'The external Harness CLI entry was removed; its history is view-only. Start a new Hermes Agent task.',
   '模型或思考强度已不可用，请重新选择': 'The model or reasoning effort is no longer available. Choose again',
   'CLI 最终汇总': 'CLI final summary',
-  // isolated parallel writes (general-settings, worker-card, isolation-dialog)
+  // isolated parallel writes (general-settings)
   '同目录写任务并行': 'Parallel writes in the same directory',
-  '同一项目已有写任务运行时，新写任务会把项目复制到插件私有目录（不含 .git 与 node_modules 等依赖目录），在副本中同时运行。完成后在任务卡上点「合并」把改动写回项目，作为未提交改动，不会替你提交；两边改了同一处时列出冲突文件，项目保持不变。项目过大时仍排队。关闭时同目录写任务依次排队。':
-    'When a write task is already running in a project, a new write task copies the project to a private plugin folder (without .git and dependency folders such as node_modules) and runs there at the same time. When it finishes, click “Merge” on the task card to write the changes back to the project as uncommitted changes; nothing is committed for you. If both sides changed the same place, the conflicting files are listed and the project is left unchanged. Projects that are too large still queue. When off, write tasks in the same directory queue one after another.',
+  '在项目副本中同时运行，完成后由主 Agent 合并回项目': 'Runs in a project copy; the main agent merges it back',
   '正在保存同目录写任务并行…': 'Saving parallel writes…',
-  '已开启同目录写任务并行': 'Parallel writes in the same directory turned on',
-  '已关闭同目录写任务并行': 'Parallel writes in the same directory turned off',
   '同目录写任务并行未保存，请重试': 'Parallel writes setting was not saved. Try again',
-  '正在创建隔离副本': 'Creating isolated copy',
-  '正在合并隔离副本': 'Merging isolated copy',
-  '合并冲突：{count} 个文件，项目未改动': 'Merge conflicts in {count} files; the project was not changed',
-  '在隔离副本中运行': 'Running in an isolated copy',
-  '隔离副本待合并': 'Isolated copy ready to merge',
-  '合并': 'Merge',
-  '丢弃': 'Discard',
-  '完成': 'Done',
-  '另有 {count} 项': '{count} more',
-  '合并隔离副本': 'Merge isolated copy',
-  '丢弃隔离副本': 'Discard isolated copy',
-  '关闭合并隔离副本': 'Close merge isolated copy',
-  '关闭丢弃隔离副本': 'Close discard isolated copy',
-  '把 {name} 在副本中的改动写回项目。写回为未提交改动，不会创建提交；有冲突时项目不做任何改动，副本保留。':
-    'Write {name}’s changes from the copy back to the project. They are written as uncommitted changes and no commit is created. If there are conflicts, the project is not changed and the copy is kept.',
-  '丢弃后，{name} 副本中的改动将永久删除，项目主目录不变。':
-    'Discarding permanently deletes the changes in {name}’s copy. The main project folder is not changed.',
-  '已写回 {written} 个、删除 {deleted} 个文件，均为未提交改动；副本已清理。':
-    'Wrote back {written} and deleted {deleted} files, all as uncommitted changes. The copy was cleaned up.',
-  '已删除：{path}': 'Deleted: {path}',
-  '有 {count} 个冲突，项目没有任何改动，副本已保留。可查看副本中的文件后手动处理，或丢弃副本。':
-    '{count} conflicts. The project was not changed and the copy was kept. Review the files in the copy and resolve them by hand, or discard the copy.',
-  '副本位置：': 'Copy location: ',
   // isolated parallel writes: Host messages shown by hostText(); keep exactly equal to the Host source text
   '上次合并在 Host 关闭时中断，可重新合并；已写回的文件会被跳过': 'The last merge was interrupted when the Host closed. You can merge again; files already written back are skipped',
   '隔离副本目录已缺失，只能丢弃': 'The isolated copy folder is missing; it can only be discarded',

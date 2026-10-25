@@ -153,6 +153,7 @@ describe('three-way merge back into the project', () => {
       status: 'merged',
       written: ['docs/deep/guide.md', 'src/a.ts', 'src/new.ts'],
       deleted: ['src/b.ts'],
+      kept: [],
     })
     expect(readFileSync(join(context.project, 'src', 'a.ts'), 'utf8')).toBe('one\ntwo\nTHREE\nfour\nfive\n')
     expect(readFileSync(join(context.project, 'docs', 'deep', 'guide.md'), 'utf8')).toBe('guide\n')
@@ -196,6 +197,68 @@ describe('three-way merge back into the project', () => {
     expect(readFileSync(join(copy, 'src', 'a.ts'), 'utf8')).toBe('one\nCOPY\nthree\nfour\nfive\n')
   })
 
+  it('applies the user decision for each conflict and writes nothing while one is undecided', async () => {
+    const context = fixture()
+    const { copy } = await create(context)
+    writeFileSync(join(copy, 'src', 'a.ts'), 'one\nCOPY\nthree\nfour\nfive\n')
+    writeFileSync(join(context.project, 'src', 'a.ts'), 'one\nMAIN\nthree\nfour\nfive\n')
+    unlinkSync(join(copy, 'README.md'))
+    writeFileSync(join(context.project, 'README.md'), '# changed in main\n')
+    writeFileSync(join(copy, 'clean.txt'), 'added\n')
+    const first = await mergeIsolatedWorkspace(context)
+    expect(first).toMatchObject({
+      status: 'conflict',
+      conflicts: [
+        { path: 'README.md', resolvable: true },
+        { path: 'src/a.ts', resolvable: true },
+      ],
+    })
+    // One decision is not enough: the project stays untouched.
+    const partial = await mergeIsolatedWorkspace({ ...context, resolutions: { 'src/a.ts': 'copy' } })
+    expect(partial).toMatchObject({ status: 'conflict', conflicts: [{ path: 'README.md' }] })
+    expect(existsSync(join(context.project, 'clean.txt'))).toBe(false)
+    expect(readFileSync(join(context.project, 'src', 'a.ts'), 'utf8')).toBe('one\nMAIN\nthree\nfour\nfive\n')
+    const result = await mergeIsolatedWorkspace({ ...context, resolutions: { 'src/a.ts': 'copy', 'README.md': 'project' } })
+    expect(result).toEqual({ status: 'merged', written: ['clean.txt', 'src/a.ts'], deleted: [], kept: ['README.md'] })
+    expect(readFileSync(join(context.project, 'src', 'a.ts'), 'utf8')).toBe('one\nCOPY\nthree\nfour\nfive\n')
+    expect(readFileSync(join(context.project, 'README.md'), 'utf8')).toBe('# changed in main\n')
+  })
+
+  it('takes the copy deletion when the user chooses the copy version', async () => {
+    const context = fixture()
+    const { copy } = await create(context)
+    unlinkSync(join(copy, 'README.md'))
+    writeFileSync(join(context.project, 'README.md'), '# changed in main\n')
+    expect(await mergeIsolatedWorkspace({ ...context, resolutions: { 'README.md': 'copy' } })).toEqual({
+      status: 'merged',
+      written: [],
+      deleted: ['README.md'],
+      kept: [],
+    })
+    expect(existsSync(join(context.project, 'README.md'))).toBe(false)
+  })
+
+  it('never takes the copy for a structural conflict, only keeps the project version', async () => {
+    const context = fixture()
+    const { copy } = await create(context)
+    unlinkSync(join(copy, 'README.md'))
+    mkdirSync(join(copy, 'README.md'))
+    expect(await mergeIsolatedWorkspace(context)).toMatchObject({
+      status: 'conflict',
+      conflicts: [{ path: 'README.md', resolvable: false }],
+    })
+    expect(await mergeIsolatedWorkspace({ ...context, resolutions: { 'README.md': 'copy' } })).toMatchObject({
+      status: 'conflict',
+    })
+    expect(await mergeIsolatedWorkspace({ ...context, resolutions: { 'README.md': 'project' } })).toEqual({
+      status: 'merged',
+      written: [],
+      deleted: [],
+      kept: ['README.md'],
+    })
+    expect(readFileSync(join(context.project, 'README.md'), 'utf8')).toBe('# app\n')
+  })
+
   it('skips identical results and is safe to merge again after a partial write-back', async () => {
     const context = fixture()
     const { copy } = await create(context)
@@ -203,7 +266,7 @@ describe('three-way merge back into the project', () => {
     writeFileSync(join(context.project, 'src', 'a.ts'), 'same\n')
     writeFileSync(join(copy, 'README.md'), '# merged\n')
     expect(await mergeIsolatedWorkspace(context)).toMatchObject({ status: 'merged', written: ['README.md'] })
-    expect(await mergeIsolatedWorkspace(context)).toEqual({ status: 'merged', written: [], deleted: [] })
+    expect(await mergeIsolatedWorkspace(context)).toEqual({ status: 'merged', written: [], deleted: [], kept: [] })
   })
 
   it('treats a case-only rename as a conflict', async () => {

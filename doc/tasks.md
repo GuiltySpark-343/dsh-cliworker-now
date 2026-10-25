@@ -2613,3 +2613,12 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 落盘核对（本会话直接检查）：a.txt `alpha/one`、b.txt `beta/two`（合并写回）、c.txt `gamma/three`、d.txt `delta/four`。Worker 状态：a 完成（主目录）、b 完成且隔离 `released`、c `failed`（主目录，`ZCode 额外权限请求已拒绝`：Bash `echo >>` 被拒后改用 Edit 成功，运行仍判失败；该判定为 v0.8.1 起的既有 ZCode 行为）、d 完成且第二个副本 `ready` 残留。
 - **发现缺陷：隔离可被绕过。** d 的副本丢弃后，主 Agent 把「改动在隔离副本中」理解为失败，经 `cliworker_followup` 要求「必须在真实目录、不要在隔离副本中操作」；该轮 cwd 仍为新副本，但 ZCode Edit 直接写入 `/Users/leeyl/AI-Project/cliworker-isolation-test/d.txt` 并成功，副本内 d.txt 仍为 `delta`。隔离只靠给 CLI 的提示词，ZCode 原生权限允许写 cwd 外的绝对路径；并行时主目录可能被同时改写。主 Agent 收到的结果也未说明「改动待用户合并」。
 - 未解决：首次派遣的 ZCode 设置问题卡在 26 秒内被回答（GLM-5.3-Flash · Low），Codex 称未提交，会话记录未见主 Agent 代答，来源未查明。测试目录、测试会话与 d 的残留副本保留待处理。
+
+## 2026-10-25 主 Agent 合并隔离副本、设置说明精简与滚动条自动隐藏（`feat/general-settings`，未发布）
+
+- 用户调整：任务卡不显示隔离副本状态与「合并」「丢弃」；合并只由主 Agent 调用 `cliworker_merge`，不确定的冲突用原生询问交给用户。移除 `IsolationDialog`、Remote `mergeIsolation`/`discardIsolation` 及相关字典条目。
+- 完成通知 `guidance` 与 `cliworker_status` 对待合并副本说明路径、主目录未改动、核查后调用 `cliworker_merge`、不要让 CLI 在原目录重做（针对实测的绕过问题，仅提示，未做强制隔离）。
+- `mergeIsolatedWorkspace` 支持逐文件 `resolutions`；结构性冲突只能保留项目版本。`cliworker_merge` 冲突 ≤6 个逐个询问，更多一次性询问；暂不合并、未作答或自由文本均不写入、保留副本。
+- 设置「同目录写任务并行」说明缩为一行，开关保存成功不再显示确认文字；设置窗口左右两侧滚动条只在滚动时（及指针在滑块上时）显示，900ms 后隐藏。
+- 验证：相关回归 + 新增 `tests/isolated-merge-decisions.test.ts`、`tests/settings-scrollbar.test.tsx`；`build:preview` 隔离类型检查与构建通过；全量 `vitest run` 222 文件通过、3 跳过（4366 通过、13 跳过）；OpenSpec 严格校验 26/26。
+- 未执行：真实主 Agent 合并与冲突询问（需真实模型调用）；暗色主题与窄屏；Windows/Linux。

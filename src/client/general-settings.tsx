@@ -35,14 +35,11 @@ const SAVING: Record<Field, MessageKey> = {
   maxConcurrent: '正在保存同时对话数…',
   isolatedParallelWrites: '正在保存同目录写任务并行…',
 }
-const SAVED = (field: Field, settings?: GeneralSettings): MessageKey =>
-  field === 'language'
-    ? '界面语言已保存'
-    : field === 'maxConcurrent'
-      ? '同时对话数已保存'
-      : settings?.isolatedParallelWrites
-        ? '已开启同目录写任务并行'
-        : '已关闭同目录写任务并行'
+// The switch shows its own state, so it reports only saving and failures.
+const SAVED: Partial<Record<Field, MessageKey>> = {
+  language: '界面语言已保存',
+  maxConcurrent: '同时对话数已保存',
+}
 const UNSAVED: Record<Field, MessageKey> = {
   language: '界面语言未保存，请重新选择重试',
   maxConcurrent: '同时对话数未保存，请重新选择重试',
@@ -121,11 +118,11 @@ export function GeneralSettingsPane({ api, sessionId }: { api: API; sessionId: s
   }
 
   const feedback = (field: Field) =>
-    (saving === field || saved === field || error?.field === field) && (
+    (saving === field || (saved === field && SAVED[field]) || error?.field === field) && (
       <div className="cwn-settings-save">
         <span className="cwn-settings-feedback-slot" role="status">
           {saving === field && <StateDot state="ongoing" size={14} />}
-          {error?.field === field ? error.message : saving === field ? t(SAVING[field]) : t(SAVED(field, settings))}
+          {error?.field === field ? error.message : saving === field ? t(SAVING[field]) : t(SAVED[field]!)}
         </span>
       </div>
     )
@@ -207,9 +204,7 @@ export function GeneralSettingsPane({ api, sessionId }: { api: API; sessionId: s
             <span className="cwn-setting-row-text">
               <span>{t('同目录写任务并行')}</span>
               <span className="cwn-setting-description" id={isolationHintId}>
-                {t(
-                  '同一项目已有写任务运行时，新写任务会把项目复制到插件私有目录（不含 .git 与 node_modules 等依赖目录），在副本中同时运行。完成后在任务卡上点「合并」把改动写回项目，作为未提交改动，不会替你提交；两边改了同一处时列出冲突文件，项目保持不变。项目过大时仍排队。关闭时同目录写任务依次排队。',
-                )}
+                {t('在项目副本中同时运行，完成后由主 Agent 合并回项目')}
               </span>
             </span>
             <Switch
