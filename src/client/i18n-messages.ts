@@ -735,13 +735,11 @@ export const en = {
   '已附带此前 {count} 条记录，省略 {omitted} 条': 'Included {count} earlier records and omitted {omitted}',
   '按下方提示在 Antigravity 原生终端中完成登录。': 'Follow the steps below to sign in to Antigravity in its native terminal.',
   '插件会在 Antigravity 原生终端中自动输入 /logout 退出登录。': 'The plugin types /logout in the Antigravity native terminal to sign you out.',
-  'Antigravity 询问是否信任当前文件夹：选择「Yes, I trust this folder」后按回车。': 'Antigravity asks whether to trust this folder: choose “Yes, I trust this folder” and press Enter.',
   '授权码已粘贴，请按回车完成登录。': 'Authorization code pasted. Press Enter to finish signing in.',
   '正在确认登录…': 'Confirming sign-in…',
   '正在退出 Antigravity…': 'Signing out of Antigravity…',
   '当前未登录 Antigravity，无需退出。': 'You are not signed in to Antigravity; nothing to sign out of.',
   '尚未登录 Antigravity，请在「CLI Worker 设置 → Antigravity」点击「登录账号」完成登录后再继续': 'You are not signed in to Antigravity. In “CLI Worker settings → Antigravity”, click “Sign in” and finish signing in, then continue.',
-  'Antigravity 询问是否信任账号终端所在的文件夹。': 'Antigravity is asking whether to trust the account terminal’s folder.',
   '使用 Google 账号登录': 'Sign in with Google',
   '使用 Google 账号登录 Antigravity。': 'Sign in to Antigravity with your Google account.',
   '信任并继续': 'Trust and continue',
@@ -784,6 +782,8 @@ export const en = {
   '重新打开登录页面': 'Reopen sign-in page',
   '隐藏原生终端': 'Hide native terminal',
   '需要时可在设置中重新登录。': 'You can sign in again from settings when needed.',
+  'Antigravity 首次在此项目文件夹运行，需要你确认是否信任该文件夹。': 'Antigravity is running in this project folder for the first time and needs you to confirm whether to trust it.',
+  'Antigravity 首次在此项目文件夹运行，需要你确认是否信任该文件夹，确认后插件会自动退出登录。': 'Antigravity is running in this project folder for the first time and needs you to confirm whether to trust it. After you confirm, the plugin signs out automatically.',
   // @end
 } as const satisfies Record<string, string>
 

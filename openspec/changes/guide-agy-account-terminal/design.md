@@ -57,3 +57,11 @@ Host 在每次输出后重置 1.2 秒静止计时（自首次输出起最长 8 �
 
 真实已登录探测：agy 1.4.7 启动先显示「Welcome to the Antigravity CLI. You are currently not signed in.」与「Signing in...」，约 2 秒后才画出主界面（含账号、模型与 `? for shortcuts`）。因此「未登录」只以登录方式菜单（`Select login method`）判定，不能以该行判定；静止阈值取 3 秒（上限 10 秒），避免在登录检查的停顿中误判。`/logout` 写入回车后等待 1.5 秒：原生账号仍为已登录且画面未出现登录菜单时，再写一次回车（首个回车可能只接受了斜杠命令补全）；出现登录菜单后绝不再按回车，以免误启动登录。
 
+### D12 退出前的文件夹信任
+
+账号终端在当前项目目录启动 agy；agy 首次在某目录运行时先询问「Do you trust the contents of this project?」（2026-10-26 在 `/private/tmp/dsh-planning-speed-acceptance-20261019` 只读复现）。原退出窗口未处理该步骤，停在「正在检查登录状态…」，`/logout` 未写入。现退出窗口也显示信任步骤，由用户点「信任并继续」（写入一次回车）或「取消」；Host 只有在用户回答后才继续识别主界面并自动退出，插件不替用户选择信任。
+
+### D13 弹窗宽度
+
+账号弹窗默认 480px（不超过 90vw），用于 Antigravity 分步窗口、ZCode 授权来源与退出来源选择；内含可见原生终端时以 `:has()` 恢复 720px。
+

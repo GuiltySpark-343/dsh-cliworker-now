@@ -15,7 +15,7 @@ const MARKERS = {
 } as const
 
 export const AGY_GUIDES = {
-  trust: { step: 'trust', tone: 'action', text: 'Antigravity 询问是否信任当前文件夹：选择「Yes, I trust this folder」后按回车。' },
+  trust: { step: 'trust', tone: 'action', text: 'Antigravity 首次在此项目文件夹运行，需要你确认是否信任该文件夹。' },
   method: { step: 'method', tone: 'action', text: '选择登录方式：Google 账号登录（Google OAuth）。' },
   code: {
     step: 'code',
@@ -74,6 +74,7 @@ export class AgyAccountGuide {
   private commandSent = false
   private identifying = false
   private afterCommand = ''
+  private trustAnswered = false
 
   constructor(private readonly action: AccountAction) {}
 
@@ -87,8 +88,10 @@ export class AgyAccountGuide {
         this.afterCommand = (this.afterCommand + compact(text.replace(CONTROL, ''))).slice(-SCREEN_LIMIT)
         return []
       }
-      if (this.step) return []
-      if (seen('trust') || seen('method')) return this.show(seen('trust') ? AGY_GUIDES.trust : AGY_GUIDES.notSignedIn)
+      // After the user answers the folder trust question, the main screen follows.
+      if (this.step && (this.step !== 'trust' || !this.trustAnswered)) return []
+      if (seen('trust') && !this.step) return this.show(AGY_GUIDES.trust)
+      if (seen('method')) return this.show(AGY_GUIDES.notSignedIn)
       if (!seen('ready')) return []
       this.commandSent = true
       return [...this.show(AGY_GUIDES.loggingOut), { command: 'logout' }]
@@ -109,7 +112,8 @@ export class AgyAccountGuide {
    * native account. The main screen's exact text is not relied on alone.
    */
   settled(): AgyGuideEvent[] {
-    if (this.action === 'manage' || this.step || this.commandSent || this.identifying || !this.screen) return []
+    if (this.action === 'manage' || (this.step && (this.step !== 'trust' || !this.trustAnswered)) || this.commandSent || this.identifying || !this.screen)
+      return []
     const seen = (marker: keyof typeof MARKERS) => this.screen.includes(PATTERNS[marker])
     if (seen('trust') || seen('method') || seen('code')) return []
     this.identifying = true
@@ -124,7 +128,7 @@ export class AgyAccountGuide {
   /** The native account state read after `settled`. */
   identified(state: string | undefined): AgyGuideEvent[] {
     this.identifying = false
-    if (this.step || this.commandSent) return []
+    if ((this.step && (this.step !== 'trust' || !this.trustAnswered)) || this.commandSent) return []
     if (state === 'authenticated') {
       if (this.action === 'login') return this.show(AGY_GUIDES.alreadySignedIn)
       this.commandSent = true
@@ -135,6 +139,11 @@ export class AgyAccountGuide {
   }
 
   input(data: string): AgyGuideEvent[] {
+    // The trust question is answered: judge only what agy draws next.
+    if (this.step === 'trust' && /[\r\n]/.test(data)) {
+      this.screen = ''
+      this.trustAnswered = true
+    }
     if (this.action !== 'login' || (this.step !== 'code' && this.step !== 'pasted')) return []
     const enter = /[\r\n]/.test(data)
     const content = data.replace(/\x1b\[20[01]~/g, '').replace(/[\r\n]/g, '')

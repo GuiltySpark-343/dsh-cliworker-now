@@ -1246,6 +1246,17 @@ describe('Antigravity sign-in window (simulated Host frames)', () => {
     expect(f.accountWrite).not.toHaveBeenCalled()
   })
 
+  it('asks the user about folder trust before an automatic sign-out continues', async () => {
+    const f = await setup(false)
+    await f.update('antigravity', 'logout')
+    await f.start()
+    await push(f, { guide: guide('trust') }, 1)
+    expect(JSON.stringify(f.renderer.toJSON())).toContain('确认后插件会自动退出登录')
+    expect(f.accountWrite).not.toHaveBeenCalled()
+    await f.click('信任并继续')
+    expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', '\r')
+  })
+
   it('keeps the plain terminal for Antigravity account management', async () => {
     const f = await setup(false)
     await f.update('antigravity', 'manage')

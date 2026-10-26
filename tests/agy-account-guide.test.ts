@@ -154,3 +154,18 @@ it('treats the signed-out line as a sign-in check, not as a signed-out account (
   expect(settling.settled()).toEqual([{ identify: true }])
 })
 
+it('continues an automatic sign-out only after the user answers the folder trust question', () => {
+  const guide = new AgyAccountGuide('logout')
+  expect(guide.output(SIGNED_OUT + '\u28fe  Signing in...' + TRUST)).toEqual([{ guide: AGY_GUIDES.trust }])
+  expect(guide.output(READY)).toEqual([])
+  expect(guide.settled()).toEqual([])
+  expect(guide.input('\r')).toEqual([])
+  expect(guide.output(READY)).toEqual([{ guide: AGY_GUIDES.loggingOut }, { command: 'logout' }])
+  const settling = new AgyAccountGuide('logout')
+  settling.output(TRUST)
+  settling.input('\r')
+  settling.output('synthetic main screen')
+  expect(settling.settled()).toEqual([{ identify: true }])
+  expect(settling.identified('authenticated')).toContainEqual({ command: 'logout' })
+})
+

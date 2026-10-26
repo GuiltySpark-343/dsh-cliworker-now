@@ -118,6 +118,16 @@ export function AgyAccountWizard({
     if (step === 'loggedOut') body = <Result tone="success" title={t('已退出 Antigravity')} detail={t('需要时可在设置中重新登录。')}><Button variant="primary" size="md" onClick={onDone}>{t('完成')}</Button></Result>
     else if (step === 'notSignedIn') body = <Result tone="info" title={t('当前未登录 Antigravity')} detail={t('无需退出。')}><Button variant="primary" size="md" onClick={onDone}>{t('完成')}</Button></Result>
     else if (step === 'logoutUnconfirmed') body = <Result tone="warning" title={t('未能确认已退出')} detail={hostText(guide!.text)}><Button variant="outline" size="md" onClick={onRestart}>{t('重试')}</Button></Result>
+    else if (step === 'trust')
+      body = (
+        <div className="cwn-agy-step-body">
+          <p>{t('Antigravity 首次在此项目文件夹运行，需要你确认是否信任该文件夹，确认后插件会自动退出登录。')}</p>
+          <div className="cwn-agy-actions">
+            <Button variant="primary" size="md" disabled={!running} onClick={() => onSend('\r')}>{t('信任并继续')}</Button>
+            <Button variant="ghost" size="md" onClick={onDone}>{t('取消')}</Button>
+          </div>
+        </div>
+      )
     else if (phase === 'failed' || phase === 'closed') body = <Result tone="warning" title={t('退出未完成')} detail={t('原生终端已关闭，请重试。')}><Button variant="outline" size="md" onClick={onRestart}>{t('重试')}</Button></Result>
     else body = <Waiting text={step === 'loggingOut' ? t('正在退出 Antigravity…') : t('正在检查登录状态…')} />
     return (
@@ -170,7 +180,7 @@ export function AgyAccountWizard({
           {!step && !ended && <Waiting text={t('正在启动 Antigravity…')} />}
           {step === 'trust' && (
             <>
-              <p>{t('Antigravity 询问是否信任账号终端所在的文件夹。')}</p>
+              <p>{t('Antigravity 首次在此项目文件夹运行，需要你确认是否信任该文件夹。')}</p>
               <div className="cwn-agy-actions">
                 <Button variant="primary" size="md" disabled={!running} onClick={() => onSend('\r')}>{t('信任并继续')}</Button>
                 <Button variant="ghost" size="md" onClick={onDone}>{t('取消')}</Button>
