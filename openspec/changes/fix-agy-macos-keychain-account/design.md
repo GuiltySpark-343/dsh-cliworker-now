@@ -12,7 +12,7 @@ agy 1.4.7（本机 `strings` 核对）使用 `zalando/go-keyring`：macOS 实现
 
 ### D2 状态与绑定共用一份解析
 
-`account-identity.ts` 把现有「凭据对象 → 状态」逻辑抽成 `agyIdentityFromCredential(value)`，文件来源（Linux）与钥匙串来源（macOS）共用；`nativeAgyAccountIdentity` 在 `darwin` 上返回钥匙串来源。`cli-account-binding.ts` 在 `darwin` 上以钥匙串对象代替文件内容，`oauthPrincipal` 计算与 `sourceIds: [~/.gemini]` 不变，保证同一账号绑定版本不变。
+`account-identity.ts` 把现有「凭据对象 → 状态」逻辑抽成 `agyIdentityFromCredential(value)`，文件来源（Linux）与钥匙串来源（macOS）共用；`nativeAgyAccountIdentity` 在 `darwin` 上返回钥匙串来源。`cli-account-binding.ts` 在 `darwin` 上以钥匙串对象代替文件内容，`oauthPrincipal` 计算与 `sourceIds: [~/.gemini]` 不变。钥匙串条目只有 `id_token_email`，主体为邮箱，与遗留文件（`sub`）不同；升级后首轮的一次性绑定变化由静默改绑吸收。
 
 ### D3 不回退文件
 

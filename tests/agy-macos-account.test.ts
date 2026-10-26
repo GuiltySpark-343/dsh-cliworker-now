@@ -106,18 +106,32 @@ it('shows the signed-in email and never exposes the token in the identity', asyn
   expect(JSON.stringify(identity)).not.toContain(SECRET)
 })
 
-it('keeps one binding for one account when macOS moves from the token file to the keychain', async () => {
-  // The same synthetic JSON as the former file source: existing bindings must stay valid.
-  writeFileSync(join(state.home, '.gemini/jetski-standalone-oauth-token'), JSON.stringify(login()))
+// agy 1.4.7 writes the macOS keychain item without `id_token`, only `id_token_email` (checked 2026-10-26).
+const keychainLogin = (email: string) => ({
+  auth_method: 'consumer',
+  token: { access_token: 'synthetic-access', refresh_token: SECRET, expiry: '2099-01-01T00:00:00Z', expires_in: 3599 },
+  id_token_email: email,
+})
+
+it('keeps one binding for one keychain account and tells accounts apart', async () => {
+  Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' })
+  const read = (value: object) =>
+    readCliAccountBinding('antigravity', security(JSON.stringify(value)), DEFAULT_CONFIG, state.home, signal())
+  const first = await read(keychainLogin('synthetic@example.test'))
+  expect(await read(keychainLogin('Synthetic@Example.test'))).toBe(first)
+  expect(await read(keychainLogin('synthetic-other@example.test'))).not.toBe(first)
+  expect(first).not.toContain(SECRET)
+  await expect(readCliAccountBinding('antigravity', security('', 44), DEFAULT_CONFIG, state.home, signal()))
+    .rejects.toMatchObject({ code: 'CLI_OWN_ACCOUNT_REQUIRED' })
+})
+
+it('changes the binding once when an account moves from the token file to the email-only keychain item', async () => {
+  // The task itself continues silently (continue-tasks-across-account-changes); only the version moves.
+  writeFileSync(join(state.home, '.gemini/jetski-standalone-oauth-token'), JSON.stringify(login('s', 'synthetic@example.test')))
   Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
   const fromFile = await readCliAccountBinding('antigravity', security('', 44), DEFAULT_CONFIG, state.home, signal())
   Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' })
   const fromKeychain = await readCliAccountBinding(
-    'antigravity', security(JSON.stringify(login())), DEFAULT_CONFIG, state.home, signal())
-  expect(fromKeychain).toBe(fromFile)
-  const other = await readCliAccountBinding(
-    'antigravity', security(JSON.stringify(login('synthetic-other-subject'))), DEFAULT_CONFIG, state.home, signal())
-  expect(other).not.toBe(fromFile)
-  await expect(readCliAccountBinding('antigravity', security('', 44), DEFAULT_CONFIG, state.home, signal()))
-    .rejects.toMatchObject({ code: 'CLI_OWN_ACCOUNT_REQUIRED' })
+    'antigravity', security(JSON.stringify(keychainLogin('synthetic@example.test'))), DEFAULT_CONFIG, state.home, signal())
+  expect(fromKeychain).not.toBe(fromFile)
 })

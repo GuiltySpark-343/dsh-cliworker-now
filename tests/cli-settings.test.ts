@@ -606,6 +606,20 @@ describe('saved Worker model directory', () => {
     expect(f.backend.spawn).not.toHaveBeenCalled()
   })
 
+  it('reads the choices of the account signed in now when it changes while they load, without an error', async () => {
+    const f = fixture()
+    let reads = 0
+    vi.mocked(readCliAccountBinding).mockImplementation(async () =>
+      ++reads === 1 ? 'synthetic-settings-account' : 'synthetic-other-account',
+    )
+    try {
+      expect(JSON.parse(await f.service.catalogForWorker('parent', f.worker.id, f.signal))).toEqual(catalog)
+    } finally {
+      vi.mocked(readCliAccountBinding).mockImplementation(async () => 'synthetic-settings-account')
+    }
+    expect(f.backend.spawn).not.toHaveBeenCalled()
+  })
+
   it('saves cached model and effort locally, preserves history, and rejects unavailable choices at send time', async () => {
     const f = fixture()
     const selectable: Catalog = {

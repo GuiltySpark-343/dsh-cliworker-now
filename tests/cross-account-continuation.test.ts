@@ -14,7 +14,7 @@ import * as crossAccount from '../src/host/cross-account-resume.ts'
 import { DEFAULT_CONFIG, type ProcessBackend } from '../src/host/process.ts'
 import { readWorkerForkState, writeWorkerForkState } from '../src/host/worker-fork.ts'
 import {
-  ACCOUNT_REBOUND_NOTICE, CARRYOVER_FAILED_NOTICE, CARRYOVER_FORK_REFUSED, CARRYOVER_UNREACHABLE_NOTICE,
+  CARRYOVER_FAILED_NOTICE, CARRYOVER_FORK_REFUSED, CARRYOVER_UNREACHABLE_NOTICE,
   type Preference,
 } from '../src/shared/types.ts'
 
@@ -144,6 +144,12 @@ function expectNoCarryover(storage: WorkerStorage, id: string) {
 const persistedWorker = (storage: WorkerStorage, id: string) =>
   JSON.parse(readFileSync(join(storage.directory, `${id}.worker.json`), 'utf8'))
 
+// An account change is never announced: no event or timeline row mentions it.
+const expectSilent = (f: { storage: { history(id: string): { text?: string }[] }; runtime: { snapshot(parent: string, id: string): unknown } }, id: string) => {
+  expect(f.storage.history(id).filter(event => /账号已变更|当前账号/.test(event.text ?? ''))).toEqual([])
+  expect(JSON.stringify(f.runtime.snapshot(PARENT, id))).not.toMatch(/账号已变更|当前账号/)
+}
+
 describe('cross-account continuation with synthetic AGY processes', () => {
   it('rebinds A to B, resumes the same session, and keeps account identities out of the snapshot', async () => {
     const f = setup()
@@ -156,13 +162,25 @@ describe('cross-account continuation with synthetic AGY processes', () => {
     run.succeed()
     expect(await task.done).toMatchObject({ id, status: 'completed', conversationId: OLD })
     expect(f.storage.accountBinding(id)).toBe(B)
-    expect(f.storage.history(id)).toContainEqual(expect.objectContaining({ kind: 'diagnostic', text: ACCOUNT_REBOUND_NOTICE }))
+    expectSilent(f, id)
     const snapshot = f.runtime.snapshot(PARENT, id)
-    expect(snapshot.timeline).toContainEqual(expect.objectContaining({ text: ACCOUNT_REBOUND_NOTICE }))
     expect(snapshot.resumeBlockedReason).toBeUndefined()
     for (const binding of [A, B]) expect(JSON.stringify(snapshot)).not.toContain(binding)
     expect(f.backend.spawn).toHaveBeenCalledTimes(2)
     expectNoCarryover(f.storage, id)
+  })
+
+  it('reads an older record without its account-change notes', async () => {
+    const f = setup()
+    const id = await f.completed()
+    // synthetic notes as earlier builds wrote them
+    const worker = persistedWorker(f.storage, id)
+    f.storage.append(worker, { kind: 'diagnostic', text: '账号已变更，已改用当前账号继续' })
+    f.storage.append(worker, { kind: 'diagnostic', text: '原会话无法在当前账号续接，已在新会话中继续', detail: '已附带此前 2 条记录' })
+    const timeline = JSON.stringify(f.runtime.snapshot(PARENT, id).timeline)
+    expect(timeline).not.toMatch(/账号已变更|当前账号/)
+    expect(timeline).toContain(CARRYOVER_FAILED_NOTICE)
+    expect(timeline).toContain('已附带此前 2 条记录')
   })
 
   it.each(['logout', 'model unavailable'] as const)('rejects continuation on %s without spawn or rebind', async change => {
@@ -175,11 +193,11 @@ describe('cross-account continuation with synthetic AGY processes', () => {
       error: expect.stringContaining(change === 'logout' ? '未登录' : '模型') })
     expect(f.backend.spawn).toHaveBeenCalledTimes(1)
     expect(f.storage.accountBinding(id)).toBe(A)
-    expect(f.storage.history(id).filter(event => event.text === ACCOUNT_REBOUND_NOTICE)).toEqual([])
+    expectSilent(f, id)
     expectNoCarryover(f.storage, id)
   })
 
-  it('rejects a new queued task after A changes to B without spawning it', async () => {
+  it('starts a new queued task under B after A changes to B, without a notice', async () => {
     const f = setup()
     const first = f.submit()
     const blocker = await f.spawned(1)
@@ -190,9 +208,10 @@ describe('cross-account continuation with synthetic AGY processes', () => {
     account = B
     blocker.succeed()
     expect((await first.done).status).toBe('completed')
-    expect(await queued.done).toMatchObject({ status: 'failed', error: expect.stringContaining(ACCOUNT_CHANGED) })
-    expect(f.backend.spawn).toHaveBeenCalledTimes(1)
-    expect(f.storage.accountBinding(queued.worker.id)).toBeUndefined()
+    ;(await f.spawned(2)).succeed('synthetic-new-session')
+    expect(await queued.done).toMatchObject({ status: 'completed' })
+    expect(f.storage.accountBinding(queued.worker.id)).toBe(B)
+    expectSilent(f, queued.worker.id)
   })
 
   it('reauthorizes an existing queued continuation under B when it was admitted under A', async () => {
@@ -213,7 +232,7 @@ describe('cross-account continuation with synthetic AGY processes', () => {
     resumed.succeed()
     expect((await continuation.done).status).toBe('completed')
     expect(f.storage.accountBinding(id)).toBe(B)
-    expect(f.storage.history(id)).toContainEqual(expect.objectContaining({ text: ACCOUNT_REBOUND_NOTICE }))
+    expectSilent(f, id)
   })
 
   it('continues legacy history with its binding file removed and binds the current account', async () => {
@@ -226,7 +245,7 @@ describe('cross-account continuation with synthetic AGY processes', () => {
     ;(await f.spawned(2)).succeed()
     expect(await task.done).toMatchObject({ status: 'completed', conversationId: OLD })
     expect(f.storage.accountBinding(id)).toBe(B)
-    expect(f.storage.history(id)).toContainEqual(expect.objectContaining({ text: ACCOUNT_REBOUND_NOTICE }))
+    expectSilent(f, id)
   })
 
   it('still rejects an A-to-B-to-A race when the prepared Claude snapshot belongs to B', async () => {
@@ -436,7 +455,7 @@ describe('cross-account continuation with synthetic AGY processes', () => {
       resumed.succeed(OLD)
       expect(await task.done).toMatchObject({ status: 'completed', conversationId: OLD })
       expect(f.storage.accountBinding(id)).toBe(next)
-      expect(f.storage.history(id).filter(event => event.text === ACCOUNT_REBOUND_NOTICE)).toHaveLength(next === A ? 0 : 1)
+      expectSilent(f, id)
       expectNoCarryover(f.storage, id)
     },
   )

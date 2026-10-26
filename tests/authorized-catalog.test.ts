@@ -48,13 +48,25 @@ it.each(CLI_IDS)('%s cannot discover or select using only another CLI/Host accou
   expect(backend.spawn).not.toHaveBeenCalled()
 })
 
-it('rejects an account change while the model directory is loading', async () => {
+it('reads the account signed in now when it changes while the model directory is loading', async () => {
   vi.mocked(readCliAccountBinding)
     .mockResolvedValueOnce('synthetic-account-a')
     .mockResolvedValueOnce('synthetic-account-b')
-  await expect(authorizedCatalog('pi', backend, DEFAULT_CONFIG, '/synthetic', signal())).rejects.toThrow(
-    '账号已变更',
-  )
+    .mockResolvedValueOnce('synthetic-account-b')
+    .mockResolvedValueOnce('synthetic-account-b')
+  const result = await authorizedCatalog('pi', backend, DEFAULT_CONFIG, '/synthetic', signal())
+  expect(result.binding).toBe('synthetic-account-b')
+  expect(catalogFor).toHaveBeenCalledTimes(2)
+})
+
+it('still refuses an account that keeps changing while the model directory is read again', async () => {
+  vi.mocked(readCliAccountBinding)
+    .mockResolvedValueOnce('synthetic-account-a')
+    .mockResolvedValueOnce('synthetic-account-b')
+    .mockResolvedValueOnce('synthetic-account-b')
+    .mockResolvedValueOnce('synthetic-account-c')
+  await expect(authorizedCatalog('pi', backend, DEFAULT_CONFIG, '/synthetic', signal())).rejects.toThrow('账号已变更')
+  expect(catalogFor).toHaveBeenCalledTimes(2)
 })
 
 it('rejects an obsolete displayed account before querying the replacement account', async () => {

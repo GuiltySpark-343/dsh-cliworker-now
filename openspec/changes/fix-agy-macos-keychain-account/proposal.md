@@ -13,7 +13,7 @@
 
 - macOS 上 Antigravity 的登录状态与绑定改为读取钥匙串 `gemini`/`antigravity` 条目：Host 以参数数组调用 `/usr/bin/security find-generic-password -s gemini -a antigravity -w`，在 Host 进程内解码（`go-keyring-base64:` / `go-keyring-encoded:` 前缀），与 Windows 同样只得到不含凭据的状态、邮箱标签与主体；凭据不写日志、不落盘、不越过读取函数。
 - 条目不存在（退出码 44 或无输出）时视为未登录，MUST 不回退到遗留文件；`security` 其他失败时报「无法读取 macOS 钥匙串中的 Antigravity 账号」，不当作未登录或已登录。
-- 绑定主体沿用原 POSIX 计算（`oauthPrincipal`，`id_token` 主体优先，回退 `id_token_email`），来源标识仍为 `~/.gemini`（Antigravity 原生账号根）。同一账号从文件切换到钥匙串读取后绑定版本不变，已有任务与选型不受影响。
+- 绑定主体沿用原 POSIX 计算（`oauthPrincipal`，`id_token` 主体优先，回退 `id_token_email`），来源标识仍为 `~/.gemini`（Antigravity 原生账号根）。实测（2026-10-26）钥匙串条目不含 `id_token`、只有 `id_token_email`，而遗留文件含 `id_token`，因此同一账号从文件切换到钥匙串读取后绑定版本会变化一次（主体由 `sub` 变为邮箱）；该变化按 `continue-tasks-across-account-changes` 静默改绑续接，不提示用户，已保存设定不因此失效。
 - Linux 不变（继续读文件），Windows 不变。
 
 ## Capabilities

@@ -174,7 +174,7 @@ it.each([false, true])('preserves split UTF-8 stderr diagnostics, including an i
   expect(readFileSync(storage.rawPath(task.worker) + '.stderr')).toEqual(bytes)
 })
 
-it.each(['logout', 'switch', 'model', 'effort'])('rechecks %s after waiting in the queue', async (change) => {
+it.each(['logout', 'model', 'effort'])('rechecks %s after waiting in the queue', async (change) => {
   const { backend, finishes, submit } = setup()
   const first = submit()
   await vi.waitFor(() => expect(backend.spawn).toHaveBeenCalledTimes(1))
@@ -182,7 +182,6 @@ it.each(['logout', 'switch', 'model', 'effort'])('rechecks %s after waiting in t
   // Admission captures A; the queued turn must not adopt a later account or scope.
   await Promise.resolve()
   if (change === 'logout') account = undefined
-  if (change === 'switch') account = 'synthetic-account-b'
   if (change === 'model') models = ['synthetic/another-model']
   if (change === 'effort') efforts = ['high']
   finishes[0]!()
@@ -191,16 +190,48 @@ it.each(['logout', 'switch', 'model', 'effort'])('rechecks %s after waiting in t
   expect(backend.spawn).toHaveBeenCalledTimes(1)
 })
 
-it('rechecks the account after native launch preparation and sends no prompt if it changed', async () => {
-  const { backend, submit } = setup()
+it('starts a queued new task under the account signed in after it waited, without a notice', async () => {
+  const { backend, storage, finishes, submit } = setup()
+  const first = submit()
+  await vi.waitFor(() => expect(backend.spawn).toHaveBeenCalledTimes(1))
+  const second = submit()
+  await Promise.resolve()
+  account = 'synthetic-account-b'
+  finishes[0]!()
+  expect((await first.done).status).toBe('completed')
+  await vi.waitFor(() => expect(backend.spawn).toHaveBeenCalledTimes(2))
+  finishes[1]!()
+  expect((await second.done).status).toBe('completed')
+  expect(storage.accountBinding(second.worker.id)).toBe('synthetic-account-b')
+  expect(storage.history(second.worker.id).filter((event) => event.text?.includes('账号'))).toEqual([])
+})
+
+it('authorizes again once, silently, when the account changes during launch preparation', async () => {
+  const { backend, storage, finishes, submit } = setup()
   vi.mocked(backend.resolveExecutable).mockImplementation(async () => {
     account = 'synthetic-account-b'
+    return '/synthetic/agy'
+  })
+  const task = submit()
+  await vi.waitFor(() => expect(backend.spawn).toHaveBeenCalledTimes(1))
+  finishes[0]!()
+  expect((await task.done).status).toBe('completed')
+  expect(storage.accountBinding(task.worker.id)).toBe('synthetic-account-b')
+  expect(storage.history(task.worker.id).filter((event) => event.text?.includes('账号'))).toEqual([])
+})
+
+it('still sends no prompt when the account keeps changing during launch preparation', async () => {
+  const { backend, submit } = setup()
+  let flips = 0
+  vi.mocked(backend.resolveExecutable).mockImplementation(async () => {
+    account = `synthetic-account-${++flips}`
     return '/synthetic/agy'
   })
   expect(await submit().done).toMatchObject({
     status: 'failed',
     error: expect.stringContaining('账号已变更'),
   })
+  expect(flips).toBe(2)
   expect(backend.spawn).not.toHaveBeenCalled()
 })
 
@@ -265,9 +296,7 @@ it('binds history privately, permits the same account and rebinds a replacement 
   finishes[2]!()
   expect((await different.done).status).toBe('completed')
   expect(storage.accountBinding(first.worker.id)).toBe('synthetic-account-b')
-  expect(
-    storage.history(first.worker.id).filter((event) => event.text === '账号已变更，已改用当前账号继续'),
-  ).toHaveLength(1)
+  expect(storage.history(first.worker.id).filter((event) => event.text?.includes('账号'))).toEqual([])
   expect(JSON.stringify(runtime.snapshot('synthetic-parent', first.worker.id))).not.toContain(
     'synthetic-account-b',
   )

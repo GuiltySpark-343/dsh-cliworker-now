@@ -17,6 +17,25 @@ export async function authorizedCatalog(
   signal: AbortSignal,
   expected?: string,
 ): Promise<{ catalog: Catalog; binding: string }> {
+  try {
+    return await authorizedCatalogOnce(cli, backend, config, project, signal, expected)
+  } catch (error) {
+    // The account changed while its catalog was read: read the one signed in now,
+    // silently, unless the caller holds a specific account.
+    if (expected || !(error instanceof Error) || error.message !== ACCOUNT_CHANGED) throw error
+    signal.throwIfAborted()
+    return authorizedCatalogOnce(cli, backend, config, project, signal)
+  }
+}
+
+async function authorizedCatalogOnce(
+  cli: CliId,
+  backend: ProcessBackend,
+  config: RuntimeConfig,
+  project: string,
+  signal: AbortSignal,
+  expected?: string,
+): Promise<{ catalog: Catalog; binding: string }> {
   const discover = async () => {
     const binding = await readCliAccountBinding(cli, backend, config, project, signal)
     if (expected && binding !== expected) throw new Error(ACCOUNT_CHANGED)

@@ -719,6 +719,18 @@ export class CliWorkerService extends TypertRemoteService {
       }
     }
   }
+  private async authorizeChoice(...args: Parameters<typeof authorizeSelection>) {
+    try {
+      return await this.querySelection(...args)
+    } catch (error) {
+      // A choice made under the previous account stands when the account signed in
+      // now offers it too; the change itself is not announced.
+      const [preference, backend, config, project, signal, expected] = args
+      if (!expected || !(error instanceof Error) || error.message !== ACCOUNT_CHANGED) throw error
+      signal.throwIfAborted()
+      return this.querySelection(preference, backend, config, project, signal)
+    }
+  }
   private async querySelection(...args: Parameters<typeof authorizeSelection>) {
     const [preference, ...rest] = args
     try {
@@ -873,13 +885,17 @@ export class CliWorkerService extends TypertRemoteService {
           }
           this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
           const catalogRevision = this.settingsCatalogs.revision(cli)
-          const { catalog, binding } = await this.queryCatalog(cli, this.backend, this.options, project, signal)
+          const queried = await this.queryCatalog(cli, this.backend, this.options, project, signal)
+          const { catalog } = queried
+          let { binding } = queried
           signal.throwIfAborted()
           this.runtime.assertCliEnabled(cli)
           this.settingsCatalogs.remember(project, { catalog, binding }, catalogRevision)
           const models = catalog.models
           const valid = (setup: DispatchSetup | undefined): setup is DispatchSetup => {
-            if (!setup || setup.binding !== binding || cliOf(setup.preference) !== cli) return false
+            // A saved choice outlives an account change: the current account must still offer it,
+            // and launch authorizes it again under that account.
+            if (!setup || cliOf(setup.preference) !== cli) return false
             try {
               validatePreference(setup.preference, catalog)
               return resolveModel(setup.preference, models).model === setup.preference.model
@@ -976,7 +992,7 @@ export class CliWorkerService extends TypertRemoteService {
           // A remembered answer is never execution authority. Detect changes during any
           // question; an unasked setup was just checked, and launch checks it again.
           if (asked) {
-            const checked = await this.querySelection(
+            const checked = await this.authorizeChoice(
               setup.preference,
               this.backend,
               this.options,
@@ -986,6 +1002,8 @@ export class CliWorkerService extends TypertRemoteService {
             )
             if (checked.preference.model !== setup.preference.model)
               throw new Error('模型与思考强度已变更，请重新选择')
+            binding = checked.binding
+            setup = { ...setup, binding }
           }
           signal.throwIfAborted()
           this.assertExecution(agent)
@@ -1052,10 +1070,10 @@ export class CliWorkerService extends TypertRemoteService {
     const project = this.project(agent)
     const selectedProject = this.selectionProjects?.get(preference)
     if (!workerId && selectedProject && selectedProject !== project) throw new Error('项目已变更，请重新选择')
-    // An existing task continues under the own account signed in now; only a new
-    // task must keep the account its selection was made under.
+    // An existing task continues under the own account signed in now; a new task's
+    // choice is authorized again under it when the account changed after the choice.
     const expected = workerId ? undefined : this.selectionBindings?.get(preference)
-    const { binding, preference: authorizedPreference } = await this.querySelection(
+    const { binding, preference: authorizedPreference } = await this.authorizeChoice(
       preference,
       this.backend,
       this.options,
@@ -2147,30 +2165,39 @@ export class CliWorkerService extends TypertRemoteService {
       const saved = this.runtime.storage.accountBinding(workerId)
       let catalog = saved ? this.settingsCatalogs.display(directory, cli, saved) : undefined
       // After an account change the choices come from the account signed in now.
-      const expected = catalog
+      let expected = catalog
         ? saved!
         : await readCliAccountBinding(cli, this.backend, this.options, directory, control)
       catalog ??= this.settingsCatalogs.display(directory, cli, expected)
-      if (!catalog) {
-        const result = await this.settingsCatalogs.get({
-          cli,
-          project: directory,
-          signal: control,
-          selfVerifiedDiscovery: cli === 'qoder' || cli === 'qodercn',
-          binding: async () => {
-            const current = await readCliAccountBinding(
-              cli,
-              this.backend,
-              this.options,
-              directory,
-              control,
-            )
-            if (current !== expected) throw new Error(ACCOUNT_CHANGED)
-            return current
-          },
-          discover: () =>
-            this.queryCatalog(cli, this.backend, this.options, directory, control, expected),
-        })
+      for (let attempt = 0; !catalog; attempt++) {
+        let result
+        try {
+          result = await this.settingsCatalogs.get({
+            cli,
+            project: directory,
+            signal: control,
+            selfVerifiedDiscovery: cli === 'qoder' || cli === 'qodercn',
+            binding: async () => {
+              const current = await readCliAccountBinding(
+                cli,
+                this.backend,
+                this.options,
+                directory,
+                control,
+              )
+              if (current !== expected) throw new Error(ACCOUNT_CHANGED)
+              return current
+            },
+            discover: () =>
+              this.queryCatalog(cli, this.backend, this.options, directory, control, expected),
+          })
+        } catch (error) {
+          // The account changed during this read: show the one signed in now, silently.
+          if (attempt > 0 || !(error instanceof Error) || error.message !== ACCOUNT_CHANGED) throw error
+          expected = await readCliAccountBinding(cli, this.backend, this.options, directory, control)
+          catalog = this.settingsCatalogs.display(directory, cli, expected)
+          continue
+        }
         catalog = result.catalog
       }
       control.throwIfAborted()
@@ -2228,7 +2255,7 @@ export class CliWorkerService extends TypertRemoteService {
       let preference: Preference = preferenceSchema.parse(JSON.parse(selection))
       const project = this.project(agent)
       this.runtime.assertCliEnabled(cliOf(preference))
-      const { catalog } = await this.querySelection(
+      const { catalog } = await this.authorizeChoice(
         preference,
         this.backend,
         this.options,

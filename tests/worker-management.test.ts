@@ -528,7 +528,7 @@ describe('explicit legacy restart Remote', () => {
     },
   )
 
-  it('refuses account changes at queue admission without resuming the old native conversation', async () => {
+  it('starts the restarted task under the account changed at queue admission, never resuming the old native conversation', async () => {
     const f = fixture(),
       worker = storedWorker(f.project)
     f.storage.save(worker)
@@ -540,11 +540,10 @@ describe('explicit legacy restart Remote', () => {
     const receipt = JSON.parse(
       await f.service.restartWorker('parent', worker.id, 'Synthetic new task', f.signal),
     )
-    await vi.waitFor(() => expect(f.runtime.get('parent', receipt.workerId).status).toBe('failed'))
-    expect(f.runtime.get('parent', receipt.workerId).error).toContain('账号已变更')
+    await vi.waitFor(() => expect(f.backend.spawn).toHaveBeenCalledOnce())
+    expect(JSON.stringify(vi.mocked(f.backend.spawn).mock.calls[0]![0].argv)).not.toContain('synthetic-old-conversation')
     expect(f.storage.accountBinding(worker.id)).toBeUndefined()
-    expect(f.storage.accountBinding(receipt.workerId)).toBeUndefined()
     expect(f.runtime.get('parent', worker.id).conversationId).toBe('synthetic-old-conversation')
-    expect(f.backend.spawn).not.toHaveBeenCalled()
+    expect(f.storage.history(receipt.workerId).filter((event) => event.text?.includes('账号'))).toEqual([])
   })
 })

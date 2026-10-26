@@ -7,6 +7,7 @@ import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import type { AskUserQuestionAnswer } from '@deepseek-ai/dsh-user-questions/types'
 import { CliWorkerService } from '../src/host/index.ts'
+import { ACCOUNT_CHANGED } from '../src/host/authorized-catalog.ts'
 import { WorkerStorage, type DispatchSetup } from '../src/host/storage.ts'
 import { validatePreference, type Catalog } from '../src/host/adapters.ts'
 import { resolveModel } from '../src/shared/models.ts'
@@ -65,7 +66,7 @@ function fixture() {
         expected: string,
       ) => {
         signal.throwIfAborted()
-        if (expected !== binding) throw new Error('账号已变更')
+        if (expected !== undefined && expected !== binding) throw new Error(ACCOUNT_CHANGED)
         const catalog = { cli: preference.cli, models, notice: 'Synthetic' }
         validatePreference(preference, catalog)
         return { catalog, binding, preference: resolveModel(preference, models) }
@@ -229,14 +230,13 @@ it('projects and CLIs do not borrow another scope confirmation', async () => {
   expect(f.storage.conversationSetup('other', other, 'antigravity')).toBeDefined()
 })
 
-it.each(['account', 'model', 'effort'] as const)(
+it.each(['model', 'effort'] as const)(
   'invalid %s confirmation starts full selection instead of silently changing the route',
   async (invalid) => {
     const f = fixture()
     f.storage.setConversationSetup('parent', f.project, f.setup)
     f.storage.setDispatchSetup(f.project, f.setup)
-    if (invalid === 'account') f.setBinding('synthetic-account-b')
-    else if (invalid === 'model') f.setModels([{ id: 'fixture-b', label: 'Fixture B', efforts: ['default'] }])
+    if (invalid === 'model') f.setModels([{ id: 'fixture-b', label: 'Fixture B', efforts: ['default'] }])
     else
       f.setModels([
         { id: 'fixture-a', label: 'Fixture A', efforts: ['high'] },
@@ -249,14 +249,37 @@ it.each(['account', 'model', 'effort'] as const)(
   },
 )
 
-it('account change during questions rejects without writing partial defaults or confirmation', async () => {
+it('a confirmed setup outlives an account change that still offers its model and effort', async () => {
+  const f = fixture()
+  f.storage.setConversationSetup('parent', f.project, f.setup)
+  f.storage.setDispatchSetup(f.project, f.setup)
+  f.setBinding('synthetic-account-b')
+  expect((await f.choose()).preference).toEqual(f.setup.preference)
+  expect(f.ask).not.toHaveBeenCalled()
+})
+
+it('account change during questions keeps the answers when the current account offers them', async () => {
   const f = fixture(),
     pending = f.choose()
-  const rejected = expect(pending).rejects.toThrow('账号已变更')
   await f.ready(1)
   f.respond(0, { cliworker_model: 'Fixture A' })
   await f.ready(2)
   f.setBinding('synthetic-account-b')
+  f.respond(1, { cliworker_effort: 'High', cliworker_role: NO_ROLE_LABEL })
+  const selected = await pending
+  expect(selected).toMatchObject({ preference: { model: 'fixture-a', effort: 'high' }, binding: 'synthetic-account-b' })
+  expect(f.storage.conversationSetup('parent', f.project, 'antigravity')).toEqual(selected)
+})
+
+it('account change during questions still refuses answers the current account does not offer', async () => {
+  const f = fixture(),
+    pending = f.choose()
+  const rejected = expect(pending).rejects.toThrow()
+  await f.ready(1)
+  f.respond(0, { cliworker_model: 'Fixture A' })
+  await f.ready(2)
+  f.setBinding('synthetic-account-b')
+  f.setModels([{ id: 'fixture-b', label: 'Fixture B', efforts: ['default'] }])
   f.respond(1, { cliworker_effort: 'High', cliworker_role: NO_ROLE_LABEL })
   await rejected
   expect(f.storage.preference(f.project)).toBeUndefined()
@@ -559,14 +582,22 @@ it('asking off with only a settings-page model and no confirmed role falls back 
   expect(f.ask).toHaveBeenCalledTimes(2)
 })
 
-it.each(['account', 'model', 'effort'] as const)(
+it('asking off keeps using the saved setup after an account change that still offers it', async () => {
+  const f = fixture()
+  f.storage.setDispatchSetup(f.project, f.setup)
+  f.storage.setGeneralSettings({ askBeforeDispatch: false })
+  f.setBinding('synthetic-account-b')
+  expect((await f.choose('new')).preference).toEqual(f.setup.preference)
+  expect(f.ask).not.toHaveBeenCalled()
+})
+
+it.each(['model', 'effort'] as const)(
   'asking off with an invalid saved %s falls back to full selection instead of guessing',
   async (invalid) => {
     const f = fixture()
     f.storage.setDispatchSetup(f.project, f.setup)
     f.storage.setGeneralSettings({ askBeforeDispatch: false })
-    if (invalid === 'account') f.setBinding('synthetic-account-b')
-    else if (invalid === 'model') f.setModels([{ id: 'fixture-b', label: 'Fixture B', efforts: ['default'] }])
+    if (invalid === 'model') f.setModels([{ id: 'fixture-b', label: 'Fixture B', efforts: ['default'] }])
     else
       f.setModels([
         { id: 'fixture-a', label: 'Fixture A', efforts: ['high'] },

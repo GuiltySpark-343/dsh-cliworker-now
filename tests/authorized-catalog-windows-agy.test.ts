@@ -118,12 +118,12 @@ it('keeps simultaneous authorized requests isolated even with the same backend, 
   expect(f.counts()).toEqual({ accountReads: 4, modelReads: 2 })
 })
 
-it('rejects a changed native principal at the mandatory final read', async () => {
-  const f = fixture([account(), account('b')])
-  await expect(
-    authorizedCatalog('antigravity', f.backend, DEFAULT_CONFIG, state.home, signal()),
-  ).rejects.toThrow('账号已变更')
-  expect(f.counts()).toEqual({ accountReads: 2, modelReads: 1 })
+it('reads models again under the account signed in at the mandatory final read', async () => {
+  const f = fixture([account(), account('b'), account('b'), account('b')])
+  await expect(authorizedCatalog('antigravity', f.backend, DEFAULT_CONFIG, state.home, signal())).resolves.toMatchObject({
+    binding: expect.stringMatching(/^cli-account-v1:/),
+  })
+  expect(f.counts()).toEqual({ accountReads: 4, modelReads: 2 })
 })
 
 it.each(['unconfigured', 'unauthenticated', 'unknown', 'unavailable'])(

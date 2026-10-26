@@ -13,10 +13,10 @@ import {
   CLI_IDS,
   CLI_LABELS,
   CLI_SHORT_NAMES,
-  ACCOUNT_REBOUND_NOTICE,
   CARRYOVER_FAILED_NOTICE,
   CARRYOVER_UNREACHABLE_NOTICE,
   CARRYOVER_FORK_REFUSED,
+  LEGACY_ACCOUNT_NOTICES,
   isRetiredCli,
   isUserInterrupted,
   RETIRED_HARNESS_NOTICE,
@@ -24,6 +24,7 @@ import {
   workerName,
   foldEvents,
   type Preference,
+  type WorkerEvent,
   type TaskMode,
   type Worker,
   type WorkerSnapshot,
@@ -129,6 +130,8 @@ interface Task {
   accountKey?: string
   /** The account was held exclusively; queued until its holder ends or a retry is due. */
   accountWait?: { retryAt: number }
+  /** The account changed between authorization and spawn once; the turn was authorized again. */
+  accountRaceRetried?: boolean
   /** Goal frozen at admission; a carried-over prompt is rebuilt with the same goal. */
   goal?: string
   /** A steering message was handed to a native process of this turn. */
@@ -142,8 +145,16 @@ interface Task {
 /** A message for a run whose account has since changed is queued instead of steered. */
 class AccountChangedDuringRunError extends Error {
   constructor() {
-    super('账号已变更，本轮结束后以当前账号发送')
+    super('本轮结束后发送')
   }
+}
+/** Older records read like current ones: no account-change note survives in a timeline. */
+function legacyAccountNotes(events: WorkerEvent[]): WorkerEvent[] {
+  return events.flatMap((event) => {
+    if (event.kind !== 'diagnostic' || !event.text || !Object.hasOwn(LEGACY_ACCOUNT_NOTICES, event.text)) return [event]
+    const text = LEGACY_ACCOUNT_NOTICES[event.text]
+    return text ? [{ ...event, text }] : []
+  })
 }
 /** Raised before launch when the original session cannot be resumed under the current account. */
 class CarryoverRequiredError extends Error {
@@ -1421,7 +1432,7 @@ export class WorkerRuntime {
     }
   }
   private timeline(worker: Worker): TimelineItem[] {
-    const events = this.nativeTimelineReprojector.project(worker, this.storage.history(worker.id), (runId) =>
+    const events = this.nativeTimelineReprojector.project(worker, legacyAccountNotes(this.storage.history(worker.id)), (runId) =>
       join(this.storage.directory, `${worker.id}.${runId}.raw.jsonl`),
     )
     const rows = foldEvents(
@@ -2214,6 +2225,7 @@ export class WorkerRuntime {
     let quiescent = false
     let metadataReady = false
     let busyAccount = false
+    let accountRaced = false
     let rebound = false
     let reboundResume = false
     try {
@@ -2221,8 +2233,8 @@ export class WorkerRuntime {
       task.accountKey = JSON.stringify([cliOf(worker.preference), admitted])
       controller.signal.throwIfAborted()
       const previousBinding = this.storage.accountBinding(worker.id)
-      // An existing task follows the own account signed in now; a new task keeps
-      // the account its selection was made under (continue-tasks-across-account-changes).
+      // Every turn follows the own account signed in now; the selected model and
+      // effort are authorized again under it (continue-tasks-across-account-changes).
       const continuing = !!previousBinding || !!resumeConversation
       const authorize = () =>
         authorizeSelection(worker.preference, this.backend, this.config, directory, controller.signal, admitted)
@@ -2230,8 +2242,8 @@ export class WorkerRuntime {
       try {
         authorized = await authorize()
       } catch (error) {
-        // A queued continuation admitted under the previous account re-reads the current one once.
-        if (!continuing || !(error instanceof Error) || error.message !== ACCOUNT_CHANGED) throw error
+        // A turn admitted under the previous account re-reads the current one once.
+        if (!(error instanceof Error) || error.message !== ACCOUNT_CHANGED) throw error
         admitted = await readCliAccountBinding(
           cliOf(worker.preference),
           this.backend,
@@ -2407,7 +2419,6 @@ export class WorkerRuntime {
       if ('activate' in execution && typeof execution.activate === 'function') await execution.activate()
       controller.signal.throwIfAborted()
       if (task.queuedFollowupId) this.queuedExecutionGuard?.(worker)
-      if (rebound) this.storage.append(worker, { kind: 'diagnostic', text: ACCOUNT_REBOUND_NOTICE })
       this.storage.bindAccount(worker.id, binding)
       if (task.queuedFollowupId && !task.priority && !task.delivered) {
         if (
@@ -2511,6 +2522,8 @@ export class WorkerRuntime {
       failure = error
       // Per attempt: a carryover after a spawned resume can still wait for its account.
       busyAccount = accountBusy(error) && !spawned
+      // Nothing reached a CLI yet, so the turn can be authorized again under the new account.
+      accountRaced = !spawned && error instanceof Error && error.message === ACCOUNT_CHANGED
       failureBeforeStop =
         !!task.admissionFailure ||
         (!controller.signal.aborted &&
@@ -2590,6 +2603,18 @@ export class WorkerRuntime {
     }
     if (busyAccount && failureBeforeStop && !task.admissionFailure && !releaseFailed && !this.blocked && !this.disposed)
       return this.waitForAccount(task)
+    if (
+      accountRaced &&
+      !task.accountRaceRetried &&
+      failureBeforeStop &&
+      !task.admissionFailure &&
+      !releaseFailed &&
+      !this.blocked &&
+      !this.disposed
+    ) {
+      task.accountRaceRetried = true
+      return this.waitForAccount(task, 0)
+    }
     const unreachable = failure instanceof CarryoverRequiredError
     if (
       !task.carryover &&
@@ -2654,12 +2679,13 @@ export class WorkerRuntime {
    * A Pi/OMP OAuth account serves one run at a time. Its process never started,
    * so the turn returns to its queue position without holding a slot.
    */
-  private waitForAccount(task: Task): void {
+  private waitForAccount(task: Task, delay = ACCOUNT_RETRY_MS): void {
     const { worker } = task
     this.running.delete(task)
-    if (!task.accountWait)
+    // An account change is retried silently; only a busy account is worth telling.
+    if (!task.accountWait && delay > 0)
       this.storage.append(worker, { kind: 'diagnostic', text: '账号正被另一个任务使用，排队等待' })
-    task.accountWait = { retryAt: Date.now() + ACCOUNT_RETRY_MS }
+    task.accountWait = { retryAt: Date.now() + delay }
     // Nothing was spawned; the next attempt opens its own steering channel.
     task.steeringController = new AbortController()
     worker.status = 'queued'
