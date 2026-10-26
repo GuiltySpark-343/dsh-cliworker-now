@@ -136,7 +136,8 @@ interface Task {
   /** The admitted message already reached a native process (queue item removed). */
   delivered?: boolean
   /** The turn continues in a new native session after the original could not be resumed. */
-  carryover?: { previousConversationId: string; previousSessionUsage?: TokenUsage }
+  // A Claude branch that never started has no conversation of its own, only its pending fork.
+  carryover?: { previousConversationId?: string; previousSessionUsage?: TokenUsage; forkState?: WorkerForkState }
 }
 /** A message for a run whose account has since changed is queued instead of steered. */
 class AccountChangedDuringRunError extends Error {
@@ -1198,6 +1199,8 @@ export class WorkerRuntime {
   }
 
   private forkRunSource(worker: Worker, runId: string): { workerId: string; conversationId: string } {
+    // Inherited runs map to an ancestor's raw log, yet a carryover still left them behind.
+    this.assertAfterCarryover(worker, runId)
     let current = worker.id, conversationId = worker.conversationId!
     const visited = new Set<string>()
     while (!existsSync(join(this.storage.directory, `${current}.${runId}.raw.jsonl`))) {
@@ -1210,13 +1213,15 @@ export class WorkerRuntime {
     }
     // A run before a carryover belongs to an older session; the current one has no native copy of it.
     const owner = this.storage.workers.get(current)
-    if (owner?.carryoverRunId && owner.carryoverRunId !== runId && owner.conversationId === conversationId) {
-      const events = this.storage.history(current)
-      const at = events.findIndex((event) => event.runId === runId)
-      const carried = events.findIndex((event) => event.runId === owner.carryoverRunId)
-      if (at >= 0 && carried >= 0 && at < carried) throw new Error(CARRYOVER_FORK_REFUSED)
-    }
+    if (owner && owner.conversationId === conversationId) this.assertAfterCarryover(owner, runId)
     return { workerId: current, conversationId }
+  }
+  private assertAfterCarryover(worker: Worker, runId: string) {
+    if (!worker.carryoverRunId || worker.carryoverRunId === runId) return
+    const events = this.storage.history(worker.id)
+    const at = events.findIndex((event) => event.runId === runId)
+    const carried = events.findIndex((event) => event.runId === worker.carryoverRunId)
+    if (at >= 0 && carried >= 0 && at < carried) throw new Error(CARRYOVER_FORK_REFUSED)
   }
 
   /** Metadata only, through the same admitted account, argv builder and owned process backend. */
@@ -2049,6 +2054,7 @@ export class WorkerRuntime {
       // account); keep the original, its uncombined usage and its rebound state.
       worker.conversationId = task.carryover.previousConversationId
       worker.previousSessionUsage = task.carryover.previousSessionUsage
+      if (task.carryover.forkState) writeWorkerForkState(this.storage.directory, worker.id, task.carryover.forkState)
     }
     worker.status = status
     worker.error = error
@@ -2184,8 +2190,8 @@ export class WorkerRuntime {
           throw new Error('Resume conversation_id does not match the requested conversation')
         if (pendingFork?.sourceConversationId === id) throw new Error('原生分支没有创建新的会话 ID')
         const left = task.carryover?.previousConversationId
-        if (left && left !== id && !worker.conversationId) {
-          if (!worker.previousConversationIds?.includes(left))
+        if (task.carryover && left !== id && !worker.conversationId) {
+          if (left && !worker.previousConversationIds?.includes(left))
             worker.previousConversationIds = [...(worker.previousConversationIds ?? []), left].slice(-64)
           worker.carryoverRunId = worker.runId
           worker.reboundConversationId = undefined
@@ -2243,13 +2249,12 @@ export class WorkerRuntime {
       rebound = continuing && previousBinding !== binding
       // Kept until the session resumes under this account, so a retry after a
       // failed carryover can still carry it over.
-      if (rebound && expectedConversation) worker.reboundConversationId = expectedConversation
-      reboundResume = !!expectedConversation && worker.reboundConversationId === expectedConversation
+      // A pending Claude branch resumes its source; a rejected fork is carried over the same way.
+      if (rebound && resumeConversation) worker.reboundConversationId = resumeConversation
+      reboundResume = !!resumeConversation && worker.reboundConversationId === resumeConversation
       if (
         reboundResume &&
         !task.carryover &&
-        expectedConversation &&
-        !pendingFork?.sourceConversationId &&
         (crossAccountResume(cliOf(worker.preference)) === 'carryover' ||
           nativeSessionReachable({
             cli: cliOf(worker.preference),
@@ -2598,8 +2603,6 @@ export class WorkerRuntime {
       (unreachable ||
         // Only a resume rejected before any reply or tool event is safe to redo in a new session.
         (reboundResume &&
-          !!expectedConversation &&
-          !pendingFork?.sourceConversationId &&
           spawned &&
           quiescent &&
           !observed &&
@@ -2618,9 +2621,16 @@ export class WorkerRuntime {
   private async carryOver(task: Task, directory: string, unreachable: boolean): Promise<void> {
     const { worker } = task
     const context = carryoverContext(this.storage.history(worker.id), worker.runId)
+    const fork = readWorkerForkState(this.storage.directory, worker.id)
     task.carryover = {
-      previousConversationId: worker.conversationId!,
+      previousConversationId: worker.conversationId,
       previousSessionUsage: worker.previousSessionUsage,
+      ...(fork?.sourceConversationId ? { forkState: fork } : {}),
+    }
+    // The new session starts fresh instead of forking the source again.
+    if (fork?.sourceConversationId) {
+      const { sourceConversationId: _source, sourceMessageId: _cut, ...settled } = fork
+      writeWorkerForkState(this.storage.directory, worker.id, settled)
     }
     // Token usage keeps counting across sessions; the context window is the new session's own.
     const left = captureConversationTelemetry(worker, this.runTelemetry(worker, worker.runId))

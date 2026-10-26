@@ -2724,3 +2724,10 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - “默认模型设置”的取舍：插件只有项目 + CLI 一级默认值，设置页没有默认角色控件，因此“默认设定”= 项目完整设定；缺角色时回退选型一次，之后即可免询问。开关最初按项目 + CLI 实现于各 CLI 页，合并 `feat/general-settings` 后改为通用页全局开关：任务指定位置即「CLI Worker 设置」，安全性由每个项目 + CLI 的有效设定保证。
 - 自动检查（macOS，本 worktree）：相关 10 文件（dispatch-flow、general-settings、settings-dialog、cli-settings、client-i18n、isolated-runtime、running-message-settings、dispatch-storage、role-dispatch、storage）**442 项通过**。新增用例覆盖旧配置缺字段即询问、关闭后无问题卡（含 `cliworker_start` 入口）且绑定交给 `launch`、无完整设定/账号/模型/强度失效回退、宿主拒绝不保存、对话设定失效改用项目设定、不跨项目或 CLI、通用设置持久化/权限/重开/`null`/非法值、设置页旧 Host 缺字段显示开启/保存/失败恢复、i18n 键检查。全量 `vitest run`：**224 文件通过、1 失败、3 跳过；4433 通过、2 失败、13 跳过**，失败均为 `build-dependencies.test.ts` 缺少正式构建的 `lib/typert.remote-client.js`（本 worktree 未执行正式 build，环境性）。`build-preview.mjs` 通过；预览包内 `build.mjs --typecheck-only` Host/Client 通过。OpenSpec `validate --all --strict` 35/35 通过。
 - 未执行：DSH Desktop 实际界面（未更新 Desktop 链接，需用户授权）、Windows 界面、真实 CLI 派遣与模型调用。OpenSpec 变更因上述验收未完成暂不归档。
+
+## 2026-10-26 换号续接收尾：分支首轮改接与退出重登（OpenSpec `continue-tasks-across-account-changes` 2.6、4.6，`feat/general-settings`，未发布）
+
+- 范围（用户 2026-10-26 决定）：原账号退出后无论登录其他账号还是重登原账号，任务都要能续聊；真实验收只测原账号退出后重登，换到其他账号与改接不做真实实测，第 0 节实验未执行，方式表保持全部 `'try'`。
+- 2.6：Claude 延迟分支首轮（`--fork-session`）在改绑后无任何事件即失败时改接一次——清除待分支来源、新会话附带分支截点前记录；改接也失败时恢复待分支状态，下一轮仍按改绑处理；改接后继承自原任务、早于改接的轮次拒绝原生分支。其他 CLI 的分支元数据操作在本地完成，失败照常报告。
+- 测试：`tests/cross-account-continuation.test.ts` 新增延迟分支 3 项（改接一次、改接失败恢复并下一轮再改接、同账号失败不改接；合成 AGY 进程模拟延迟分支，换回旧 `runtime.ts` 时前 2 项失败）与退出重登 2 项（未登录续聊失败、不启动、保留会话与绑定；重登原账号原生续接且无改绑说明，登录其他账号原生续接并有一条改绑说明）。相关 9 文件 249 项通过；全量 227 文件 4479 通过、13 跳过；类型检查、`build-preview.mjs`、OpenSpec 严格校验 36 项通过。
+- 未执行：正式构建与 Desktop 退出重登实测（5.2）。

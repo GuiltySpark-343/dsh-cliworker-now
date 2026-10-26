@@ -12,6 +12,7 @@ import { readClaudeOwnRoute } from '../src/host/claude-own-route.ts'
 import { ACCOUNT_CHANGED } from '../src/host/authorized-catalog.ts'
 import * as crossAccount from '../src/host/cross-account-resume.ts'
 import { DEFAULT_CONFIG, type ProcessBackend } from '../src/host/process.ts'
+import { readWorkerForkState, writeWorkerForkState } from '../src/host/worker-fork.ts'
 import {
   ACCOUNT_REBOUND_NOTICE, CARRYOVER_FAILED_NOTICE, CARRYOVER_FORK_REFUSED, CARRYOVER_UNREACHABLE_NOTICE,
   type Preference,
@@ -416,6 +417,100 @@ describe('cross-account continuation with synthetic AGY processes', () => {
     const source = (runId: string) => (f.runtime as any).forkRunSource(worker, runId)
     expect(() => source(before)).toThrow(CARRYOVER_FORK_REFUSED)
     expect(source(worker.runId)).toEqual({ workerId: id, conversationId: NEW })
+  })
+
+  it.each([['the same account', A], ['another account', B]] as const)(
+    'keeps the session through a sign-out and resumes it natively after signing in to %s',
+    async (_label, next) => {
+      const f = setup()
+      const id = await f.completed()
+      account = undefined
+      expect(await f.submit(id).done).toMatchObject({ status: 'failed', error: expect.stringContaining('未登录'), conversationId: OLD })
+      expect(f.backend.spawn).toHaveBeenCalledTimes(1)
+      expect(f.storage.accountBinding(id)).toBe(A)
+      account = next
+      const task = f.submit(id)
+      const resumed = await f.spawned(2)
+      expect(resumed.launch.argv).toContain('--conversation')
+      expect(resumed.launch.argv).toContain(OLD)
+      resumed.succeed(OLD)
+      expect(await task.done).toMatchObject({ status: 'completed', conversationId: OLD })
+      expect(f.storage.accountBinding(id)).toBe(next)
+      expect(f.storage.history(id).filter(event => event.text === ACCOUNT_REBOUND_NOTICE)).toHaveLength(next === A ? 0 : 1)
+      expectNoCarryover(f.storage, id)
+    },
+  )
+
+  // synthetic pending branch: the child resumes its source on its first turn, as a lazy Claude fork does.
+  const pendingBranch = async (f: ReturnType<typeof setup>) => {
+    const id = await f.completed()
+    const worker = f.storage.workers.get(id)!
+    const inherited = worker.runId
+    worker.conversationId = undefined
+    f.storage.save(worker)
+    writeWorkerForkState(f.storage.directory, id, { sourceConversationId: OLD, sourceMessageId: 'synthetic-cut' })
+    return { id, inherited }
+  }
+
+  it('carries a pending branch over once when its first turn under B fails before any event', async () => {
+    const f = setup()
+    const { id, inherited } = await pendingBranch(f)
+    account = B
+    const task = f.submit(id)
+    const forked = await f.spawned(2)
+    expect(forked.launch.argv).toContain(OLD)
+    forked.finish(1)
+    const fresh = await f.spawned(3)
+    expectFresh(fresh.launch.argv)
+    expect(promptOf(fresh.launch.argv)).toContain(ROLE)
+    expect(promptOf(fresh.launch.argv)).toContain(FIRST)
+    fresh.succeed(NEW)
+    const worker = await task.done
+    expect(worker).toMatchObject({ status: 'completed', conversationId: NEW, carryoverRunId: worker.runId })
+    expect(worker.previousConversationIds ?? []).toEqual([])
+    expect(worker.reboundConversationId).toBeUndefined()
+    expect(readWorkerForkState(f.storage.directory, id)?.sourceConversationId).toBeUndefined()
+    expect(f.storage.accountBinding(id)).toBe(B)
+    expect(f.storage.history(id).filter(event => event.text === CARRYOVER_FAILED_NOTICE)).toEqual([
+      expect.objectContaining({ detail: '已附带此前 2 条记录' }),
+    ])
+    // The inherited run lives in the source session only; the new session has no native copy.
+    expect(() => (f.runtime as any).forkRunSource(worker, inherited)).toThrow(CARRYOVER_FORK_REFUSED)
+    expect(f.backend.spawn).toHaveBeenCalledTimes(3)
+  })
+
+  it('restores a pending branch when its carryover also fails, and carries it over again next turn', async () => {
+    const f = setup()
+    const { id } = await pendingBranch(f)
+    account = B
+    const task = f.submit(id)
+    ;(await f.spawned(2)).finish(1)
+    ;(await f.spawned(3)).finish(1)
+    const worker = await task.done
+    expect(worker.status).toBe('failed')
+    expect(worker.conversationId).toBeUndefined()
+    expect(worker.carryoverRunId).toBeUndefined()
+    expect(readWorkerForkState(f.storage.directory, id)).toMatchObject({ sourceConversationId: OLD, sourceMessageId: 'synthetic-cut' })
+    const next = f.submit(id)
+    const forked = await f.spawned(4)
+    expect(forked.launch.argv).toContain(OLD)
+    forked.finish(1)
+    const fresh = await f.spawned(5)
+    expectFresh(fresh.launch.argv)
+    fresh.succeed(NEW)
+    expect(await next.done).toMatchObject({ status: 'completed', conversationId: NEW })
+    expect(f.storage.history(id).filter(event => event.text === CARRYOVER_FAILED_NOTICE)).toHaveLength(2)
+  })
+
+  it('does not carry over a pending branch whose first turn fails under the same account', async () => {
+    const f = setup()
+    const { id } = await pendingBranch(f)
+    const task = f.submit(id)
+    ;(await f.spawned(2)).finish(1)
+    expect((await task.done).status).toBe('failed')
+    expect(readWorkerForkState(f.storage.directory, id)?.sourceConversationId).toBe(OLD)
+    expectNoCarryover(f.storage, id)
+    expect(f.backend.spawn).toHaveBeenCalledTimes(2)
   })
 
   it('does not carry over after a user stops a rebound resumed run', async () => {
