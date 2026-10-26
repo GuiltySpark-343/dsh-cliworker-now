@@ -1,6 +1,6 @@
 import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AccountTerminal, type AccountCloseControl } from '../src/client/account-terminal.tsx'
 import type { API } from '../src/client/workers.ts'
 import type {
@@ -81,6 +81,9 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Button: ({ children, variant: _variant, size: _size, ...props }: any) =>
     createElement('button', props, children),
   StateDot: ({ state }: any) => createElement('span', { 'data-state': state }),
+  Input: (props: any) => createElement('input', props),
+  IconCheckOutlineRegular: () => createElement('svg'),
+  IconCheckCircleFillRegular: () => createElement('svg'),
   writeClipboard: clipboardWrites,
 }))
 
@@ -1148,3 +1151,107 @@ it('immediately releases a failed stream even while process cleanup is still pen
     cleanup.resolve(ok())
   })
 })
+
+describe('Antigravity sign-in window (simulated Host frames)', () => {
+  const LINK = 'https://accounts.google.com/o/oauth2/auth?client_id=synthetic&state=synthetic'
+  const guide = (step: string, extra: Record<string, unknown> = {}) => ({ step, tone: 'action', text: '模拟引导', ...extra })
+  const push = async (f: Awaited<ReturnType<typeof setup>>, frame: Omit<AccountFrame, 'seq'>, seq: number) => {
+    await act(async () => {
+      f.streams[0].push({ seq, ...frame } as AccountFrame)
+    })
+  }
+  const buttons = (f: Awaited<ReturnType<typeof setup>>) =>
+    f.renderer.root.findAllByType('button').map((button) => button.children.join(''))
+
+  it('hides the native terminal, keeps it unsized and offers it as a fallback', async () => {
+    const f = await setup(false)
+    await f.update('antigravity', 'login')
+    await f.start()
+    const view = f.renderer.root.findByProps({ className: 'cwn-account-terminal-view' })
+    expect(view.props.hidden).toBe(true)
+    expect(terminals[0].focus).not.toHaveBeenCalled()
+    expect(f.api.cliworker.accountResize).not.toHaveBeenCalled()
+    expect(JSON.stringify(f.renderer.toJSON())).not.toContain('模拟账号交互')
+    expect(buttons(f)).not.toContain('关闭终端')
+    await f.click('显示原生终端')
+    expect(f.renderer.root.findByProps({ className: 'cwn-account-terminal-view' }).props.hidden).toBe(false)
+  })
+
+  it('selects Google sign-in, opens only the Google page and submits a pasted code with Enter', async () => {
+    vi.useFakeTimers()
+    const f = await setup(false)
+    await f.update('antigravity', 'login')
+    await f.start()
+    await push(f, { guide: guide('method') }, 1)
+    await f.click('使用 Google 账号登录')
+    expect(f.accountWrite).toHaveBeenLastCalledWith('parent', 'terminal-a', '\r')
+    await push(f, { guide: guide('code', { link: LINK }) }, 2)
+    await f.click('重新打开登录页面')
+    expect(window.open).toHaveBeenCalledExactlyOnceWith(LINK, '_blank', 'noopener,noreferrer')
+    const input = () => f.renderer.root.findByProps({ 'aria-label': '授权码' })
+    expect(JSON.stringify(f.renderer.toJSON())).toContain('粘贴后按回车键')
+    await act(async () => {
+      input().props.onPaste()
+      input().props.onChange({ target: { value: ' 4/synthetic-authorization-code\n' } })
+    })
+    const text = JSON.stringify(f.renderer.toJSON())
+    expect(text).toContain('授权码已粘贴。')
+    expect(text).toContain('按回车键完成登录')
+    await act(async () => {
+      f.renderer.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() })
+    })
+    expect(f.accountWrite).toHaveBeenLastCalledWith('parent', 'terminal-a', '\x1b[200~4/synthetic-authorization-code\x1b[201~')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(f.accountWrite).toHaveBeenLastCalledWith('parent', 'terminal-a', '\r')
+    expect(JSON.stringify(f.renderer.toJSON())).toContain('正在确认登录…')
+    await push(f, { guide: guide('signedIn', { tone: 'success' }) }, 3)
+    await push(f, { status: 'closed', cleanupConfirmed: true }, 4)
+    expect(JSON.stringify(f.renderer.toJSON())).toContain('已登录 Antigravity')
+    await f.click('完成')
+    expect(f.onClose).toHaveBeenCalledOnce()
+  })
+
+  it('ignores a sign-in link that is not a Google accounts page', async () => {
+    const f = await setup(false)
+    await f.update('antigravity', 'login')
+    await f.start()
+    await push(f, { guide: guide('code', { link: 'https://example.com/phish' }) }, 1)
+    expect(buttons(f)).not.toContain('重新打开登录页面')
+    expect(window.open).not.toHaveBeenCalled()
+  })
+
+  it('offers a fresh sign-in when the code is not confirmed', async () => {
+    const f = await setup(false)
+    await f.update('antigravity', 'login')
+    await f.start()
+    await push(f, { guide: guide('unconfirmed', { tone: 'warning', text: '模拟未确认' }) }, 1)
+    expect(JSON.stringify(f.renderer.toJSON())).toContain('模拟未确认')
+    await f.click('重新开始登录')
+    expect(f.accountStop).toHaveBeenCalledOnce()
+    expect(f.accountStart).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows sign-out progress and the result without any typing from the window', async () => {
+    const f = await setup(false)
+    await f.update('antigravity', 'logout')
+    await f.start()
+    expect(JSON.stringify(f.renderer.toJSON())).toContain('正在检查登录状态…')
+    await push(f, { guide: guide('loggingOut', { tone: 'info' }) }, 1)
+    expect(JSON.stringify(f.renderer.toJSON())).toContain('正在退出 Antigravity…')
+    await push(f, { guide: guide('loggedOut', { tone: 'success' }) }, 2)
+    await push(f, { status: 'closed', cleanupConfirmed: true }, 3)
+    expect(JSON.stringify(f.renderer.toJSON())).toContain('已退出 Antigravity')
+    expect(f.accountWrite).not.toHaveBeenCalled()
+  })
+
+  it('keeps the plain terminal for Antigravity account management', async () => {
+    const f = await setup(false)
+    await f.update('antigravity', 'manage')
+    await f.start()
+    expect(f.renderer.root.findByProps({ className: 'cwn-account-terminal-view' }).props.hidden).toBe(false)
+    expect(buttons(f)).toEqual(['关闭终端'])
+  })
+})
+

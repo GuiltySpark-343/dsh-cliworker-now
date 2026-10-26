@@ -39,6 +39,8 @@ export interface AccountGuide {
   step: string
   tone: 'info' | 'action' | 'success' | 'warning'
   text: string
+  /** The native Google sign-in page, only an https://accounts.google.com address. */
+  link?: string
 }
 /** Ephemeral, user-operated terminal transport; never stored with worker events. */
 export interface AccountFrame {

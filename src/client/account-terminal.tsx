@@ -10,6 +10,7 @@ import { createZcodeLoginLinkParser } from './zcode-login-link.ts'
 import { createZcodeLoginLinkProvider } from './zcode-login-link-provider.ts'
 import { t, type MessageKey, useT } from './i18n.ts'
 import { hostText } from './operation-error.ts'
+import { AgyAccountWizard, googleSignInLink } from './agy-account-wizard.tsx'
 
 const STARTUP_TIMEOUT_MS = 20_000
 const CLEANUP_TIMEOUT_MS = 12_000
@@ -121,6 +122,13 @@ export function AccountTerminal({
   const stop = useRef<() => Promise<void>>(async () => {})
   const focus = useRef<() => void>(() => {})
   const contextClipboard = useRef<() => Promise<void>>(async () => {})
+  const send = useRef<(data: string) => void>(() => {})
+  const refit = useRef<() => void>(() => {})
+  // Antigravity sign-in/out is drawn by the plugin; the native terminal stays behind it.
+  const guided = cli === 'antigravity' && action !== 'manage'
+  const [rawVisible, setRawVisible] = useState(false)
+  const rawShown = useRef(false)
+  rawShown.current = !guided || rawVisible
   const generation = useRef(0)
   const closing = useRef<Promise<boolean>>()
   const [attempt, setAttempt] = useState(0)
@@ -365,7 +373,8 @@ export function AccountTerminal({
       const resize = () => {
         cancelAnimationFrame(resizeFrame)
         resizeFrame = requestAnimationFrame(() => {
-          if (!alive || viewDisposed || ended) return
+          // A hidden view has no size; the Host keeps its own large PTY until it is shown.
+          if (!alive || viewDisposed || ended || !rawShown.current) return
           try {
             fit.fit()
             if (id && !startup.signal.aborted)
@@ -377,8 +386,9 @@ export function AccountTerminal({
       }
       observer = new ResizeObserver(resize)
       observer.observe(element.current)
+      refit.current = resize
       resize()
-      input = view.onData((data) => {
+      const sendInput = (data: string) => {
         if (!canWrite()) return
         const bytes = new TextEncoder().encode(data).byteLength
         if (queuedBytes + bytes > MAX_INPUT_BYTES) {
@@ -397,7 +407,9 @@ export function AccountTerminal({
           .finally(() => {
             queuedBytes -= bytes
           })
-      })
+      }
+      send.current = sendInput
+      input = view.onData(sendInput)
       startupTimer = setTimeout(() => {
         fail(t('启动超过 20 秒，已取消本次请求。请确认 CLI 可用后重试'))
       }, STARTUP_TIMEOUT_MS)
@@ -424,7 +436,7 @@ export function AccountTerminal({
           setInstruction(result.instruction)
           setPhase('running')
           view.options.disableStdin = false
-          view.focus()
+          if (rawShown.current) view.focus()
           resize()
           const accountStream = api.$stream<string>({
             name: 'CLI 账号终端',
@@ -483,6 +495,8 @@ export function AccountTerminal({
     }
     return () => {
       alive = false
+      send.current = () => {}
+      refit.current = () => {}
       clearLoginLink()
       if (generation.current === ownGeneration) generation.current++
       clearTimeout(startupTimer)
@@ -518,6 +532,9 @@ export function AccountTerminal({
     return operation
   }
   useEffect(() => {
+    if (rawVisible) refit.current()
+  }, [rawVisible])
+  useEffect(() => {
     if (!closeControl) return
     const request = () => close()
     closeControl.current = request
@@ -529,26 +546,46 @@ export function AccountTerminal({
     <section className="cwn-account-terminal" data-cli={cli}>
       <style>{accountTerminalCSS}</style>
       <style>{`.cwn-account-terminal-view:focus-within { outline: none; }`}</style>
-      <div className="cwn-account-terminal-head">
-        <strong>{t('{cli} 账号终端', { cli: CLI_LABELS[cli] })}</strong>
-        <Button variant="ghost" size="md" onClick={() => void close()} disabled={phase === 'stopping'}>
-          {t('关闭终端')}
-        </Button>
-      </div>
-      {(phase === 'loading' || phase === 'stopping') && (
+      {!guided && (
+        <div className="cwn-account-terminal-head">
+          <strong>{t('{cli} 账号终端', { cli: CLI_LABELS[cli] })}</strong>
+          <Button variant="ghost" size="md" onClick={() => void close()} disabled={phase === 'stopping'}>
+            {t('关闭终端')}
+          </Button>
+        </div>
+      )}
+      {guided && phase !== 'stopping' && (
+        <AgyAccountWizard
+          action={action}
+          phase={phase}
+          guide={guide}
+          rawVisible={rawVisible}
+          onToggleRaw={() => setRawVisible((shown) => !shown)}
+          onSend={(data) => send.current(data)}
+          onOpenLink={(url) => {
+            const link = googleSignInLink(url)
+            // Harness routes HTTP(S) new-window requests to the native browser.
+            if (link) window.open(link, '_blank', 'noopener,noreferrer')
+          }}
+          onRestart={() => void close(true)}
+          onDone={() => void close()}
+        />
+      )}
+      {(phase === 'loading' || phase === 'stopping') && (!guided || phase === 'stopping') && (
         <div className="cwn-loading" role="status">
           <StateDot state="ongoing" size={14} />
           {phase === 'loading' ? t('正在启动账号终端…') : t('正在关闭终端…')}
         </div>
       )}
-      {instruction && <p className="cwn-account-instruction">{hostText(instruction)}</p>}
-      {guide && (
+      {!guided && instruction && <p className="cwn-account-instruction">{hostText(instruction)}</p>}
+      {!guided && guide && (
         <p className="cwn-account-guide" data-tone={guide.tone} data-step={guide.step} role="status" aria-live="polite">
           {hostText(guide.text)}
         </p>
       )}
       <div
         className="cwn-account-terminal-view"
+        hidden={!rawShown.current}
         ref={element}
         aria-label={t('{cli} 原生账号终端', { cli: CLI_LABELS[cli] })}
         onClick={() => focus.current()}
@@ -558,7 +595,7 @@ export function AccountTerminal({
           void contextClipboard.current()
         }}
       />
-      {(phase === 'failed' || phase === 'closed') && (
+      {!guided && (phase === 'failed' || phase === 'closed') && (
         <Button variant="ghost" size="md" onClick={() => void close(true)}>
           {phase === 'closed' ? t('重新打开终端') : t('重试')}
         </Button>

@@ -1488,6 +1488,41 @@ describe('Antigravity account terminal guide (synthetic agy screens)', () => {
     expect(f.manager.isBusy('antigravity')).toBe(false)
   })
 
+  it('opens the guided agy terminal large enough to keep every prompt on screen', async () => {
+    fast()
+    const f = fixture()
+    await f.manager.start('p', 'antigravity', 'login', f.cwd, f.signal)
+    expect(vi.mocked(f.backend.spawnTerminal!).mock.calls[0][0]).toMatchObject({ cols: 200, rows: 60 })
+  })
+
+  it('logs out from a settled main screen it does not recognise once the native account is signed in', async () => {
+    fast()
+    Object.assign(AGY_GUIDE_TIMING, { quietMs: 5, settleCapMs: 50 })
+    const f = fixture()
+    f.identity.mockImplementation(async () =>
+      state(vi.mocked(f.terminal.write).mock.calls.some(([data]) => data === '\r') ? 'unconfigured' : 'authenticated'),
+    )
+    const { id } = await f.manager.start('p', 'antigravity', 'logout', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write('\x1b[2Jsynthetic main screen')
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed', cleanupConfirmed: true }))
+    expect(vi.mocked(f.terminal.write).mock.calls).toEqual([['/logout'], ['\r']])
+    expect(watched.steps()).toEqual(['loggingOut', 'loggedOut'])
+  })
+
+  it('types nothing when a settled logout screen belongs to a signed-out account', async () => {
+    fast()
+    Object.assign(AGY_GUIDE_TIMING, { quietMs: 5, settleCapMs: 50 })
+    const f = fixture()
+    f.identity.mockResolvedValue(state('unconfigured'))
+    const { id } = await f.manager.start('p', 'antigravity', 'logout', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write('synthetic screen')
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed' }))
+    expect(f.terminal.write).not.toHaveBeenCalled()
+    expect(watched.steps()).toEqual(['notSignedIn'])
+  })
+
   it('types nothing for a signed-out logout terminal and closes it', async () => {
     fast()
     const f = fixture()
@@ -1526,8 +1561,9 @@ describe('Antigravity account terminal guide (synthetic agy screens)', () => {
     await vi.waitFor(() => expect(watched.steps().at(-1)).toBe('pasted'))
     signedIn = true
     await f.manager.write('p', id, '\r')
-    await vi.waitFor(() => expect(watched.steps().at(-1)).toBe('signedIn'))
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed', cleanupConfirmed: true }))
     expect(watched.steps()).toEqual(['method', 'code', 'pasted', 'confirming', 'signedIn'])
+    expect(f.manager.isBusy('antigravity')).toBe(false)
     expect(vi.mocked(f.terminal.write).mock.calls).toEqual([['\x1b[200~synthetic-authorization-code\x1b[201~'], ['\r']])
     expect(JSON.stringify(watched.seen.filter((frame) => frame.guide))).not.toContain('synthetic-authorization-code')
     await f.manager.stop('p', id)

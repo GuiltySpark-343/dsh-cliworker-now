@@ -69,7 +69,18 @@ const MAX_FRAMES = 512
 const MAX_INPUT_BYTES = 16 * 1024
 const ACTIONS: AccountAction[] = ['login', 'logout', 'manage']
 /** Antigravity terminal guide timing; tests shorten it. */
-export const AGY_GUIDE_TIMING = { commandDelayMs: 400, pollMs: 1500, loginConfirmMs: 60_000, logoutConfirmMs: 20_000 }
+export const AGY_GUIDE_TIMING = {
+  commandDelayMs: 400,
+  pollMs: 1500,
+  loginConfirmMs: 20_000,
+  logoutConfirmMs: 20_000,
+  /** Output pause that counts as a finished draw. */
+  quietMs: 1200,
+  /** A screen that keeps animating is still read after this long. */
+  settleCapMs: 8000,
+}
+/** The guided Antigravity terminal is not shown by default; a tall, wide PTY keeps every prompt on screen. */
+const AGY_GUIDED_SIZE = { cols: 200, rows: 60 }
 
 const validateCli = (cli: CliId) => {
   if (!(CLI_IDS as readonly string[]).includes(cli)) throw new Error('不支持的 CLI')
@@ -239,6 +250,8 @@ interface AccountSession {
   /** Step hints and the one automatic `/logout` of an Antigravity login/logout terminal. */
   guide?: AgyAccountGuide
   guideControl?: AbortController
+  settleTimer?: ReturnType<typeof setTimeout>
+  firstOutputAt?: number
   cleanup?: Promise<void>
   release?: () => void | Promise<void>
   deadline?: ReturnType<typeof setTimeout>
@@ -785,8 +798,7 @@ export class AccountManager {
       startup.throwIfAborted()
       allocation = spawnAccountTerminal(this.backend, {
         ...launch,
-        rows: 24,
-        cols: 80,
+        ...(cli === 'antigravity' && action !== 'manage' ? AGY_GUIDED_SIZE : { rows: 24, cols: 80 }),
         terminalType: 'xterm-256color',
         graceMs: this.config.graceMs,
         signal: allocationControl.signal,
@@ -914,7 +926,10 @@ export class AccountManager {
         const text = typeof chunk === 'string' ? chunk : decoder.write(chunk)
         for (let offset = 0; offset < text.length; offset += 4096)
           this.emit(session, { data: text.slice(offset, offset + 4096) })
-        if (session.guide) this.guided(session, session.guide.output(text))
+        if (session.guide) {
+          this.guided(session, session.guide.output(text))
+          this.settleLater(session)
+        }
       }
       const tail = decoder.end()
       if (tail) this.emit(session, { data: tail })
@@ -992,8 +1007,30 @@ export class AccountManager {
         if (event.guide.step === 'notSignedIn')
           void this.finish(session, 'closed', '账号终端已关闭').catch(() => undefined)
       } else if ('command' in event) void this.logOut(session)
+      else if ('identify' in event) void this.identifyScreen(session)
       else void this.confirmAccount(session, event.confirm)
     }
+  }
+
+  private settleLater(session: AccountSession) {
+    const now = Date.now()
+    session.firstOutputAt ??= now
+    clearTimeout(session.settleTimer)
+    const capped = session.firstOutputAt + AGY_GUIDE_TIMING.settleCapMs - now
+    session.settleTimer = setTimeout(
+      () => {
+        if (session.state === 'running' && !session.stopping) this.guided(session, session.guide!.settled())
+      },
+      Math.max(0, Math.min(AGY_GUIDE_TIMING.quietMs, capped)),
+    )
+  }
+
+  /** A settled screen with no known step: the native account decides whether it is signed in. */
+  private async identifyScreen(session: AccountSession) {
+    const signal = session.guideControl!.signal
+    const identity = await this.identity(session.cli, signal).catch(() => undefined)
+    if (signal.aborted || session.state !== 'running' || session.stopping) return
+    this.guided(session, session.guide!.identified(identity?.state))
   }
 
   /** The one command the plugin types for the user (2026-10-26 request): agy has no logout subcommand. */
@@ -1025,6 +1062,8 @@ export class AccountManager {
         signal.throwIfAborted()
         if (change === 'login' && identity?.state === 'authenticated') {
           this.emit(session, { guide: AGY_GUIDES.signedIn })
+          // agy stays on its main screen after signing in; nothing is left for the user to do there.
+          await this.finish(session, 'closed', '账号终端已关闭').catch(() => undefined)
           return
         }
         if (change === 'logout' && identity?.state === 'unconfigured') {
@@ -1109,6 +1148,7 @@ export class AccountManager {
     if (session.cleanup) return session.cleanup
     session.stopping = true
     session.guideControl?.abort()
+    clearTimeout(session.settleTimer)
     clearTimeout(session.deadline)
     clearTimeout(session.attachDeadline)
     session.cleanup = (async () => {

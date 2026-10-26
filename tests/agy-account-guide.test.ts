@@ -83,3 +83,59 @@ it('never types for a signed-out or untrusted logout terminal, or for manage', (
 it('keeps every guide text Host-authored', () => {
   for (const guide of Object.values(AGY_GUIDES)) expect(guide.text).not.toMatch(/synthetic|\x1b/)
 })
+
+const osc8 = (url: string, label = url) => `\x1b]8;id=synthetic;${url}\x07${label}\x1b]8;;\x07`
+const GOOGLE = 'https://accounts.google.com/o/oauth2/auth?client_id=synthetic&state=synthetic'
+
+it('attaches the OSC 8 Google sign-in address to the code step, never another host', () => {
+  const guide = new AgyAccountGuide('login')
+  guide.output(METHOD)
+  const [event] = guide.output(`Your browser should open automatically. If not:\r\n ${osc8(GOOGLE, 'https://accounts.go')}\r\n${CODE}${CODE_TAIL}`)
+  expect(event).toEqual({ guide: { ...AGY_GUIDES.code, link: GOOGLE } })
+  const other = new AgyAccountGuide('login')
+  other.output(METHOD)
+  expect(other.output(osc8('https://example.com/phish') + CODE + CODE_TAIL)).toEqual([{ guide: AGY_GUIDES.code }])
+  expect(new AgyAccountGuide('logout').output(osc8(GOOGLE) + READY)).not.toContainEqual(expect.objectContaining({ guide: expect.objectContaining({ link: GOOGLE }) }))
+})
+
+it('updates the code step when the sign-in address arrives after the prompt', () => {
+  const guide = new AgyAccountGuide('login')
+  guide.output(METHOD + CODE + CODE_TAIL)
+  expect(guide.output(osc8(GOOGLE))).toEqual([{ guide: { ...AGY_GUIDES.code, link: GOOGLE } }])
+  expect(guide.output(osc8(GOOGLE))).toEqual([])
+})
+
+it('asks for the native account once a screen with no known step settles', () => {
+  const logout = new AgyAccountGuide('logout')
+  expect(logout.settled()).toEqual([])
+  logout.output('\x1b[2J synthetic main screen without the guessed marker')
+  expect(logout.settled()).toEqual([{ identify: true }])
+  expect(logout.settled()).toEqual([])
+  expect(logout.identified('authenticated')).toEqual([{ guide: AGY_GUIDES.loggingOut }, { command: 'logout' }])
+  expect(logout.identified('authenticated')).toEqual([])
+
+  const signedOut = new AgyAccountGuide('logout')
+  signedOut.output('synthetic screen')
+  signedOut.settled()
+  expect(signedOut.identified('unconfigured')).toEqual([{ guide: AGY_GUIDES.notSignedIn }])
+
+  const login = new AgyAccountGuide('login')
+  login.output('synthetic screen')
+  login.settled()
+  expect(login.identified('authenticated')).toEqual([{ guide: AGY_GUIDES.alreadySignedIn }])
+  const loginOut = new AgyAccountGuide('login')
+  loginOut.output('synthetic screen')
+  loginOut.settled()
+  expect(loginOut.identified('unconfigured')).toEqual([])
+})
+
+it('never asks while a known step is on screen', () => {
+  for (const screen of [SIGNED_OUT, METHOD, TRUST, CODE + CODE_TAIL]) {
+    const guide = new AgyAccountGuide('logout')
+    guide.output(screen)
+    expect(guide.settled()).toEqual([])
+  }
+  const manage = new AgyAccountGuide('manage')
+  manage.output('synthetic screen')
+  expect(manage.settled()).toEqual([])
+})
