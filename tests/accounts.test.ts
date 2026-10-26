@@ -128,7 +128,11 @@ function fixture(overrides: Partial<RuntimeConfig> = {}, onQueryCleanup?: Constr
     resize: vi.fn(async () => {}),
     inspectForeground: async () => undefined,
     inspectActivity: async () => ({ state: 'unknown', revision: 0 }),
-    signalForeground: async () => 123,
+    // A synthetic CLI that exits on SIGTERM, as the real login CLIs do.
+    signalForeground: vi.fn(async (signal) => {
+      if (signal === 'SIGTERM') result.resolve({ exitCode: null, signal: 'SIGTERM' })
+      return 123
+    }),
     terminate: vi.fn(async () => {
       if (waitCleanup) await cleanup.promise
       output.end()
@@ -1169,6 +1173,45 @@ describe('user-operated account terminals (synthetic PTY)', () => {
     for await (const frame of f.manager.watch('p', id, f.signal)) after.push(frame)
     expect(after.at(-1)).toMatchObject({ status: 'closed', cleanupConfirmed: true })
     expect(f.terminal.terminate).toHaveBeenCalledTimes(2)
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'ends the CLI before terminal cleanup so a zombie helper cannot block closing',
+    async () => {
+      const f = fixture()
+      const { id } = await f.manager.start('p', 'antigravity', 'login', f.cwd, f.signal)
+      let exited = false
+      void f.result.promise.then(() => (exited = true))
+      // Synthetic host provider: an unreaped child keeps the session until its parent CLI has exited.
+      vi.mocked(f.terminal.terminate).mockImplementationOnce(async () => {
+        if (!exited) throw new Error('terminal cleanup failed; surviving pids: 456')
+        f.output.end()
+      })
+      await f.manager.stop('p', id)
+      expect(f.terminal.signalForeground).toHaveBeenCalledWith('SIGTERM')
+      expect(f.manager.isBusy('antigravity')).toBe(false)
+      const frames = []
+      for await (const frame of f.manager.watch('p', id, f.signal)) frames.push(frame)
+      expect(frames.at(-1)).toMatchObject({ status: 'closed', cleanupConfirmed: true })
+    },
+  )
+
+  it.skipIf(process.platform === 'win32')('still cleans up a CLI that ignores SIGTERM after the grace period', async () => {
+    const f = fixture({ graceMs: 20 })
+    const { id } = await f.manager.start('p', 'antigravity', 'login', f.cwd, f.signal)
+    vi.mocked(f.terminal.signalForeground).mockResolvedValueOnce(123)
+    await f.manager.stop('p', id)
+    expect(f.terminal.terminate).toHaveBeenCalledTimes(1)
+    expect(f.manager.isBusy('antigravity')).toBe(false)
+  })
+
+  it('never signals a CLI that has already exited', async () => {
+    const f = fixture()
+    await f.manager.start('p', 'antigravity', 'login', f.cwd, f.signal)
+    f.result.resolve({ exitCode: 0, signal: null })
+    await vi.waitFor(() => expect(f.manager.isBusy('antigravity')).toBe(false))
+    expect(f.terminal.signalForeground).not.toHaveBeenCalled()
+    expect(f.terminal.terminate).toHaveBeenCalledTimes(1)
   })
 
   it('a startup cancellation that cannot clean up retains the CLI lock', async () => {

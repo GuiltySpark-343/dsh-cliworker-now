@@ -229,6 +229,7 @@ interface AccountSession {
   stopping: boolean
   changed: Set<() => void>
   output: Promise<void>
+  exited: boolean
   cleanup?: Promise<void>
   release?: () => void | Promise<void>
   deadline?: ReturnType<typeof setTimeout>
@@ -782,7 +783,6 @@ export class AccountManager {
         signal: allocationControl.signal,
       }).then(
         async (terminal) => {
-          void terminal.done.catch(() => undefined)
           session = {
             id: randomUUID(),
             parent,
@@ -796,8 +796,14 @@ export class AccountManager {
             stopping: false,
             changed: new Set(),
             output: Promise.resolve(),
+            exited: false,
             release,
           }
+          const own = session
+          void terminal.done.then(
+            () => (own.exited = true),
+            () => (own.exited = true),
+          )
           this.sessions.set(session.id, session)
           this.emit(session, { status: 'running' })
           session.output = this.readTerminal(session)
@@ -1037,6 +1043,7 @@ export class AccountManager {
     clearTimeout(session.attachDeadline)
     session.cleanup = (async () => {
       try {
+        await this.endForeground(session)
         await session.terminal.terminate()
         await session.output
         await session.release?.()
@@ -1062,6 +1069,30 @@ export class AccountManager {
       }
     })()
     return session.cleanup
+  }
+
+  /**
+   * A CLI that never reaped a finished helper (agy's browser opener after
+   * /login) keeps a zombie descendant, and the macOS provider then refuses to
+   * stop the session without signalling the CLI. Ending it first lets the
+   * system reap the zombie; terminate() still owns every remaining member.
+   */
+  private async endForeground(session: AccountSession): Promise<void> {
+    if (process.platform === 'win32' || session.exited) return
+    try {
+      await session.terminal.signalForeground('SIGTERM')
+    } catch {
+      return
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+      session.terminal.done.then(
+        () => undefined,
+        () => undefined,
+      ),
+      new Promise<void>((resolve) => (timer = setTimeout(resolve, this.config.graceMs))),
+    ])
+    clearTimeout(timer)
   }
 
   private track<T>(operation: Promise<T>): Promise<T> {
