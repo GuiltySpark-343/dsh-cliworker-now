@@ -1257,6 +1257,17 @@ describe('Antigravity sign-in window (simulated Host frames)', () => {
     expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', '\r')
   })
 
+  it('shows the terminal status on the same footer line as the native terminal toggle', async () => {
+    const f = await setup(false)
+    await f.update('antigravity', 'logout')
+    await f.start()
+    await push(f, { message: '模拟终端状态' }, 1)
+    const foot = f.renderer.root.findByProps({ className: 'cwn-agy-foot' })
+    expect(JSON.stringify(foot.findByProps({ className: 'cwn-agy-notice' }).children)).toContain('模拟终端状态')
+    expect(foot.findAllByType('button').map((button) => button.children.join(''))).toEqual(['显示原生终端'])
+    expect(f.renderer.root.findAllByProps({ className: 'cwn-account-instruction' })).toEqual([])
+  })
+
   it('keeps the plain terminal for Antigravity account management', async () => {
     const f = await setup(false)
     await f.update('antigravity', 'manage')

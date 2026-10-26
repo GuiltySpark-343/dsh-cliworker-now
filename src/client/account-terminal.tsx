@@ -560,6 +560,7 @@ export function AccountTerminal({
           phase={phase}
           guide={guide}
           rawVisible={rawVisible}
+          notice={notice}
           onToggleRaw={() => setRawVisible((shown) => !shown)}
           onSend={(data) => send.current(data)}
           onOpenLink={(url) => {
@@ -600,7 +601,7 @@ export function AccountTerminal({
           {phase === 'closed' ? t('重新打开终端') : t('重试')}
         </Button>
       )}
-      {notice && (
+      {!guided && notice && (
         <p className="cwn-account-instruction" role="status">
           {notice}
         </p>

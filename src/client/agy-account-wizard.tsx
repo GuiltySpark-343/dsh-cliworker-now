@@ -74,6 +74,7 @@ export function AgyAccountWizard({
   phase,
   guide,
   rawVisible,
+  notice,
   onToggleRaw,
   onSend,
   onOpenLink,
@@ -84,6 +85,8 @@ export function AgyAccountWizard({
   phase: Phase
   guide?: AccountGuide
   rawVisible: boolean
+  /** A short terminal status from the Host or the terminal shell, shown beside the toggle. */
+  notice?: string
   onToggleRaw: () => void
   onSend: (data: string) => void
   onOpenLink: (url: string) => void
@@ -107,10 +110,15 @@ export function AgyAccountWizard({
 
   const running = phase === 'running'
   const link = googleSignInLink(guide?.link)
-  const rawToggle = (
-    <Button variant="ghost" size="sm" onClick={onToggleRaw}>
-      {rawVisible ? t('隐藏原生终端') : t('显示原生终端')}
-    </Button>
+  const foot = (
+    <div className="cwn-agy-foot">
+      <span className="cwn-agy-notice" role="status">
+        {notice}
+      </span>
+      <Button variant="ghost" size="sm" onClick={onToggleRaw}>
+        {rawVisible ? t('隐藏原生终端') : t('显示原生终端')}
+      </Button>
+    </div>
   )
 
   if (action === 'logout') {
@@ -133,7 +141,7 @@ export function AgyAccountWizard({
     return (
       <div className="cwn-agy-wizard">
         {body}
-        <div className="cwn-agy-foot">{rawToggle}</div>
+        {foot}
       </div>
     )
   }
@@ -144,6 +152,7 @@ export function AgyAccountWizard({
         <Result tone="success" title={t('已登录 Antigravity')} detail={t('现在可以派遣 Antigravity 任务了。')}>
           <Button variant="primary" size="md" onClick={onDone}>{t('完成')}</Button>
         </Result>
+        {foot}
       </div>
     )
   if (step === 'alreadySignedIn')
@@ -152,7 +161,7 @@ export function AgyAccountWizard({
         <Result tone="info" title={t('当前已登录 Antigravity')} detail={t('如需切换账号，请先点击「退出登录」，再重新登录。')}>
           <Button variant="primary" size="md" onClick={onDone}>{t('关闭')}</Button>
         </Result>
-        <div className="cwn-agy-foot">{rawToggle}</div>
+        {foot}
       </div>
     )
 
@@ -242,7 +251,6 @@ export function AgyAccountWizard({
                     {pasted ? t('授权码已粘贴。') : t('已输入授权码。')}
                     <strong>{t('按回车键完成登录')}</strong>
                   </span>
-                  <kbd>↵</kbd>
                 </p>
               ) : (
                 <p className="cwn-agy-hint">{t('粘贴后按回车键，或点击「完成登录」。')}</p>
@@ -263,7 +271,7 @@ export function AgyAccountWizard({
           <Button variant="ghost" size="sm" onClick={onRestart}>{t('重新开始登录')}</Button>
         </p>
       )}
-      <div className="cwn-agy-foot">{rawToggle}</div>
+      {foot}
     </div>
   )
 }
