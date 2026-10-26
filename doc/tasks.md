@@ -2787,3 +2787,4 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 修订：Antigravity 登录/退出改为 `AgyAccountWizard`（三步登录、退出进度与结果、「显示原生终端」后备）；Host 以 200×60 隐藏运行，提取 Google 登录地址，画面静止后按原生账号状态判断是否已登录再自动 `/logout`，登录确认后结束原生终端。
 - 自动检查（模拟画面与帧，标注合成）：`agy-account-guide` 12 项、`accounts` 新增 3 项并调整登录用例、`account-terminal` 新增 6 项，相关 3 个文件通过。
 - 未验证：Desktop 中的真实登录窗口、真实退出与主界面就绪判定。
+- Desktop 冒烟（`fe40c55` 正式构建，Codex Computer Use 只读截图，未点登录方式、未输入）：点「登录账号」后窗口先显示「正在启动 Antigravity…」，约 6 秒内进入第 1 步「选择登录方式」（说明、「使用 Google 账号登录」按钮、Google Cloud 提示），第 2、3 步为灰色待办，底部「显示原生终端」，原生终端未显示，无重叠或截断。以 × 关闭后显示「正在关闭终端…」，无确认框，之后无残留 agy 进程。设置页未登录时显示「尚未登录 Antigravity…」。真实浏览器授权、粘贴提交与退出尚未验收。
