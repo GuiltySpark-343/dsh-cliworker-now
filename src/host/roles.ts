@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { AskUserQuestionAnswer, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions/types'
 import type { RolePreset, RoleSnapshot, Worker } from '../shared/types.ts'
-import { workerName } from '../shared/types.ts'
+import { CLI_IDS, EFFORTS, workerName } from '../shared/types.ts'
 
 const singleLine = (max: number) =>
   z
@@ -20,6 +20,10 @@ export const roleSnapshotSchema = z.object({
 })
 export const rolePresetSchema = roleSnapshotSchema.omit({ presetId: true }).extend({
   id: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+  // Local patch: a preset may also pin which CLI/model/effort this role runs on.
+  cli: z.enum(CLI_IDS).optional(),
+  model: z.string().trim().min(1).max(200).optional(),
+  effort: z.enum(EFFORTS).optional(),
   builtin: z.boolean().optional(),
   source: z.string().max(240).optional(),
 })

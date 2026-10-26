@@ -1,8 +1,21 @@
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { ClaudeResponseTracker } from './primary-response.mjs'
 
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value)
 const string = (value) => typeof value === 'string' && value.trim().length > 0
 const fail = (message) => new Error(`Claude stream-json: ${message}`)
+/** Local patch: opt-in YOLO permission for non-plan Claude runs. */
+const claudePermissionOverride = () => (process.env.CLIWORKER_CLAUDE_PERMISSION || '').trim()
+const claudeNonPlanPermission = () => {
+  if (claudePermissionOverride() === 'bypassPermissions') return 'bypassPermissions'
+  try {
+    if (readFileSync(join(homedir(), '.dsh', 'cliworker-now', 'claude-permission.txt'), 'utf8').trim() === 'bypassPermissions')
+      return 'bypassPermissions'
+  } catch {}
+  return 'acceptEdits'
+}
 
 function modelEvidence(config, initialized) {
   if (!object(initialized) || !Array.isArray(initialized.models)) throw fail('初始化未返回公开模型映射')
@@ -33,7 +46,8 @@ export function nativeClaudeArgv(config) {
   const args = argv.slice(0, -1)
   if (args[args.indexOf('--output-format') + 1] !== 'stream-json' || args[args.indexOf('--model') + 1] !== config.preference.model)
     throw fail('原生输出格式或模型与选型不一致')
-  const permission = config.mode === 'plan' ? 'plan' : 'acceptEdits'
+  // Local patch: non-plan runs default to bypassPermissions (YOLO).
+  const permission = config.mode === 'plan' ? 'plan' : claudeNonPlanPermission()
   if (args[args.indexOf('--permission-mode') + 1] !== permission) throw fail('原生权限模式与任务不一致')
   if (config.preference.effort === 'default' ? args.includes('--effort') : args[args.indexOf('--effort') + 1] !== config.preference.effort) throw fail('原生思考强度与选型不一致')
   const resumeId = config.conversationId ?? config.forkSource?.conversationId
@@ -98,7 +112,12 @@ export async function runNativeClaude(config, io) {
     }
     if (value.type === 'system' && value.subtype === 'init') {
       if (!sessionId) throw fail('初始化缺少会话身份')
-      if (value.permissionMode !== undefined && value.permissionMode !== (config.mode === 'plan' ? 'plan' : 'acceptEdits')) throw fail('原生初始化权限模式不一致')
+      const acceptedPermission = config.mode === 'plan'
+        ? ['plan']
+        : claudePermissionOverride() === 'stock'
+          ? ['acceptEdits', 'default']
+          : ['bypassPermissions', 'acceptEdits', 'default']
+      if (value.permissionMode !== undefined && !acceptedPermission.includes(value.permissionMode)) throw fail('原生初始化权限模式不一致')
       io.event({ kind: 'status', text: 'Claude Code 原生流已连接', observedModel: typeof value.model === 'string' ? value.model : undefined })
     } else if (value.type === 'stream_event') {
       const event = value.event

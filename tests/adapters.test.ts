@@ -171,6 +171,8 @@ describe('CLI launch and preference boundaries', () => {
       expect(argv).toContain('exact-id')
       expect(argv).toContain('model')
       expect(argv.at(-1)).toBe('任务：\n$(touch dangerous);`echo x`')
+      // Local patch: YOLO permission is opt-in via ~/.dsh/cliworker-now/claude-permission.txt,
+      // so the stock non-plan mode remains acceptEdits here.
       expect(argv.join(' ')).not.toMatch(/bypassPermissions|dangerously-bypass|--yolo|--auto/)
     },
   )

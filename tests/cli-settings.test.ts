@@ -570,12 +570,11 @@ describe('account-supported model selection', () => {
       role: null,
       binding: 'synthetic-settings-account',
     })
-    ask.mockResolvedValue({ answers: [{ id: 'cliworker_reuse', selected: ['沿用'] }] })
+    // Local patch: a new conversation adopts the saved setup silently (no reuse card).
     const agent = await (service as any).parent('parent')
     expect((await (service as any).chooseDispatch(agent, signal, 'antigravity')).preference).toEqual(saved)
     expect(storage.preference(project, 'antigravity')).toEqual(saved)
-    expect(ask).toHaveBeenCalledTimes(1)
-    expect(ask.mock.calls[0]![0].questions[0].id).toBe('cliworker_reuse')
+    expect(ask).not.toHaveBeenCalled()
     expect(backend.spawn).not.toHaveBeenCalled()
   })
 

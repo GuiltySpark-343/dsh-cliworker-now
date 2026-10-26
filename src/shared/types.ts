@@ -100,6 +100,12 @@ export interface RolePreset {
   name: string
   summary: string
   prompt: string
+  /** Local patch: a preset may pin the CLI this role runs on. */
+  cli?: (typeof CLI_IDS)[number]
+  /** Local patch: default model for this role (validated against the live catalog). */
+  model?: string
+  /** Local patch: default reasoning effort for this role. */
+  effort?: (typeof EFFORTS)[number]
   builtin?: boolean
   source?: string
 }
@@ -125,6 +131,8 @@ export interface Worker {
   role?: RoleSnapshot
   preference: Preference
   mode: TaskMode
+  /** Local patch: leader opt-in that lets two marked workers write concurrently. */
+  parallelWrite?: boolean
   conversationId?: string
   /** A session receipt is replaced, never added to another invocation's cumulative receipt. */
   conversationTelemetry?: ConversationTelemetryCheckpoint

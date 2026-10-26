@@ -3,6 +3,7 @@ import { EFFORTS, type ModelChoice } from '../shared/types.ts'
 import { ProcessCleanupUnconfirmedError, type ProcessBackend, type RuntimeConfig } from './process.ts'
 import { probeAccountModels } from './account-models.mjs'
 import { readCodexOwnAccountSource } from './cli-account-binding.ts'
+import { codexCustomProviderRoute } from './codex-custom-provider.ts'
 
 const record = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v)
 const validId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(v)
@@ -158,7 +159,16 @@ export async function discoverCodexModels(
   signal: AbortSignal,
 ): Promise<ModelChoice[]> {
   // Resolve the native source before opening the server, then reread after its normal OAuth refresh.
-  const before = await readCodexOwnAccountSource(cwd, signal)
+  // Local patch: a declared custom provider carries its own credential, so a missing
+  // Codex account file is not fatal — the CLI's own routed catalog is trusted.
+  const proxyRoute = await codexCustomProviderRoute(cwd, signal).catch(() => undefined)
+  let before: { nativeRouteConfirmed?: boolean; localProxyRoute?: boolean }
+  try {
+    before = await readCodexOwnAccountSource(cwd, signal)
+  } catch (error) {
+    if (!proxyRoute) throw error
+    before = { nativeRouteConfirmed: true, localProxyRoute: true }
+  }
   if (!before.nativeRouteConfirmed) return []
   let codexClientVersion: string | undefined
   const native = await readCodexNativeModels(backend, config, executable, cwd, signal, {
@@ -166,6 +176,7 @@ export async function discoverCodexModels(
       codexClientVersion = version
     },
   })
+  if (before.localProxyRoute) return native
   signal.throwIfAborted()
   const source = await readCodexOwnAccountSource(cwd, signal)
   if (!source.nativeRouteConfirmed) return []

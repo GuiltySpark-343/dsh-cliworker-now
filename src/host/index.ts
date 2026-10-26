@@ -59,7 +59,13 @@ import {
   type RoleSnapshot,
   type Worker,
 } from '../shared/types.ts'
-import { agentNameSchema, readRoleAnswer, roleQuestion } from './roles.ts'
+import {
+  agentNameSchema,
+  readRoleAnswer,
+  roleQuestion,
+  roleSnapshot,
+  roleSnapshotSchema,
+} from './roles.ts'
 import {
   DEFAULT_CONFIG,
   projectDirectory,
@@ -776,7 +782,12 @@ export class CliWorkerService extends TypertRemoteService {
     }
   }
   /** Serialize only this conversation's selection; a cancelled waiter never owns the question. */
-  private async chooseDispatch(agent: Agent, callerSignal: AbortSignal, cli: CliId): Promise<DispatchSetup> {
+  private async chooseDispatch(
+    agent: Agent,
+    callerSignal: AbortSignal,
+    cli: CliId,
+    overrides?: { model?: string; effort?: string; role?: string },
+  ): Promise<DispatchSetup> {
     const signal = AbortSignal.any([callerSignal, this.disposed.signal])
     signal.throwIfAborted()
     this.runtime.assertCliEnabled(cli)
@@ -829,31 +840,37 @@ export class CliWorkerService extends TypertRemoteService {
       const current = this.runtime.storage.conversationSetup(agent.id, project, cli)
       let setup: DispatchSetup | undefined = valid(current) ? current : undefined
       let selected = false
+      // Local patch: a new conversation silently reuses the saved setup instead of
+      // asking "沿用?" every time. Set CLIWORKER_NO_REUSE_PROMPT=0 to restore the card.
+      const autoReuse = (process.env.CLIWORKER_NO_REUSE_PROMPT || '').trim() !== '0'
       if (!current) {
         const saved = this.runtime.storage.dispatchSetup(project, cli)
         if (valid(saved)) {
-          const modelLabel =
-            models.find(
-              (model) =>
-                model.id === saved.preference.model ||
-                Object.values(model.variants ?? {}).includes(saved.preference.model),
-            )?.label ?? saved.preference.model
-          const response = await ask([
-            {
-              id: 'cliworker_reuse',
-              header: '沿用设定',
-              question: `是否沿用 ${modelLabel} · ${effortLabel(saved.preference.effort)} · ${saved.role?.name ?? '不使用角色预设'}？`,
-              options: [{ label: '沿用' }, { label: '重新选择' }],
-            },
-          ])
-          const answer = response.answers.find((item) => item.id === 'cliworker_reuse')
-          if (
-            answer?.custom !== undefined ||
-            answer?.selected.length !== 1 ||
-            !['沿用', '重新选择'].includes(answer.selected[0]!)
-          )
-            throw new Error('请选择沿用或重新选择；任务尚未启动')
-          if (answer.selected[0] === '沿用') setup = saved
+          if (autoReuse) setup = saved
+          else {
+            const modelLabel =
+              models.find(
+                (model) =>
+                  model.id === saved.preference.model ||
+                  Object.values(model.variants ?? {}).includes(saved.preference.model),
+              )?.label ?? saved.preference.model
+            const response = await ask([
+              {
+                id: 'cliworker_reuse',
+                header: '沿用设定',
+                question: `是否沿用 ${modelLabel} · ${effortLabel(saved.preference.effort)} · ${saved.role?.name ?? '不使用角色预设'}？`,
+                options: [{ label: '沿用' }, { label: '重新选择' }],
+              },
+            ])
+            const answer = response.answers.find((item) => item.id === 'cliworker_reuse')
+            if (
+              answer?.custom !== undefined ||
+              answer?.selected.length !== 1 ||
+              !['沿用', '重新选择'].includes(answer.selected[0]!)
+            )
+              throw new Error('请选择沿用或重新选择；任务尚未启动')
+            if (answer.selected[0] === '沿用') setup = saved
+          }
         }
       }
       if (!setup) {
@@ -894,6 +911,61 @@ export class CliWorkerService extends TypertRemoteService {
         setup = { preference, role: readRoleAnswer(offered, selection) ?? null, binding }
         selected = true
       }
+      // Local patch: per-call overrides. model/effort/role let the parent Agent pick a
+      // worker's setup without opening a question card. role accepts a preset name,
+      // a literal role prompt, or "none".
+      if (
+        overrides &&
+        (overrides.model !== undefined || overrides.effort !== undefined || overrides.role !== undefined)
+      ) {
+        if (!setup) throw new Error('尚未完成选型')
+        const base = setup
+        const choices = visibleModelChoices(models)
+        const wantedModel = typeof overrides.model === 'string' ? overrides.model.trim() : ''
+        let chosen = wantedModel
+          ? (choices.find((model) => model.label === wantedModel) ??
+            choices.find((model) => model.id === wantedModel))
+          : undefined
+        if (!chosen && !wantedModel)
+          chosen =
+            choices.find(
+              (model) =>
+                model.id === base.preference.model ||
+                Object.values(model.variants ?? {}).includes(base.preference.model),
+            ) ?? choices[0]
+        if (!chosen?.efforts?.length)
+          throw new Error(`指定模型不可用：${wantedModel || base.preference.model}`)
+        let effort = base.preference.effort
+        const wantedEffort = typeof overrides.effort === 'string' ? overrides.effort.trim() : ''
+        if (wantedEffort) {
+          const matched =
+            chosen.efforts.find((item) => item === wantedEffort) ??
+            chosen.efforts.find((item) => effortLabel(item).toLowerCase() === wantedEffort.toLowerCase())
+          if (!matched) throw new Error(`模型 ${chosen.label} 不支持思考强度：${wantedEffort}`)
+          effort = matched
+        } else if (!chosen.efforts.includes(effort)) effort = chosen.efforts[0]!
+        let role = base.role ?? null
+        if (typeof overrides.role === 'string') {
+          const wanted = overrides.role.trim()
+          if (!wanted || wanted.toLowerCase() === 'none') role = null
+          else {
+            const preset = this.runtime.storage.rolePresets().find((item) => item.name === wanted)
+            role = preset
+              ? roleSnapshot(preset)
+              : roleSnapshotSchema.parse({
+                  name: '临时角色',
+                  summary: '本次派遣自定义的角色提示词',
+                  prompt: wanted,
+                })
+          }
+        }
+        setup = {
+          preference: resolveModel(preferenceSchema.parse({ cli, model: chosen.id, effort }), models),
+          role,
+          binding,
+        }
+        selected = true
+      }
       // A remembered answer is never execution authority. Detect changes during any question.
       const checked = await this.querySelection(
         setup.preference,
@@ -929,7 +1001,7 @@ export class CliWorkerService extends TypertRemoteService {
     preference: Preference,
     mode: TaskMode,
     workerId?: string,
-    identity?: { agentName?: string; role?: RoleSnapshot },
+    identity?: { agentName?: string; role?: RoleSnapshot; parallelWrite?: boolean },
     signal: AbortSignal = this.disposed.signal,
     restartSourceId?: string,
     queuedAdmission?: { id: string; expectedRunId: string; priority?: boolean },
@@ -1227,6 +1299,26 @@ export class CliWorkerService extends TypertRemoteService {
                 description:
                   'Use native read-only/plan mode; unsupported by Kimi print mode. Omit or false for coding.',
               },
+              role: {
+                type: 'string',
+                description:
+                  'Optional role for this worker: a saved preset name, a literal role prompt, or "none". Overrides the project default without a question card.',
+              },
+              model: {
+                type: 'string',
+                description:
+                  'Optional model id or label for this worker. Omit to reuse the saved selection.',
+              },
+              effort: {
+                type: 'string',
+                description:
+                  'Optional reasoning effort for this worker (must be supported by the chosen model). Omit to reuse the saved selection.',
+              },
+              parallel_write: {
+                type: 'boolean',
+                description:
+                  'Leader opt-in: allow this write task to run concurrently with another parallel_write task in the same project. Only set it after confirming the two workers touch disjoint files. Omit for the safe serial behavior.',
+              },
             },
             output,
             timeoutMs: 1800000,
@@ -1234,17 +1326,34 @@ export class CliWorkerService extends TypertRemoteService {
             execute: async (args, exec) => {
               if (!exec.agent) throw new Error('A parent Agent is required')
               this.assertExecution(exec.agent)
+              // Local patch: a role preset may pin the CLI/model/effort for this worker.
+              const namedPreset =
+                typeof args.role === 'string'
+                  ? this.runtime.storage
+                      .rolePresets()
+                      .find((preset) => preset.name === args.role!.trim())
+                  : undefined
               let cli = requireCliName(args.cli)
-              if (isGenericQoderName(args.cli))
+              if (namedPreset?.cli && namedPreset.cli !== cli) cli = namedPreset.cli
+              if (isGenericQoderName(args.cli) && !namedPreset?.cli)
                 cli = await this.chooseQoderVariant(exec.agent, exec.signal, args.cli)
               const agentName =
                 args.agent_name === undefined ? undefined : agentNameSchema.parse(args.agent_name)
               if (cli === 'kimi' && args.read_only) throw new Error('Kimi 非交互模式不支持只读派遣')
-              const setup = await this.chooseDispatch(
-                exec.agent,
-                AbortSignal.any([exec.signal, this.disposed.signal]),
-                cli,
-              )
+              // Local patch: only pass overrides when the caller actually set one (or a
+              // preset supplied one), so the stock three-argument call shape is kept.
+              const overrideModel = args.model ?? namedPreset?.model
+              const overrideEffort = args.effort ?? namedPreset?.effort
+              const hasOverride =
+                overrideModel !== undefined || overrideEffort !== undefined || args.role !== undefined
+              const dispatchSignal = AbortSignal.any([exec.signal, this.disposed.signal])
+              const setup = hasOverride
+                ? await this.chooseDispatch(exec.agent, dispatchSignal, cli, {
+                    model: overrideModel,
+                    effort: overrideEffort,
+                    role: args.role,
+                  })
+                : await this.chooseDispatch(exec.agent, dispatchSignal, cli)
               exec.signal.throwIfAborted()
               return this.launch(
                 exec.agent,
@@ -1253,7 +1362,11 @@ export class CliWorkerService extends TypertRemoteService {
                 setup.preference,
                 args.read_only ? 'plan' : 'accept-edits',
                 undefined,
-                { agentName, role: setup.role ?? undefined },
+                {
+                  agentName,
+                  role: setup.role ?? undefined,
+                  ...(args.parallel_write === true ? { parallelWrite: true } : {}),
+                },
                 AbortSignal.any([exec.signal, this.disposed.signal]),
               )
             },

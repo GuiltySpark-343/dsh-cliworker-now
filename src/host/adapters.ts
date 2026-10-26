@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 import { qoderVariant } from './qoder-variant.ts'
 import { readClaudeOwnRoute, claudeNativeSettingsArguments } from './claude-own-route.ts'
@@ -50,6 +51,19 @@ import {
   type ProcessBackend,
   type RuntimeConfig,
 } from './process.ts'
+/** Local patch: opt-in YOLO permission for non-plan Claude runs. */
+function claudeNonPlanPermission(): string {
+  if ((process.env.CLIWORKER_CLAUDE_PERMISSION || '').trim() === 'bypassPermissions') return 'bypassPermissions'
+  try {
+    if (
+      readFileSync(join(homedir(), '.dsh', 'cliworker-now', 'claude-permission.txt'), 'utf8').trim() ===
+      'bypassPermissions'
+    )
+      return 'bypassPermissions'
+  } catch {}
+  return 'acceptEdits'
+}
+
 
 export interface Catalog {
   cli: CliId
@@ -314,7 +328,8 @@ export function workerArguments(
       preference.model,
       ...(preference.effort !== 'default' ? ['--effort', preference.effort] : []),
       '--permission-mode',
-      mode === 'plan' ? 'plan' : 'acceptEdits',
+      // Local patch: opt-in YOLO permission for non-plan Claude runs.
+      mode === 'plan' ? 'plan' : claudeNonPlanPermission(),
       ...(conversationId ? ['--resume', conversationId] : []),
       task,
     ]

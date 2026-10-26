@@ -1,4 +1,6 @@
-import { resolve } from 'node:path'
+import { resolve, join } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { CodexRunUsage } from './codex-run-usage.mjs'
 
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value)
@@ -214,14 +216,33 @@ export async function runNativeCodex(config, io) {
     io.signal?.throwIfAborted()
     await peer.request('initialize', { clientInfo: { name: 'cli_worker_native', title: 'CLI Worker', version: '0.8.3' }, capabilities: { experimentalApi: false, requestAttestation: false, explicitGatewayOauth: true } })
     await peer.send({ method: 'initialized', params: {} })
+    // Local patch: opt-in sandbox override. Without CLIWORKER_CODEX_SANDBOX (or
+    // ~/.dsh/cliworker-now/codex-sandbox.txt) the stock policy is used unchanged.
+    const sandboxOverride = (() => {
+      const env = (process.env.CLIWORKER_CODEX_SANDBOX || '').trim()
+      if (env) return env
+      try {
+        const file = readFileSync(join(homedir(), '.dsh', 'cliworker-now', 'codex-sandbox.txt'), 'utf8').trim()
+        if (file) return file
+      } catch {}
+      return 'stock'
+    })()
+    const fullAccess = sandboxOverride === 'danger-full-access'
+    const sandboxPolicyFor = (mode) => {
+      if (fullAccess) return { type: 'dangerFullAccess' }
+      return mode === 'plan'
+        ? { type: 'readOnly' }
+        : { type: 'workspaceWrite', writableRoots: [config.project], networkAccess: false }
+    }
     const mode = config.mode === 'plan' ? 'read-only' : 'workspace-write'
-    const options = { cwd: config.project, model: config.preference.model, approvalPolicy: 'never', sandbox: mode }
+    const sandboxMode = fullAccess ? 'danger-full-access' : mode
+    const options = { cwd: config.project, model: config.preference.model, approvalPolicy: 'never', sandbox: sandboxMode }
     const result = await peer.request(config.conversationId ? 'thread/resume' : 'thread/start', {
       ...options,
       ...(config.conversationId ? { threadId: config.conversationId, excludeTurns: true } : {}),
     })
     if (!string(result?.thread?.id) || (config.conversationId && result.thread.id !== config.conversationId)) throw fail('原生会话身份与绑定不一致')
-    if (result.model !== config.preference.model || !string(result.cwd) || resolve(result.cwd) !== resolve(config.project) || result.approvalPolicy !== 'never' || result.sandbox?.type !== (config.mode === 'plan' ? 'readOnly' : 'workspaceWrite') || result.sandbox?.networkAccess === true)
+    if (result.model !== config.preference.model || !string(result.cwd) || resolve(result.cwd) !== resolve(config.project) || result.approvalPolicy !== 'never' || result.sandbox?.type !== (fullAccess ? 'dangerFullAccess' : config.mode === 'plan' ? 'readOnly' : 'workspaceWrite') || result.sandbox?.networkAccess === true)
       throw fail('原生会话未保留所选模型、目录或权限')
     if (config.preference.effort !== 'default' && result.reasoningEffort !== undefined && result.reasoningEffort !== null && result.reasoningEffort !== config.preference.effort) throw fail('原生思考强度与选型不一致')
     threadId = result.thread.id
@@ -251,7 +272,7 @@ export async function runNativeCodex(config, io) {
       summary: 'auto',
       cwd: config.project,
       approvalPolicy: 'never',
-      sandboxPolicy: config.mode === 'plan' ? { type: 'readOnly' } : { type: 'workspaceWrite', writableRoots: [config.project], networkAccess: false },
+      sandboxPolicy: sandboxPolicyFor(config.mode),
     }, { timeoutMs: config.timeoutMs })
     if (!string(turn?.turn?.id) || (turnId && turn.turn.id !== turnId)) throw fail('启动回执缺少匹配轮次')
     turnId = turn.turn.id

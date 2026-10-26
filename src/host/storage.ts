@@ -119,6 +119,8 @@ const workerSchema = z.object({
   role: roleSnapshotSchema.optional(),
   preference: storedPreferenceSchema,
   mode: z.enum(['plan', 'accept-edits']),
+  // Local patch: leader-opt-in flag; two marked workers may write concurrently.
+  parallelWrite: z.boolean().optional(),
   conversationId: z.string().optional(),
   // Bad optional telemetry must not make an otherwise valid conversation unreadable.
   conversationTelemetry: conversationTelemetrySchema.optional().catch(undefined),

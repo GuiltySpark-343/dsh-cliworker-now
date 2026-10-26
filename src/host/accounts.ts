@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
 import { stripVTControlCharacters } from 'node:util'
 import { executableFor, resolveCliExecutable } from './adapters.ts'
+import { codexCustomProviderRoute } from './codex-custom-provider.ts'
 import {
   projectDirectory,
   ProcessCleanupUnconfirmedError,
@@ -405,7 +406,18 @@ export class AccountManager {
       if (cli === 'codex') {
         // One effective-store read handles file/keyring accounts and display
         // identity. Older servers fall back to the native status command below.
+        // Local patch: a declared custom provider is surfaced as a local proxy.
+        const proxy = await codexCustomProviderRoute(cwd, control).catch(() => undefined)
         const identity = await readCodexAccount(this.backend, this.config, executable, cwd, control)
+        if (proxy && identity?.state !== 'authenticated')
+          return {
+            cli,
+            installed,
+            state: 'authenticated' as const,
+            authMethod: 'api' as const,
+            summary: `本地代理（${proxy.name}）`,
+            actions: this.backend.spawnTerminal ? actionsFor(cli, this.config) : [],
+          }
         if (identity)
           return {
             cli,

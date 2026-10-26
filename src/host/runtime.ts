@@ -1434,7 +1434,7 @@ export class WorkerRuntime {
     preference: Preference,
     mode: TaskMode,
     previousId?: string,
-    identity?: { agentName?: string; role?: RoleSnapshot },
+    identity?: { agentName?: string; role?: RoleSnapshot; parallelWrite?: boolean },
     authorizedBinding?: string,
     queuedAdmission?: QueuedAdmission,
     preparationId?: string,
@@ -1529,6 +1529,8 @@ export class WorkerRuntime {
         : availableAgentName(this.storage.workers.values(), parent, CLI_SHORT_NAMES[cliOf(preference)]),
       agentNameOrigin: identity?.agentName ? 'custom' : 'auto',
       role: identity?.role ? roleSnapshotSchema.parse(structuredClone(identity.role)) : undefined,
+      // Local patch: only an explicit leader flag lifts the same-project write mutex.
+      ...(identity?.parallelWrite === true ? { parallelWrite: true } : {}),
       preference: { ...preference },
       transport: this.initialTransport(cliOf(preference)),
       mode,
@@ -1779,7 +1781,8 @@ export class WorkerRuntime {
       if (this.running.size >= this.config.maxConcurrent) break
       const conflicts = (other: Task) =>
         other.worker.project === task.worker.project &&
-        (other.worker.mode === 'accept-edits' || task.worker.mode === 'accept-edits')
+        (other.worker.mode === 'accept-edits' || task.worker.mode === 'accept-edits') &&
+        !(other.worker.parallelWrite === true && task.worker.parallelWrite === true)
       if ([...this.running].some(conflicts) || this.queue.slice(0, this.queue.indexOf(task)).some(conflicts))
         continue
       this.queue.splice(this.queue.indexOf(task), 1)

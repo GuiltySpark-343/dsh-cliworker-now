@@ -113,6 +113,8 @@ function fixture(overrides: Partial<RuntimeConfig> = {}, onQueryCleanup?: Constr
   vi.stubEnv('MIMOCODE_HOME', join(cwd, 'mimo'))
   vi.stubEnv('KIMI_CODE_HOME', join(cwd, 'kimi'))
   vi.stubEnv('CLAUDE_CONFIG_DIR', join(cwd, 'claude'))
+  // Local patch: keep Codex account discovery inside the synthetic fixture.
+  vi.stubEnv('CODEX_HOME', join(cwd, '.codex'))
   for (const key of Object.keys(process.env))
     if (/ANTHROPIC|CLAUDE_CODE_(?:OAUTH|USE_|API)|AWS_|GOOGLE_|CLOUD_ML|API_KEY|BEARER_TOKEN/.test(key))
       vi.stubEnv(key, '')

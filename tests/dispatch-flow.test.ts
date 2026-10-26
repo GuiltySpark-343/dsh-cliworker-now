@@ -179,38 +179,40 @@ it('same conversation reuses its frozen setup even if project default or role li
   expect(f.service.querySelection).toHaveBeenCalledTimes(2)
 })
 
-it('new conversation asks only reuse and captures the offered default without overwriting newer project defaults', async () => {
+it('new conversation silently reuses the saved setup without overwriting newer project defaults', async () => {
   const f = fixture()
   f.storage.setDispatchSetup(f.project, f.setup)
-  const pending = f.choose('new')
-  await f.ready(1)
-  expect(f.requests[0]!.request.questions[0]).toMatchObject({
-    id: 'cliworker_reuse',
-    options: [{ label: '沿用' }, { label: '重新选择' }],
-  })
   const newer = {
     ...f.setup,
     preference: { cli: 'antigravity' as const, model: 'fixture-b', effort: 'default' as const },
   }
   f.storage.setDispatchSetup(f.project, newer)
-  f.respond(0, { cliworker_reuse: '沿用' })
-  expect(await pending).toEqual(f.setup)
+  // Local patch: the reuse card is skipped by default, so the newest project
+  // default is what a new conversation silently adopts.
+  expect(await f.choose('new')).toEqual(newer)
+  expect(f.ask).not.toHaveBeenCalled()
   expect(f.storage.dispatchSetup(f.project, 'antigravity')).toEqual(newer)
-  expect(f.ask).toHaveBeenCalledTimes(1)
 })
 
 it('declining reuse selects and replaces the complete setup for project and only this conversation', async () => {
-  const f = fixture()
-  f.storage.setDispatchSetup(f.project, f.setup)
-  f.storage.setConversationSetup('old', f.project, f.setup)
-  const pending = f.choose('new')
-  await f.ready(1)
-  f.respond(0, { cliworker_reuse: '重新选择' })
-  await f.complete(1, 'Fixture B')
-  const selected = await pending
-  expect(selected.preference.model).toBe('fixture-b')
-  expect(f.storage.dispatchSetup(f.project, 'antigravity')).toEqual(selected)
-  expect(f.storage.conversationSetup('old', f.project, 'antigravity')).toEqual(f.setup)
+  const previous = process.env.CLIWORKER_NO_REUSE_PROMPT
+  process.env.CLIWORKER_NO_REUSE_PROMPT = '0'
+  try {
+    const f = fixture()
+    f.storage.setDispatchSetup(f.project, f.setup)
+    f.storage.setConversationSetup('old', f.project, f.setup)
+    const pending = f.choose('new')
+    await f.ready(1)
+    f.respond(0, { cliworker_reuse: '重新选择' })
+    await f.complete(1, 'Fixture B')
+    const selected = await pending
+    expect(selected.preference.model).toBe('fixture-b')
+    expect(f.storage.dispatchSetup(f.project, 'antigravity')).toEqual(selected)
+    expect(f.storage.conversationSetup('old', f.project, 'antigravity')).toEqual(f.setup)
+  } finally {
+    if (previous === undefined) delete process.env.CLIWORKER_NO_REUSE_PROMPT
+    else process.env.CLIWORKER_NO_REUSE_PROMPT = previous
+  }
 })
 
 it('projects and CLIs do not borrow another scope confirmation', async () => {
@@ -391,6 +393,10 @@ it('current project change at final authorization never persists the old project
 })
 
 it('unknown/custom model and reuse answers never select an option on behalf of the user', async () => {
+  // Local patch: auto-reuse hides the reuse card, so exercise the opt-out path here.
+  const previous = process.env.CLIWORKER_NO_REUSE_PROMPT
+  process.env.CLIWORKER_NO_REUSE_PROMPT = '0'
+  try {
   const f = fixture(),
     pending = f.choose()
   const rejected = expect(pending).rejects.toThrow('请选择列表中的模型')
@@ -407,6 +413,10 @@ it('unknown/custom model and reuse answers never select an option on behalf of t
   f.respond(1, { cliworker_reuse: 'not an option' })
   await invalid
   expect(f.storage.conversationSetup('parent', f.project, 'antigravity')).toBeUndefined()
+  } finally {
+    if (previous === undefined) delete process.env.CLIWORKER_NO_REUSE_PROMPT
+    else process.env.CLIWORKER_NO_REUSE_PROMPT = previous
+  }
 })
 
 it('failure to persist confirmation returns an error and never leaves partially selected fields', async () => {
@@ -465,19 +475,15 @@ it('replays omitted CLI then explicit Hermes without consuming the previous Anti
     expect(f.service.queryCatalog).not.toHaveBeenCalled()
     expect(f.ask).not.toHaveBeenCalled()
     expect(launch).not.toHaveBeenCalled()
-    const pending = start.execute({ ...request, cli: 'hermes' }, exec)
-    await f.ready(1)
-    expect(f.requests[0]!.request.questions).toMatchObject([
-      { id: 'cliworker_reuse', question: '是否沿用 Fixture B · 默认 · 不使用角色预设？' },
-    ])
+    // Local patch: a new conversation adopts the saved Hermes setup silently.
+    const value = JSON.parse((await start.execute({ ...request, cli: 'hermes' }, exec)) as string)
+    expect(value).toEqual(hermes.preference)
+    expect(f.ask).not.toHaveBeenCalled()
     expect(f.service.queryCatalog.mock.calls.map((args: any[]) => args[0])).toEqual(['hermes'])
-    expect(launch).not.toHaveBeenCalled()
-    f.respond(0, { cliworker_reuse: '沿用' })
-    expect(JSON.parse((await pending) as string)).toEqual(hermes.preference)
     expect(f.storage.conversationSetup('parent', f.project, 'hermes')).toEqual(hermes)
     expect(f.storage.conversationSetup('parent', f.project, 'antigravity')).toEqual(agy)
     expect(f.storage.dispatchSetup(f.project, 'antigravity')).toEqual(agy)
-    expect(f.service.querySelection.mock.calls[0][0]).toEqual(hermes.preference)
+    expect(f.service.querySelection.mock.calls[0]![0]).toEqual(hermes.preference)
     expect(launch).toHaveBeenCalledOnce()
   } finally {
     await ctx.fiber.dispose()
