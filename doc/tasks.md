@@ -1,5 +1,14 @@
 # 实施任务与验证记录
 
+## v0.8.3 之后（未发布，版本号待用户确认）
+
+### 2026-10-26：调用前询问模型开关（OpenSpec `add-dispatch-ask-toggle`）
+
+- 行为：每个 CLI 设置页「项目默认设置」新增“调用前询问模型”原生 Switch，按项目 + CLI 保存于 `<projectKey>.dispatch-ask.json`（0600，目录 0700）；缺少记录（含旧版本）即询问，现有行为不变。关闭后新主对话直接使用 `storage.dispatchSetup(project, cli)` 的完整设定（设置页的模型/强度 + 上次完整选型的角色与账号绑定），仍经 `querySelection`／`authorizeSelection`、`assertExecution`、CLI 开关与项目一致性检查。无完整设定（只在设置页选过模型、未确认角色）或失效（模型不在目录、强度不支持、账号绑定变化）时回退完整选型，不猜测；主对话自身设定有效时仍优先，失效时先试项目设定。Qoder 双版本询问不属模型选型，照常询问。保存成功不显示文字。
+- “默认模型设置”的取舍：插件只有项目 + CLI 一级的默认值（无全局或跨项目默认），设置页没有默认角色控件，因此“默认设定”= 项目完整设定；缺角色时回退选型一次，之后即可免询问。开关作用域取项目 + CLI，与所依赖的默认值和“运行中发送”一致。
+- 自动检查（macOS，本 worktree）：相关 8 文件 `vitest run`（dispatch-flow、dispatch-ask-storage、settings-dialog、cli-settings、running-message-settings、dispatch-storage、role-dispatch、storage）全部通过，新增用例覆盖默认询问、关闭后无问题卡直接经 `cliworker_start` 启动、无完整设定/账号/模型/强度失效回退、实时授权失败不保存、对话设定失效改用项目设定、项目与 CLI 隔离、存储缺省/权限/重开/身份不匹配/符号链接拒绝、Gateway 不探测账号模型、设置页默认开启/保存/失败恢复/读取失败禁用。全量 `vitest run`：**214 文件通过、1 失败、3 跳过；4300 通过、2 失败、13 跳过**，失败均为 `build-dependencies.test.ts` 缺少正式构建的 `lib/typert.remote-client.js`（本 worktree 未执行正式 build，环境性）。`build-preview.mjs` 通过；预览包内 `build.mjs --typecheck-only` Host/Client 通过（worktree 根目录 Client 部分同样因缺 `lib/` 报 9 个既有错误，Host 通过）。OpenSpec `validate --all --strict` 24/24 通过；`git diff --check` 通过。
+- 未执行：DSH Desktop 实际界面（未更新 Desktop 链接，需用户授权）、Windows 界面、真实 CLI 派遣与模型调用。OpenSpec 变更因上述验收未完成暂不归档。
+
 ## v0.8.3（未发布）
 
 ### 2026-10-24：完成市场 UI 行归属修复与 canonical 设置兼容
