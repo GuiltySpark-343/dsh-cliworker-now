@@ -2698,3 +2698,12 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 修复（OpenSpec `fix-routing-invocation-count`）：`invocationResolution` 识别明确调用前去掉紧跟调用动词的次数/数量词（排除「一次性」）。
 - 验证：`tests/routing.test.ts` 新增 4 个解析与 3 个无提示用例，撤掉修复时 5 个失败；离线对 Desktop 失败的原消息运行路由，修复前 unknown、修复后无提示，改写消息仍解析为 grok。全量 4417 通过、13 跳过；类型检查、OpenSpec 严格校验通过。
 - 未执行（用户只要求单元测试与离线验证）：正式构建、Desktop 真实复验。名称后紧跟全角括号（「使用 Grok（Grok Build）」）仍不产生提示，未处理。
+
+## 2026-10-26 Antigravity 1.4.x 凭据不含 `id_token`，账号绑定失败（GitHub issue #7，`feat/general-settings`，未发布）
+
+- 现象（issue #7，Windows 11、DSH 0.2.1-rc.3、插件 0.8.2/0.8.3、`agy` 1.4.7）：CLI 自身登录与 `agy models` 正常，CLI Worker 连接 Antigravity 报「Antigravity 无法确认当前自身账号」。
+- 原因：agy 1.4.x 写入 `gemini:antigravity` 的 blob 只有 `token` 与 `id_token_email`。`windows-agy-account.ps1` 只从 `id_token.sub` 计算 `principalHash`，Windows 绑定分支没有 `principalHash` 即为空 `entries` → `CliAccountBindingError`。POSIX 读 `jetski-standalone-oauth-token` 同样只认 `id_token`（访问令牌不透明）。
+- 修复（OpenSpec `fix-agy-email-only-credential`）：ps1 在 `id_token` 未提供邮箱时输出经校验的 `id_token_email`；Windows 无 `principalHash` 时以已登录的安全邮箱（小写）为 `oauth` 邮箱主体；POSIX 绑定与账号标签在 `id_token` 无主体/邮箱时回退到 `accountEmail` 校验后的 `id_token_email`。`id_token` 主体仍优先。未采用 issue 中的 UI 确认方案（两种字段都是本机凭据，`id_token` 原本也只做本地解码，不验签）。
+- 验证：`tests/cli-account-binding.test.ts` 新增 POSIX 与 Windows（模拟 `win32`）仅邮箱绑定用例、`tests/account-identity.test.ts` 新增标签回退用例、`tests/agy-windows-account.test.ts` 新增仅邮箱投影用例；撤掉 TS 修复时 3 个新用例失败。账号相关 6 个测试文件 133 通过；`build.mjs --typecheck-only` 通过；`build-preview.mjs` 通过，隔离包两份 `windows-agy-account.ps1` 均含回退；OpenSpec 严格校验 34 项通过。
+- 兼容性：同一账号由旧格式改写为新格式后，绑定版本从 `subjectHash` 变为邮箱主体，按现有规则需重新选型，旧任务续聊需新建任务。
+- 未执行：ps1 无法在 macOS 运行（无 PowerShell 与凭据管理器），Windows 实机/远程回归未做；macOS 本机 agy 1.4.7 凭据文件仍含 `id_token`，POSIX 新格式只有模拟测试；未正式构建、未更新 Desktop、未调用真实模型；issue 未回复。

@@ -58,6 +58,11 @@ it.each(['not json', 'null', '[]', '{"state":"authenticated"}'.repeat(200)])(
     expect(projectWindowsAgyAccount(raw).identity.state).toBe('unavailable')
   },
 )
+it('keeps the email label of an AGY 1.4.x credential that has no ID token subject (synthetic)', () => {
+  const result = projectWindowsAgyAccount(JSON.stringify({ state: 'authenticated', email: 'own@example.test' }))
+  expect(result.identity).toMatchObject({ state: 'authenticated', accountLabel: 'own@example.test' })
+  expect(result.principalHash).toBeUndefined()
+})
 it('does not accept unsafe email or an arbitrary principal identifier', () => {
   const result = projectWindowsAgyAccount(
     JSON.stringify({ state: 'authenticated', email: '<script>@example.test', principalHash: 'SECRET' }),

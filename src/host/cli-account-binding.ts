@@ -14,6 +14,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { CLI_LABELS, type CliId } from '../shared/types.ts'
 import { captureCatalogMetadata, resolveCliExecutable } from './adapters.ts'
 import { readCodexAccount } from './codex-account.ts'
+import { accountEmail } from './account-identity.ts'
 import { assertAgyNativeAccountRoute } from './agy-models.ts'
 import { readWindowsAgyAccount } from './agy-windows-account.ts'
 import { readFirstPartyModelSources } from './first-party-models.ts'
@@ -305,19 +306,25 @@ async function material(
     await assertAgyNativeAccountRoute(signal, home)
     if (process.platform === 'win32') {
       const account = await readWindowsAgyAccount(backend, config, signal)
+      // AGY 1.4.x credentials may carry only id_token_email; bind that local email instead.
+      const principal =
+        account.identity.state !== 'authenticated'
+          ? undefined
+          : account.principalHash
+            ? { kind: 'oauth', subjectHash: account.principalHash }
+            : account.identity.accountLabel
+              ? { kind: 'oauth', email: account.identity.accountLabel.toLowerCase() }
+              : undefined
       return {
         sourceIds: ['windows-credential:gemini:antigravity'],
-        entries:
-          account.identity.state === 'authenticated' && account.principalHash
-            ? [{ provider: 'antigravity', principal: { kind: 'oauth', subjectHash: account.principalHash } }]
-            : [],
+        entries: principal ? [{ provider: 'antigravity', principal }] : [],
       }
     }
     const root = join(home, '.gemini')
     const auth = await document(join(root, 'jetski-standalone-oauth-token'), signal)
     const principal =
       auth.auth_method === 'consumer' && object(auth.token)
-        ? oauthPrincipal({ ...auth.token, id_token: auth.id_token })
+        ? oauthPrincipal({ ...auth.token, id_token: auth.id_token, email: accountEmail(auth.id_token_email) })
         : undefined
     return { sourceIds: [root], entries: principal ? [{ provider: 'antigravity', principal }] : [] }
   }
