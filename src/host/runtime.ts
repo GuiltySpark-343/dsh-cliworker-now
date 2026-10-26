@@ -962,6 +962,7 @@ export class WorkerRuntime {
       defaultMaxConcurrent: this.config.maxConcurrent,
       language: this.storage.generalSettings().language ?? 'follow',
       isolatedParallelWrites: this.storage.generalSettings().isolatedParallelWrites ?? false,
+      askBeforeDispatch: this.storage.generalSettings().askBeforeDispatch ?? true,
     }
   }
   setGeneralSettings(patch: unknown): GeneralSettings {

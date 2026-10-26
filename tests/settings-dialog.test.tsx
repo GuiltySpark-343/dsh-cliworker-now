@@ -155,12 +155,6 @@ async function setup(
       canSteer: cli === 'pi' || cli === 'omp',
     }),
   )
-  const dispatchAsk = new Map<CliId, boolean>()
-  const dispatchAskSettings = vi.fn(async (_session, cli: CliId) => remote({ cli, ask: dispatchAsk.get(cli) ?? true }))
-  const setDispatchAsk = vi.fn(async (_session, cli: CliId, ask: boolean) => {
-    dispatchAsk.set(cli, ask)
-    return remote({ cli, ask })
-  })
   const refreshCliExecutablePath = vi.fn(async (_session, cli: CliId, path: string, action: string) => {
     const next =
       action === 'auto'
@@ -189,8 +183,6 @@ async function setup(
       refreshCliExecutablePath,
       runningMessageSettings,
       saveRunningMessageMode,
-      dispatchAskSettings,
-      setDispatchAsk,
       ...overrides,
     },
   } as unknown as API
@@ -245,8 +237,6 @@ async function setup(
     refreshCliExecutablePath,
     runningMessageSettings,
     saveRunningMessageMode,
-    dispatchAskSettings,
-    setDispatchAsk,
   }
 }
 function warmMetadata() {
@@ -2623,38 +2613,6 @@ it.each(['read', 'save'] as const)(
   },
 )
 
-// Simulated Gateway only: the dispatch-question switch never starts a CLI.
-it('shows the dispatch question switch on by default and saves only explicit changes without success text', async () => {
-  const t = await setup({}, undefined, 'codex')
-  expect(t.dispatchAskSettings).toHaveBeenCalledWith('simulation-parent', 'codex', expect.any(AbortSignal))
-  expect(t.button('调用前询问模型').props['aria-checked']).toBe(true)
-  expect(t.setDispatchAsk).not.toHaveBeenCalled()
-  await t.click('调用前询问模型')
-  expect(t.setDispatchAsk).toHaveBeenCalledExactlyOnceWith('simulation-parent', 'codex', false, expect.any(AbortSignal))
-  expect(t.button('调用前询问模型').props['aria-checked']).toBe(false)
-  expect(t.text()).not.toContain('已保存')
-  expect(t.configure).not.toHaveBeenCalled()
-  await t.click('Pi 设置')
-  expect(t.button('调用前询问模型').props['aria-checked']).toBe(true)
-  await t.click('Codex 设置')
-  expect(t.button('调用前询问模型').props['aria-checked']).toBe(false)
-})
-
-it('restores the dispatch question switch and shows a short error when saving fails', async () => {
-  const setDispatchAsk = vi.fn().mockResolvedValue({ ok: false, error: { message: '模拟保存失败' } })
-  const t = await setup({ setDispatchAsk }, undefined, 'codex')
-  await t.click('调用前询问模型')
-  expect(t.button('调用前询问模型').props['aria-checked']).toBe(true)
-  expect(t.text()).toContain('模拟保存失败')
-})
-
-it('keeps the dispatch question switch disabled while its setting is unreadable', async () => {
-  const dispatchAskSettings = vi.fn().mockResolvedValue({ ok: false, error: { message: '模拟读取失败' } })
-  const t = await setup({ dispatchAskSettings }, undefined, 'codex')
-  expect(t.button('调用前询问模型').props.disabled).toBe(true)
-  expect(t.text()).toContain('模拟读取失败')
-})
-
 it('opens CLI Worker settings above agents and saves the shared concurrency limit', async () => {
   let current = { maxConcurrent: 2, defaultMaxConcurrent: 2, isolatedParallelWrites: false }
   const generalSettings = vi.fn(async () => remote(current))
@@ -2728,4 +2686,35 @@ it('explains and saves the same-directory isolated-copy switch, off by default',
   // The switch itself shows the saved state; no extra confirmation line.
   expect(t.text()).not.toContain('已开启')
   expect(t.text()).not.toContain('正在保存同目录写任务并行')
+})
+
+// Simulated Gateway only: the switch saves a profile setting and never starts a CLI.
+it('shows ask-before-dispatch on for an older Host and saves turning it off without success text', async () => {
+  let current: Record<string, unknown> = { maxConcurrent: 2, defaultMaxConcurrent: 2 }
+  const saveGeneralSettings = vi.fn(async (_session, raw: string) => {
+    current = { ...current, ...JSON.parse(raw) }
+    return remote(current)
+  })
+  const t = await setup({ generalSettings: vi.fn(async () => remote(current)), saveGeneralSettings })
+  await t.click('CLI Worker 设置')
+  expect(t.button('调用前询问模型').props['aria-checked']).toBe(true)
+  expect(t.text()).toContain('无有效设定时仍会询问')
+  await t.click('调用前询问模型')
+  expect(saveGeneralSettings).toHaveBeenCalledWith('simulation-parent', '{"askBeforeDispatch":false}', expect.any(AbortSignal))
+  expect(t.button('调用前询问模型').props['aria-checked']).toBe(false)
+  expect(t.text()).not.toContain('已保存')
+  expect(t.text()).not.toContain('正在保存调用前询问模型')
+  expect(t.configure).not.toHaveBeenCalled()
+})
+
+it('keeps ask-before-dispatch on and shows a short error when saving fails', async () => {
+  const saveGeneralSettings = vi.fn().mockResolvedValue({ ok: false, error: { message: '模拟保存失败' } })
+  const t = await setup({
+    generalSettings: vi.fn(async () => remote({ maxConcurrent: 2, defaultMaxConcurrent: 2, askBeforeDispatch: true })),
+    saveGeneralSettings,
+  })
+  await t.click('CLI Worker 设置')
+  await t.click('调用前询问模型')
+  expect(t.button('调用前询问模型').props['aria-checked']).toBe(true)
+  expect(t.text()).toContain('模拟保存失败')
 })

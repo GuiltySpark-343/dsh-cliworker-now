@@ -2,16 +2,16 @@
 
 ## 1. 实施
 
-- [x] 1.1 Host 存储：`dispatch-ask.json` 读写，缺省为询问，权限 0700/0600。
-- [x] 1.2 Host Remote：`dispatchAskSettings`、`setDispatchAsk`。
-- [x] 1.3 `chooseDispatch`：关闭询问时使用有效项目设定，失效或不完整回退完整选型，实时授权不变。
-- [x] 1.4 设置页「项目默认设置」新增“调用前询问模型”原生 Switch，不显示保存成功文字。
+- [x] 1.1 通用设置增加可选 `askBeforeDispatch`，缺省为询问，沿用 `general-settings.json` 的 0700/0600 存储。
+- [x] 1.2 `runtime.generalSettings()` 返回 `askBeforeDispatch ?? true`，沿用 `generalSettings` / `saveGeneralSettings` Remote。
+- [x] 1.3 `chooseDispatch`：关闭询问时使用有效项目设定，失效或不完整回退完整选型；启动前实时授权不变。
+- [x] 1.4 「CLI Worker 设置」通用页「任务调度」新增“调用前询问模型”原生 Switch 及中英文文案，不显示保存成功文字。
 
 ## 2. 自动检查
 
-- [x] 2.1 派遣流程测试：默认询问、关闭后不弹卡片直接启动、无完整设定与失效回退、实时授权失败、对话设定失效时使用项目设定。
-- [x] 2.2 存储与 Remote 测试：缺省询问、旧配置无字段、权限、项目/CLI 隔离。
-- [x] 2.3 设置页测试：读取、切换保存、失败恢复。
+- [x] 2.1 派遣流程测试：默认询问、关闭后不弹卡片直接启动（含 `cliworker_start` 入口）、无完整设定与失效回退、宿主拒绝不保存、对话设定失效时使用项目设定、不跨项目或 CLI。
+- [x] 2.2 存储与运行时测试：旧配置缺字段即询问、权限、重开保持、`null` 恢复默认、非法值拒绝。
+- [x] 2.3 设置页测试：旧 Host 缺字段显示开启、切换保存、失败恢复；i18n 键与占位符检查。
 - [x] 2.4 `build.mjs --typecheck-only`、`build-preview.mjs`、OpenSpec 严格校验。
 
 ## 3. 未执行（需另行授权或平台）

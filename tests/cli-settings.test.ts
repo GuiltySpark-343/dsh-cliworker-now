@@ -286,25 +286,6 @@ describe('running message preference Gateway', () => {
   })
 })
 
-describe('dispatch question preference Gateway', () => {
-  it('reads asking by default and saves a project choice without querying accounts, models or spawning a task', async () => {
-    const f = fixture()
-    expect(JSON.parse(await f.service.dispatchAskSettings('parent', 'codex', f.signal))).toEqual({ cli: 'codex', ask: true })
-    expect(JSON.parse(await f.service.setDispatchAsk('parent', 'codex', false, f.signal))).toEqual({ cli: 'codex', ask: false })
-    expect(f.storage.dispatchAskSettings(f.project, 'codex').ask).toBe(false)
-    expect(f.storage.dispatchAskSettings(f.project, 'pi').ask).toBe(true)
-    await expect(f.service.setDispatchAsk('parent', 'codex', 'no' as any, f.signal)).rejects.toThrow()
-    const controller = new AbortController()
-    controller.abort()
-    await expect(f.service.setDispatchAsk('parent', 'codex', true, controller.signal)).rejects.toThrow()
-    expect(f.storage.dispatchAskSettings(f.project, 'codex').ask).toBe(false)
-    expect(f.backend.spawn).not.toHaveBeenCalled()
-    expect(f.accounts.status).not.toHaveBeenCalled()
-    expect(catalogFor).not.toHaveBeenCalled()
-    expect(f.jobs.start).not.toHaveBeenCalled()
-  })
-})
-
 describe('profile-wide CLI enablement', () => {
   it.each(['bigmodel', 'zai'] as const)(
     'forwards the selected ZCode %s provider through the guarded account endpoint',

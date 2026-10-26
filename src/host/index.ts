@@ -907,7 +907,7 @@ export class CliWorkerService extends TypertRemoteService {
           if (!setup && !held) continue
           let selected = false
           // The only unasked start: the user turned asking off and the saved complete setup still checks out.
-          if (!setup && !this.runtime.storage.dispatchAskSettings(project, cli).ask) {
+          if (!setup && this.runtime.storage.generalSettings().askBeforeDispatch === false) {
             const saved = this.runtime.storage.dispatchSetup(project, cli)
             if (valid(saved)) setup = saved
           } else if (!current) {
@@ -1673,36 +1673,6 @@ export class CliWorkerService extends TypertRemoteService {
       return JSON.stringify(
         this.runtime.storage.runningMessageSettings(this.project(agent), validate.enum(CLI_IDS).parse(cli)),
       )
-    } catch (error) {
-      throw failure(error)
-    }
-  }
-  /** @param parentSessionId - Active parent. @param cli - Explicit CLI. @param signal - Read lifetime. @returns Project/CLI dispatch-question preference. */
-  @Remote('dispatchAskSettings')
-  async dispatchAskSettings(parentSessionId: string, cli: string, signal: AbortSignal): Promise<string> {
-    try {
-      const agent = await this.parent(parentSessionId)
-      signal.throwIfAborted()
-      return JSON.stringify(
-        this.runtime.storage.dispatchAskSettings(this.project(agent), validate.enum(CLI_IDS).parse(cli)),
-      )
-    } catch (error) {
-      throw failure(error)
-    }
-  }
-  /** @param parentSessionId - Active parent. @param cli - Explicit CLI. @param ask - Ask before dispatch. @param signal - Save lifetime. @returns Saved preference; never starts a CLI. */
-  @Remote('setDispatchAsk')
-  async setDispatchAsk(parentSessionId: string, cli: string, ask: boolean, signal: AbortSignal): Promise<string> {
-    try {
-      const agent = await this.parent(parentSessionId)
-      signal.throwIfAborted()
-      const result = this.runtime.storage.setDispatchAsk(
-        this.project(agent),
-        validate.enum(CLI_IDS).parse(cli),
-        validate.boolean().parse(ask),
-      )
-      this.runtime.changed()
-      return JSON.stringify(result)
     } catch (error) {
       throw failure(error)
     }

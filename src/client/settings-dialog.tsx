@@ -31,7 +31,6 @@ import { useScrollingMark } from './scrolling-mark.ts'
 import { AccountQueryQueue } from './account-query-queue.ts'
 import { CliExecutableSettings } from './cli-executable-settings.tsx'
 import { NativeChoice } from './native-settings-choice.tsx'
-import { DispatchAskRow } from './dispatch-ask-settings.tsx'
 import { preferenceReadVersion, SettingsPreferenceSaves } from './settings-preference-saves.ts'
 import { settingsCacheMetadata, settingsDisplayPool, type SettingsDisplayCache,
   type SettingsCatalog as Catalog, type SettingsAccountEntry as AccountEntry, type SettingsCatalogEntry,
@@ -988,7 +987,6 @@ function CliSettings({
               onChange={changeEffort}
             />
           </label>
-          <DispatchAskRow api={api} sessionId={sessionId} cli={cli} disabled={inactive} />
           <p className="cwn-settings-notice cwn-settings-hint" role="status">
             {modelError || (cli === 'claude' && catalog?.notice?.includes('路由') ? hostText(catalog.notice) : '')}
           </p>

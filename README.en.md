@@ -120,7 +120,7 @@ Short names work too: `agy` → Antigravity, `glm / zhipu` → ZCode, `harmes` �
 
 The first time you use a CLI in a project, Harness question cards ask for the **model, reasoning effort and role**; the task starts only after all three are confirmed. A new main conversation in the same project asks whether to reuse the previous choice. Cancelling saves nothing and starts nothing.
 
-To skip the questions, turn off **Ask for model before dispatch** (调用前询问模型) under Project defaults on that CLI's settings page. It is on by default and saved per project and CLI. When off, a new main conversation starts directly with the project's default model, effort and last confirmed role. If no complete choice was ever confirmed (for example, only a model was picked in settings) or it is no longer valid (model removed, effort unsupported, account changed), the full selection still appears; nothing is guessed.
+To skip the questions, turn off **Ask for model before dispatch** under "CLI Worker settings → Task scheduling". It is on by default and applies to every CLI. When off, a new main conversation starts directly with the project's default model, effort and last confirmed role. If no complete choice was ever confirmed (for example, only a model was picked in settings) or it is no longer valid (model removed, effort unsupported, account changed), the full selection still appears; nothing is guessed.
 
 ```mermaid
 flowchart LR
@@ -149,7 +149,7 @@ flowchart LR
 | --- | --- |
 | Agent settings | Manage name / summary / role-prompt presets; seven built-in fiction roles, see [role presets](doc/role-presets.md) |
 | CLI connections | Enable each CLI, check login status, open its native account terminal; set the CLI path under Advanced |
-| Project defaults | Save the default model and reasoning effort for the project; the “Ask for model before dispatch” switch controls whether new conversations ask first |
+| Project defaults | Save the default model and reasoning effort for the project; with “Ask for model before dispatch” off, new conversations use them directly |
 | Child controls | Change the agent's model or permission with native controls; locked while running or while messages are queued |
 
 ### 4. Goal, plan, feedback and fork

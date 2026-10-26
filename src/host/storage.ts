@@ -24,7 +24,6 @@ import { z } from 'zod'
 import { conversationTelemetrySchema, lastRunUsageSnapshotSchema } from './conversation-telemetry.ts'
 import { contextTelemetrySchema } from './context-telemetry.ts'
 import { LANGUAGE_PREFERENCES, MAX_CONCURRENT_LIMIT, type CliSettings } from '../shared/cli-settings.ts'
-import type { DispatchAskSettings } from '../shared/dispatch-ask.ts'
 import { parseNativeResponse } from './native-response.mjs'
 import {
   RUNNING_MESSAGE_MODES,
@@ -95,14 +94,6 @@ const conversationSetupSchema = z.object({
   cli: z.enum(CLI_IDS),
   setup: dispatchSetupSchema,
 })
-const dispatchAskSchema = z
-  .object({
-    policy: z.literal(1),
-    project: z.string().min(1),
-    cli: z.enum(CLI_IDS),
-    ask: z.boolean(),
-  })
-  .strict()
 // Read old Harness settings without exposing that retired entry as an active CLI.
 const storedCliSchema = z.enum([...CLI_IDS, 'harness'])
 const storedPreferenceSchema = preferenceSchema.extend({ cli: storedCliSchema.optional() })
@@ -112,6 +103,7 @@ const generalSettingsSchema = z.object({
   maxConcurrent: z.int().min(1).max(MAX_CONCURRENT_LIMIT).optional(),
   language: z.enum(LANGUAGE_PREFERENCES).optional(),
   isolatedParallelWrites: z.boolean().optional(),
+  askBeforeDispatch: z.boolean().optional(),
 })
 export type StoredGeneralSettings = z.infer<typeof generalSettingsSchema>
 const enabledByDefault = () => Object.fromEntries(CLI_IDS.map((cli) => [cli, true])) as CliSettings['enabled']
@@ -432,13 +424,9 @@ export class WorkerStorage {
     }
   }
   private readRunningMessageRecord(path: string): z.infer<typeof runningMessageSchema> {
-    return runningMessageSchema.parse(this.readSettingRecord(path, '运行中发送设置'))
-  }
-  /** Small private setting files: no symlink, hard link, oversize or concurrent replacement. */
-  private readSettingRecord(path: string, label: string): unknown {
     const info = lstatSync(path)
     if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > 16_384)
-      throw new Error(`${label}无法核验`)
+      throw new Error('运行中发送设置无法核验')
     const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     try {
       const opened = fstatSync(fd)
@@ -449,7 +437,7 @@ export class WorkerStorage {
         opened.nlink !== 1 ||
         opened.size > 16_384
       )
-        throw new Error(`${label}身份已变化`)
+        throw new Error('运行中发送设置身份已变化')
       const bytes = Buffer.alloc(opened.size + 1)
       let length = 0
       while (length < bytes.length) {
@@ -471,8 +459,8 @@ export class WorkerStorage {
         current.size !== after.size ||
         current.mtimeMs !== after.mtimeMs
       )
-        throw new Error(`${label}读取期间发生变化`)
-      return JSON.parse(bytes.subarray(0, length).toString('utf8'))
+        throw new Error('运行中发送设置读取期间发生变化')
+      return runningMessageSchema.parse(JSON.parse(bytes.subarray(0, length).toString('utf8')))
     } finally {
       closeSync(fd)
     }
@@ -532,6 +520,7 @@ export class WorkerStorage {
         maxConcurrent: z.int().min(1).max(MAX_CONCURRENT_LIMIT).nullable().optional(),
         language: z.enum(LANGUAGE_PREFERENCES).nullable().optional(),
         isolatedParallelWrites: z.boolean().nullable().optional(),
+        askBeforeDispatch: z.boolean().nullable().optional(),
       })
       .strict()
       .parse(patch)
@@ -617,21 +606,6 @@ export class WorkerStorage {
       throw new Error('此 CLI 不支持引导，请选择插队或排队')
     atomicJSON(join(this.directory, `${this.projectKey(project, cli)}.running-message.json`), value)
     return { cli, mode, canSteer: supportsNativeSteering(cli) }
-  }
-  /** Missing records, including every pre-toggle install, keep the dispatch questions. */
-  dispatchAskSettings(project: string, cli: CliId): DispatchAskSettings {
-    if (isRetiredCli(cli)) return { cli, ask: true }
-    const path = join(this.directory, `${this.projectKey(project, cli)}.dispatch-ask.json`)
-    if (!existsSync(path)) return { cli, ask: true }
-    const value = dispatchAskSchema.parse(this.readSettingRecord(path, '调用前询问设置'))
-    if (value.project !== project || value.cli !== cli) throw new Error('调用前询问设置的项目或 CLI 不匹配')
-    return { cli, ask: value.ask }
-  }
-  setDispatchAsk(project: string, cli: CliId, ask: boolean): DispatchAskSettings {
-    if (isRetiredCli(cli)) throw new Error(RETIRED_HARNESS_NOTICE)
-    const value = dispatchAskSchema.parse({ policy: 1, project, cli, ask })
-    atomicJSON(join(this.directory, `${this.projectKey(project, cli)}.dispatch-ask.json`), value)
-    return { cli, ask: value.ask }
   }
   preference(project: string, cli: CliId = 'antigravity'): Preference | undefined {
     if (isRetiredCli(cli)) return undefined

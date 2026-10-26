@@ -53,6 +53,28 @@ it('persists the interface language next to the limit and restores follow on nul
   expect(storage.setGeneralSettings({ language: null })).toEqual({ maxConcurrent: 2 })
 })
 
+it('keeps asking before dispatch for older settings and persists turning it off privately', async () => {
+  const state = join(directory(), 'state')
+  let storage = new WorkerStorage(state)
+  // An older settings file without the field means asking.
+  storage.setGeneralSettings({ maxConcurrent: 2 })
+  storage.close()
+  storage = new WorkerStorage(state)
+  let runtime = new WorkerRuntime(storage, { resolveExecutable: vi.fn(), spawn: vi.fn() } as unknown as ProcessBackend, DEFAULT_CONFIG)
+  expect(runtime.generalSettings().askBeforeDispatch).toBe(true)
+  expect(runtime.setGeneralSettings({ askBeforeDispatch: false }).askBeforeDispatch).toBe(false)
+  if (process.platform !== 'win32') {
+    expect(statSync(state).mode & 0o777).toBe(0o700)
+    expect(statSync(join(state, 'general-settings.json')).mode & 0o777).toBe(0o600)
+  }
+  await runtime.close()
+  storage = new WorkerStorage(state)
+  runtime = new WorkerRuntime(storage, { resolveExecutable: vi.fn(), spawn: vi.fn() } as unknown as ProcessBackend, DEFAULT_CONFIG)
+  cleanup.push(() => runtime.close())
+  expect(storage.generalSettings()).toEqual({ maxConcurrent: 2, askBeforeDispatch: false })
+  expect(runtime.setGeneralSettings({ askBeforeDispatch: null }).askBeforeDispatch).toBe(true)
+})
+
 it.each([
   { maxConcurrent: 0 },
   { maxConcurrent: 9 },
@@ -62,6 +84,7 @@ it.each([
   { language: 'fr' },
   { language: '' },
   { language: 1 },
+  { askBeforeDispatch: 'no' },
 ])(
   'rejects an invalid patch without changing the stored value (%j)',
   (patch) => {
@@ -104,6 +127,7 @@ it('uses the saved limit over the config and admits queued work as soon as it is
     defaultMaxConcurrent: 0,
     language: 'follow',
     isolatedParallelWrites: false,
+    askBeforeDispatch: true,
   })
   expect(backend.resolveExecutable).not.toHaveBeenCalled()
 
@@ -112,6 +136,7 @@ it('uses the saved limit over the config and admits queued work as soon as it is
     defaultMaxConcurrent: 0,
     language: 'follow',
     isolatedParallelWrites: false,
+    askBeforeDispatch: true,
   })
   await vi.waitFor(() => expect(storage.workers.get(worker.id)?.status).not.toBe('queued'))
 })

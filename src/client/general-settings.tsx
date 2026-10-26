@@ -16,29 +16,33 @@ function readSettings(raw: string): GeneralSettings {
   const next = JSON.parse(raw)
   const count = (input: unknown) =>
     Number.isInteger(input) && (input as number) >= 1 && (input as number) <= MAX_CONCURRENT_LIMIT
-  // Absent fields are an older Host's defaults (`follow`, off); any other value is rejected.
+  // Absent fields are an older Host's defaults (`follow`, off, asking); any other value is rejected.
   const language = next?.language ?? 'follow'
   const isolatedParallelWrites = next?.isolatedParallelWrites ?? false
+  const askBeforeDispatch = next?.askBeforeDispatch ?? true
   if (
     !count(next?.maxConcurrent) ||
     !count(next?.defaultMaxConcurrent) ||
     !LANGUAGE_PREFERENCES.includes(language) ||
-    typeof isolatedParallelWrites !== 'boolean'
+    typeof isolatedParallelWrites !== 'boolean' ||
+    typeof askBeforeDispatch !== 'boolean'
   )
     throw new Error(t('收到无效的通用设置，请重试'))
-  return { ...next, language, isolatedParallelWrites }
+  return { ...next, language, isolatedParallelWrites, askBeforeDispatch }
 }
 
-type Field = 'language' | 'maxConcurrent' | 'isolatedParallelWrites'
+type Field = 'language' | 'maxConcurrent' | 'isolatedParallelWrites' | 'askBeforeDispatch'
 const SAVING: Record<Field, MessageKey> = {
   language: '正在保存界面语言…',
   maxConcurrent: '正在保存同时对话数…',
   isolatedParallelWrites: '正在保存同目录写任务并行…',
+  askBeforeDispatch: '正在保存调用前询问模型…',
 }
 const UNSAVED: Record<Field, MessageKey> = {
   language: '界面语言未保存，请重新选择重试',
   maxConcurrent: '同时对话数未保存，请重新选择重试',
   isolatedParallelWrites: '同目录写任务并行未保存，请重试',
+  askBeforeDispatch: '调用前询问模型未保存，请重试',
 }
 // Each language is named in itself, so the choice stays findable after a switch.
 const LANGUAGE_LABELS: Record<LanguagePreference, () => string> = {
@@ -58,6 +62,7 @@ export function GeneralSettingsPane({ api, sessionId }: { api: API; sessionId: s
   const languageHintId = useId()
   const hintId = useId()
   const isolationHintId = useId()
+  const askHintId = useId()
   const request = useRef<AbortController>()
   const service = api.cliworker
 
@@ -208,6 +213,21 @@ export function GeneralSettingsPane({ api, sessionId }: { api: API; sessionId: s
             />
           </div>
           {feedback('isolatedParallelWrites')}
+          <div className="cwn-setting-row">
+            <span className="cwn-setting-row-text">
+              <span>{t('调用前询问模型')}</span>
+              <span className="cwn-setting-description" id={askHintId}>
+                {t('关闭后新对话直接使用项目的默认模型、强度与上次确认的角色；无有效设定时仍会询问')}
+              </span>
+            </span>
+            <Switch
+              checked={settings?.askBeforeDispatch ?? true}
+              onChange={(enabled) => void save('askBeforeDispatch', enabled)}
+              label={t('调用前询问模型')}
+              disabled={disabled}
+            />
+          </div>
+          {feedback('askBeforeDispatch')}
           {error && !error.field && (
             <div className="cwn-settings-save">
               <span className="cwn-settings-feedback-slot" role="status">

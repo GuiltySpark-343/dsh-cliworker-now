@@ -519,10 +519,10 @@ it('replays omitted CLI then explicit Hermes without consuming the previous Anti
 })
 
 // Ask-before-dispatch switch: synthetic catalogs and accounts only, no CLI process.
-it('missing switch record keeps the reuse question for a new conversation', async () => {
+it('a missing switch value (older settings) keeps the reuse question for a new conversation', async () => {
   const f = fixture()
   f.storage.setDispatchSetup(f.project, f.setup)
-  expect(f.storage.dispatchAskSettings(f.project, 'antigravity')).toEqual({ cli: 'antigravity', ask: true })
+  expect(f.storage.generalSettings().askBeforeDispatch).toBeUndefined()
   const pending = f.choose('new')
   await f.ready(1)
   expect(f.requests[0]!.request.questions[0].id).toBe('cliworker_reuse')
@@ -535,7 +535,7 @@ it('asking off starts with a valid saved setup without any question card and pin
   const role = roleSnapshot(f.storage.rolePresets()[0]!)
   const saved = { ...f.setup, role }
   f.storage.setDispatchSetup(f.project, saved)
-  f.storage.setDispatchAsk(f.project, 'antigravity', false)
+  f.storage.setGeneralSettings({ askBeforeDispatch: false })
   const result = await f.choose('new')
   expect(result).toEqual(saved)
   expect(f.ask).not.toHaveBeenCalled()
@@ -549,7 +549,7 @@ it('asking off starts with a valid saved setup without any question card and pin
 it('asking off with only a settings-page model and no confirmed role falls back to full selection, then stops asking', async () => {
   const f = fixture()
   f.storage.setPreference(f.project, f.setup.preference)
-  f.storage.setDispatchAsk(f.project, 'antigravity', false)
+  f.storage.setGeneralSettings({ askBeforeDispatch: false })
   const pending = f.choose('one')
   await f.complete(0, 'Fixture A')
   const selected = await pending
@@ -564,7 +564,7 @@ it.each(['account', 'model', 'effort'] as const)(
   async (invalid) => {
     const f = fixture()
     f.storage.setDispatchSetup(f.project, f.setup)
-    f.storage.setDispatchAsk(f.project, 'antigravity', false)
+    f.storage.setGeneralSettings({ askBeforeDispatch: false })
     if (invalid === 'account') f.setBinding('synthetic-account-b')
     else if (invalid === 'model') f.setModels([{ id: 'fixture-b', label: 'Fixture B', efforts: ['default'] }])
     else
@@ -582,7 +582,7 @@ it.each(['account', 'model', 'effort'] as const)(
 it('asking off rejects without saving when execution is refused after the setup is chosen', async () => {
   const f = fixture()
   f.storage.setDispatchSetup(f.project, f.setup)
-  f.storage.setDispatchAsk(f.project, 'antigravity', false)
+  f.storage.setGeneralSettings({ askBeforeDispatch: false })
   f.service.assertExecution.mockImplementationOnce(() => {}).mockImplementationOnce(() => {
     throw new Error('Harness 当前为只读权限')
   })
@@ -599,31 +599,29 @@ it('asking off replaces an invalid conversation setup with the valid project set
     preference: { cli: 'antigravity', model: 'retired-fixture', effort: 'low' },
   })
   f.storage.setDispatchSetup(f.project, f.setup)
-  f.storage.setDispatchAsk(f.project, 'antigravity', false)
+  f.storage.setGeneralSettings({ askBeforeDispatch: false })
   expect(await f.choose()).toEqual(f.setup)
   expect(f.ask).not.toHaveBeenCalled()
   expect(f.storage.conversationSetup('parent', f.project, 'antigravity')).toEqual(f.setup)
 })
 
-it('asking off is scoped to its project and CLI', async () => {
+it('asking off uses each project and CLI setup of its own and never borrows another', async () => {
   const f = fixture()
-  const codex = { ...f.setup, preference: { ...f.setup.preference, cli: 'codex' as const } }
   f.storage.setDispatchSetup(f.project, f.setup)
-  f.storage.setDispatchSetup(f.project, codex)
-  f.storage.setDispatchAsk(f.project, 'antigravity', false)
-  const pending = f.choose('new', 'codex')
-  await f.ready(1)
-  expect(f.requests[0]!.request.questions[0].id).toBe('cliworker_reuse')
-  f.respond(0, { cliworker_reuse: '沿用' })
-  expect(await pending).toEqual(codex)
+  f.storage.setGeneralSettings({ askBeforeDispatch: false })
+  // Codex has no saved setup in this project: it asks rather than reusing Antigravity's.
+  const codex = f.choose('new', 'codex')
+  await f.complete(0, 'Fixture B')
+  expect((await codex).preference.cli).toBe('codex')
   const other = join(f.project, 'another')
   mkdirSync(other)
-  f.storage.setDispatchSetup(other, f.setup)
   const second = f.choose('other', 'antigravity', undefined, other)
-  await f.ready(2)
-  expect(f.requests[1]!.request.questions[0].id).toBe('cliworker_reuse')
-  f.respond(1, { cliworker_reuse: '沿用' })
-  await second
+  await f.complete(2, 'Fixture B')
+  expect((await second).preference.model).toBe('fixture-b')
+  expect(f.requests[0]!.request.questions[0].id).toBe('cliworker_model')
+  expect(f.requests[2]!.request.questions[0].id).toBe('cliworker_model')
+  expect(await f.choose('third')).toEqual(f.setup)
+  expect(f.ask).toHaveBeenCalledTimes(4)
 })
 
 it('asking off reaches launch through cliworker_start with the saved setup and no question', async () => {
@@ -640,7 +638,7 @@ it('asking off reaches launch through cliworker_start with the saved setup and n
     binding: f.setup.binding,
   }
   f.storage.setDispatchSetup(f.project, hermes)
-  f.storage.setDispatchAsk(f.project, 'hermes', false)
+  f.storage.setGeneralSettings({ askBeforeDispatch: false })
   const exec = { agent: f.agent(), signal: new AbortController().signal } as any
   try {
     const result = await ctx.tools
