@@ -103,6 +103,7 @@ const generalSettingsSchema = z.object({
   maxConcurrent: z.int().min(1).max(MAX_CONCURRENT_LIMIT).optional(),
   language: z.enum(LANGUAGE_PREFERENCES).optional(),
   isolatedParallelWrites: z.boolean().optional(),
+  askBeforeDispatch: z.boolean().optional(),
 })
 export type StoredGeneralSettings = z.infer<typeof generalSettingsSchema>
 const enabledByDefault = () => Object.fromEntries(CLI_IDS.map((cli) => [cli, true])) as CliSettings['enabled']
@@ -523,6 +524,7 @@ export class WorkerStorage {
         maxConcurrent: z.int().min(1).max(MAX_CONCURRENT_LIMIT).nullable().optional(),
         language: z.enum(LANGUAGE_PREFERENCES).nullable().optional(),
         isolatedParallelWrites: z.boolean().nullable().optional(),
+        askBeforeDispatch: z.boolean().nullable().optional(),
       })
       .strict()
       .parse(patch)

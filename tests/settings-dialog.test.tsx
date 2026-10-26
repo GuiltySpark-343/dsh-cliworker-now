@@ -2612,6 +2612,7 @@ it.each(['read', 'save'] as const)(
     expect(t.text()).not.toContain('发送方式已保存')
   },
 )
+
 it('opens CLI Worker settings above agents and saves the shared concurrency limit', async () => {
   let current = { maxConcurrent: 2, defaultMaxConcurrent: 2, isolatedParallelWrites: false }
   const generalSettings = vi.fn(async () => remote(current))
@@ -2685,4 +2686,35 @@ it('explains and saves the same-directory isolated-copy switch, off by default',
   // The switch itself shows the saved state; no extra confirmation line.
   expect(t.text()).not.toContain('已开启')
   expect(t.text()).not.toContain('正在保存同目录写任务并行')
+})
+
+// Simulated Gateway only: the switch saves a profile setting and never starts a CLI.
+it('shows ask-before-dispatch on for an older Host and saves turning it off without success text', async () => {
+  let current: Record<string, unknown> = { maxConcurrent: 2, defaultMaxConcurrent: 2 }
+  const saveGeneralSettings = vi.fn(async (_session, raw: string) => {
+    current = { ...current, ...JSON.parse(raw) }
+    return remote(current)
+  })
+  const t = await setup({ generalSettings: vi.fn(async () => remote(current)), saveGeneralSettings })
+  await t.click('CLI Worker 设置')
+  expect(t.button('调用前询问模型').props['aria-checked']).toBe(true)
+  expect(t.text()).toContain('无有效设定时仍会询问')
+  await t.click('调用前询问模型')
+  expect(saveGeneralSettings).toHaveBeenCalledWith('simulation-parent', '{"askBeforeDispatch":false}', expect.any(AbortSignal))
+  expect(t.button('调用前询问模型').props['aria-checked']).toBe(false)
+  expect(t.text()).not.toContain('已保存')
+  expect(t.text()).not.toContain('正在保存调用前询问模型')
+  expect(t.configure).not.toHaveBeenCalled()
+})
+
+it('keeps ask-before-dispatch on and shows a short error when saving fails', async () => {
+  const saveGeneralSettings = vi.fn().mockResolvedValue({ ok: false, error: { message: '模拟保存失败' } })
+  const t = await setup({
+    generalSettings: vi.fn(async () => remote({ maxConcurrent: 2, defaultMaxConcurrent: 2, askBeforeDispatch: true })),
+    saveGeneralSettings,
+  })
+  await t.click('CLI Worker 设置')
+  await t.click('调用前询问模型')
+  expect(t.button('调用前询问模型').props['aria-checked']).toBe(true)
+  expect(t.text()).toContain('模拟保存失败')
 })

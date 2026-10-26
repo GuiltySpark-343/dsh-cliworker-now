@@ -517,3 +517,138 @@ it('replays omitted CLI then explicit Hermes without consuming the previous Anti
     await ctx.fiber.dispose()
   }
 })
+
+// Ask-before-dispatch switch: synthetic catalogs and accounts only, no CLI process.
+it('a missing switch value (older settings) keeps the reuse question for a new conversation', async () => {
+  const f = fixture()
+  f.storage.setDispatchSetup(f.project, f.setup)
+  expect(f.storage.generalSettings().askBeforeDispatch).toBeUndefined()
+  const pending = f.choose('new')
+  await f.ready(1)
+  expect(f.requests[0]!.request.questions[0].id).toBe('cliworker_reuse')
+  f.respond(0, { cliworker_reuse: '沿用' })
+  expect(await pending).toEqual(f.setup)
+})
+
+it('asking off starts with a valid saved setup without any question card and pins its account for launch', async () => {
+  const f = fixture()
+  const role = roleSnapshot(f.storage.rolePresets()[0]!)
+  const saved = { ...f.setup, role }
+  f.storage.setDispatchSetup(f.project, saved)
+  f.storage.setGeneralSettings({ askBeforeDispatch: false })
+  const result = await f.choose('new')
+  expect(result).toEqual(saved)
+  expect(f.ask).not.toHaveBeenCalled()
+  // Checked against the fresh catalog here; launch authorizes it live against this binding.
+  expect(f.service.queryCatalog).toHaveBeenCalledOnce()
+  expect(f.service.selectionBindings.get(result.preference)).toBe(saved.binding)
+  expect(f.storage.conversationSetup('new', f.project, 'antigravity')).toEqual(saved)
+  expect(f.service.pending.size).toBe(0)
+})
+
+it('asking off with only a settings-page model and no confirmed role falls back to full selection, then stops asking', async () => {
+  const f = fixture()
+  f.storage.setPreference(f.project, f.setup.preference)
+  f.storage.setGeneralSettings({ askBeforeDispatch: false })
+  const pending = f.choose('one')
+  await f.complete(0, 'Fixture A')
+  const selected = await pending
+  expect(f.requests[0]!.request.questions[0].id).toBe('cliworker_model')
+  expect(f.storage.dispatchSetup(f.project, 'antigravity')).toEqual(selected)
+  expect(await f.choose('two')).toEqual(selected)
+  expect(f.ask).toHaveBeenCalledTimes(2)
+})
+
+it.each(['account', 'model', 'effort'] as const)(
+  'asking off with an invalid saved %s falls back to full selection instead of guessing',
+  async (invalid) => {
+    const f = fixture()
+    f.storage.setDispatchSetup(f.project, f.setup)
+    f.storage.setGeneralSettings({ askBeforeDispatch: false })
+    if (invalid === 'account') f.setBinding('synthetic-account-b')
+    else if (invalid === 'model') f.setModels([{ id: 'fixture-b', label: 'Fixture B', efforts: ['default'] }])
+    else
+      f.setModels([
+        { id: 'fixture-a', label: 'Fixture A', efforts: ['high'] },
+        { id: 'fixture-b', label: 'Fixture B', efforts: ['default'] },
+      ])
+    const pending = f.choose('new')
+    await f.complete(0, 'Fixture B')
+    expect((await pending).preference.model).toBe('fixture-b')
+    expect(f.requests[0]!.request.questions[0].id).toBe('cliworker_model')
+  },
+)
+
+it('asking off rejects without saving when execution is refused after the setup is chosen', async () => {
+  const f = fixture()
+  f.storage.setDispatchSetup(f.project, f.setup)
+  f.storage.setGeneralSettings({ askBeforeDispatch: false })
+  f.service.assertExecution.mockImplementationOnce(() => {}).mockImplementationOnce(() => {
+    throw new Error('Harness 当前为只读权限')
+  })
+  await expect(f.choose('new')).rejects.toThrow('只读')
+  expect(f.ask).not.toHaveBeenCalled()
+  expect(f.storage.conversationSetup('new', f.project, 'antigravity')).toBeUndefined()
+  expect(f.service.pending.size).toBe(0)
+})
+
+it('asking off replaces an invalid conversation setup with the valid project setup', async () => {
+  const f = fixture()
+  f.storage.setConversationSetup('parent', f.project, {
+    ...f.setup,
+    preference: { cli: 'antigravity', model: 'retired-fixture', effort: 'low' },
+  })
+  f.storage.setDispatchSetup(f.project, f.setup)
+  f.storage.setGeneralSettings({ askBeforeDispatch: false })
+  expect(await f.choose()).toEqual(f.setup)
+  expect(f.ask).not.toHaveBeenCalled()
+  expect(f.storage.conversationSetup('parent', f.project, 'antigravity')).toEqual(f.setup)
+})
+
+it('asking off uses each project and CLI setup of its own and never borrows another', async () => {
+  const f = fixture()
+  f.storage.setDispatchSetup(f.project, f.setup)
+  f.storage.setGeneralSettings({ askBeforeDispatch: false })
+  // Codex has no saved setup in this project: it asks rather than reusing Antigravity's.
+  const codex = f.choose('new', 'codex')
+  await f.complete(0, 'Fixture B')
+  expect((await codex).preference.cli).toBe('codex')
+  const other = join(f.project, 'another')
+  mkdirSync(other)
+  const second = f.choose('other', 'antigravity', undefined, other)
+  await f.complete(2, 'Fixture B')
+  expect((await second).preference.model).toBe('fixture-b')
+  expect(f.requests[0]!.request.questions[0].id).toBe('cliworker_model')
+  expect(f.requests[2]!.request.questions[0].id).toBe('cliworker_model')
+  expect(await f.choose('third')).toEqual(f.setup)
+  expect(f.ask).toHaveBeenCalledTimes(4)
+})
+
+it('asking off reaches launch through cliworker_start with the saved setup and no question', async () => {
+  const f = fixture()
+  const ctx = new Context()
+  await ctx.plugin(SystemPrompt, { includeHarnessIdentity: false })
+  await ctx.plugin(ToolRuntime, { mode: 'native' })
+  const launch = vi.fn(async (_agent, _title, _prompt, preference) => JSON.stringify(preference))
+  Object.assign(f.service, { ctx, launch })
+  f.service.registerTools()
+  const hermes: DispatchSetup = {
+    preference: { cli: 'hermes', model: 'fixture-b', effort: 'default' },
+    role: null,
+    binding: f.setup.binding,
+  }
+  f.storage.setDispatchSetup(f.project, hermes)
+  f.storage.setGeneralSettings({ askBeforeDispatch: false })
+  const exec = { agent: f.agent(), signal: new AbortController().signal } as any
+  try {
+    const result = await ctx.tools
+      .get('cliworker_start')!
+      .execute({ cli: 'hermes', title: '模拟任务', prompt: '模拟提示' }, exec)
+    expect(JSON.parse(result as string)).toEqual(hermes.preference)
+    expect(f.ask).not.toHaveBeenCalled()
+    expect(launch).toHaveBeenCalledOnce()
+    expect(f.storage.conversationSetup('parent', f.project, 'hermes')).toEqual(hermes)
+  } finally {
+    await ctx.fiber.dispose()
+  }
+})

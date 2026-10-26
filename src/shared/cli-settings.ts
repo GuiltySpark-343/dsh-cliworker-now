@@ -22,6 +22,8 @@ export interface GeneralSettings {
   language: LanguagePreference
   /** Conflicting same-project writers run in plugin-owned copies; off by default. */
   isolatedParallelWrites: boolean
+  /** Dispatch questions before a new conversation's first start; on unless turned off. */
+  askBeforeDispatch: boolean
 }
 
 /** Machine-local executable selection; separate from project model preferences. */

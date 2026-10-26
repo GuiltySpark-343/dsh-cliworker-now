@@ -671,6 +671,11 @@ export const en = {
   '在项目副本中同时运行，完成后由主 Agent 合并回项目': 'Runs in a project copy; the main agent merges it back',
   '正在保存同目录写任务并行…': 'Saving parallel writes…',
   '同目录写任务并行未保存，请重试': 'Parallel writes setting was not saved. Try again',
+  // ask before dispatch (general-settings)
+  '调用前询问模型': 'Ask for model before dispatch',
+  '关闭后新对话直接使用项目的默认模型、强度与上次确认的角色；无有效设定时仍会询问': 'When off, a new conversation starts with the project\'s default model, effort and last confirmed role; it still asks if no valid choice is saved',
+  '正在保存调用前询问模型…': 'Saving ask-before-dispatch…',
+  '调用前询问模型未保存，请重试': 'Ask-before-dispatch setting was not saved. Try again',
   // isolated parallel writes: Host messages shown by hostText(); keep exactly equal to the Host source text
   '上次合并在 Host 关闭时中断，可重新合并；已写回的文件会被跳过': 'The last merge was interrupted when the Host closed. You can merge again; files already written back are skipped',
   '隔离副本目录已缺失，只能丢弃': 'The isolated copy folder is missing; it can only be discarded',

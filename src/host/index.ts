@@ -904,7 +904,11 @@ export class CliWorkerService extends TypertRemoteService {
           // The settled setup no longer fits this catalog: ask again in turn.
           if (!setup && !held) continue
           let selected = false
-          if (!current) {
+          // The only unasked start: the user turned asking off and the saved complete setup still checks out.
+          if (!setup && this.runtime.storage.generalSettings().askBeforeDispatch === false) {
+            const saved = this.runtime.storage.dispatchSetup(project, cli)
+            if (valid(saved)) setup = saved
+          } else if (!current) {
             const saved = this.runtime.storage.dispatchSetup(project, cli)
             if (valid(saved)) {
               const modelLabel =
