@@ -9,6 +9,7 @@ import { z as validate } from 'zod'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
+import type { AccountResponse } from '../shared/accounts.ts'
 import type { SettingsCacheMetadata } from '../shared/settings-cache.ts'
 import { createHarnessConversationBridge } from './harness-conversation.ts'
 import { workerGoalCommand } from './harness-conversation-commands.ts'
@@ -2106,6 +2107,27 @@ export class CliWorkerService extends TypertRemoteService {
     try {
       this.assertExecution(await this.parent(parentSessionId))
       await this.accounts.write(parentSessionId, accountId, data)
+      return true
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning session. @param accountId - Account terminal identity. @param response - The user's answer to the window's current step (JSON). @returns Answer accepted. */
+  @Remote('accountRespond')
+  async accountRespond(parentSessionId: string, accountId: string, response: string): Promise<boolean> {
+    try {
+      this.assertExecution(await this.parent(parentSessionId))
+      const parsed: unknown = JSON.parse(typeof response === 'string' && response.length <= 8192 ? response : 'null')
+      const value = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
+      const keys = Object.keys(value)
+      const text = (name: 'option' | 'code' | 'secret') => keys.length === 1 && typeof value[name] === 'string'
+      let answer: AccountResponse
+      if (text('option')) answer = { option: value.option as string }
+      else if (text('code')) answer = { code: value.code as string }
+      else if (text('secret')) answer = { secret: value.secret as string }
+      else if (keys.length === 1 && (value.confirm === 'trust' || value.confirm === 'decline')) answer = { confirm: value.confirm }
+      else throw new Error('无效的账号窗口操作')
+      await this.accounts.respond(parentSessionId, accountId, answer)
       return true
     } catch (error) {
       throw failure(error)

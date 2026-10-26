@@ -1,5 +1,13 @@
 import { setTimeout as sleep } from 'node:timers/promises'
-import { AGY_GUIDES, AgyAccountGuide, type AgyGuideEvent } from './agy-account-guide.ts'
+import { AGY_GUIDES, AgyAccountGuide } from './agy-account-guide.ts'
+import {
+  GuideResponseError,
+  type AccountChange,
+  type AccountEvidence,
+  type AccountGuideDriver,
+  type GuideEvent,
+} from './account-guide/engine.ts'
+import { createAccountGuide } from './account-guide/flows.ts'
 import {
   readClaudeOwnRoute,
   readClaudeOfficialAccountRoute,
@@ -27,6 +35,7 @@ import { CLI_IDS, type CliId } from '../shared/types.ts'
 import type {
   AccountAction,
   AccountFrame,
+  AccountResponse,
   AccountSource,
   AccountStatus,
   ZCodeLoginProvider,
@@ -68,7 +77,7 @@ const MAX_OUTPUT_BYTES = 256 * 1024
 const MAX_FRAMES = 512
 const MAX_INPUT_BYTES = 16 * 1024
 const ACTIONS: AccountAction[] = ['login', 'logout', 'manage']
-/** Antigravity terminal guide timing; tests shorten it. */
+/** Guided login window timing; tests shorten it. */
 export const AGY_GUIDE_TIMING = {
   commandDelayMs: 400,
   pollMs: 1500,
@@ -80,9 +89,11 @@ export const AGY_GUIDE_TIMING = {
   settleCapMs: 10_000,
   /** When `/logout` is still pending after this, one more Enter runs a completed slash command. */
   confirmEnterMs: 1500,
+  /** Other CLIs' guided windows: a screen this still with no known step goes to the native terminal. */
+  flowQuietMs: 8000,
 }
-/** The guided Antigravity terminal is not shown by default; a tall, wide PTY keeps every prompt on screen. */
-const AGY_GUIDED_SIZE = { cols: 200, rows: 60 }
+// A guided answer's Enter follows its pasted value after the input box takes it.
+const ANSWER_ENTER_MS = 300
 
 const validateCli = (cli: CliId) => {
   if (!(CLI_IDS as readonly string[]).includes(cli)) throw new Error('不支持的 CLI')
@@ -249,9 +260,12 @@ interface AccountSession {
   changed: Set<() => void>
   output: Promise<void>
   exited: boolean
-  /** Step hints and the one automatic `/logout` of an Antigravity login/logout terminal. */
-  guide?: AgyAccountGuide
+  /** Step hints and automatic sign-out of a plugin-drawn login/logout window. */
+  guide?: AccountGuideDriver
   guideControl?: AbortController
+  /** The account before this window, to tell a new sign-in from an existing one. */
+  before?: Promise<AccountEvidence | undefined>
+  project: string
   settleTimer?: ReturnType<typeof setTimeout>
   firstOutputAt?: number
   cleanup?: Promise<void>
@@ -259,6 +273,7 @@ interface AccountSession {
   deadline?: ReturnType<typeof setTimeout>
   attachDeadline?: ReturnType<typeof setTimeout>
   expiry?: ReturnType<typeof setTimeout>
+  exitCode?: number
 }
 
 /** User-only auth processes. Only allowlisted identity metadata leaves the Host. */
@@ -798,9 +813,10 @@ export class AccountManager {
         release = prepared.cleanup
       }
       startup.throwIfAborted()
+      const guide = createAccountGuide(cli, action, { provider })
       allocation = spawnAccountTerminal(this.backend, {
         ...launch,
-        ...(cli === 'antigravity' && action !== 'manage' ? AGY_GUIDED_SIZE : { rows: 24, cols: 80 }),
+        ...(guide ? guide.size : { rows: 24, cols: 80 }),
         terminalType: 'xterm-256color',
         graceMs: this.config.graceMs,
         signal: allocationControl.signal,
@@ -820,9 +836,8 @@ export class AccountManager {
             changed: new Set(),
             output: Promise.resolve(),
             exited: false,
-            ...(cli === 'antigravity' && action !== 'manage'
-              ? { guide: new AgyAccountGuide(action), guideControl: new AbortController() }
-              : {}),
+            ...(guide ? { guide, guideControl: new AbortController() } : {}),
+            project: cwd,
             release,
           }
           const own = session
@@ -831,6 +846,8 @@ export class AccountManager {
             () => (own.exited = true),
           )
           this.sessions.set(session.id, session)
+          if (guide && cli !== 'antigravity')
+            session.before = this.evidence(session, session.guideControl!.signal).catch(() => undefined)
           this.emit(session, { status: 'running' })
           session.output = this.readTerminal(session)
           void session.output.catch(() => undefined)
@@ -872,8 +889,9 @@ export class AccountManager {
       session.attachDeadline.unref?.()
       void session.terminal.done
         .then(
-          (outcome) =>
-            this.finish(
+          async (outcome) => {
+            await this.guidedExit(published, outcome.exitCode ?? undefined)
+            return this.finish(
               published,
               outcome.exitCode === 0 ? 'closed' : 'failed',
               outcome.exitCode === 0
@@ -881,7 +899,8 @@ export class AccountManager {
                 : Number.isInteger(outcome.exitCode)
                   ? `账号终端异常退出（退出码 ${outcome.exitCode}），请在系统终端检查该 CLI 后重试`
                   : '账号终端连接已结束，未返回退出码；请在系统终端检查该 CLI 后重试',
-            ),
+            )
+          },
           () => this.finish(published, 'failed', '账号终端连接失败，请重新打开'),
         )
         .catch(() => undefined)
@@ -1002,95 +1021,153 @@ export class AccountManager {
     if (session.guide) this.guided(session, session.guide.input(data))
   }
 
-  private guided(session: AccountSession, events: AgyGuideEvent[]) {
+  /** The user's answer to the current step of a plugin-drawn window. */
+  async respond(parent: string, id: string, response: AccountResponse): Promise<void> {
+    const session = this.owned(parent, id)
+    if (!session.guide) throw new GuideResponseError()
+    if (session.state !== 'running' || session.stopping) throw new Error('账号终端已关闭')
+    const events = session.guide.respond(response)
+    // Keys go first, so the CLI has the answer before the account is read.
+    for (const event of events)
+      if ('write' in event) {
+        try {
+          await session.terminal.write(event.write)
+          if (event.enter) {
+            await sleep(ANSWER_ENTER_MS)
+            if (session.state === 'running' && !session.stopping) await session.terminal.write('\r')
+          }
+        } catch {
+          throw new Error('无法写入账号终端，请重新打开')
+        }
+      }
+    this.guided(
+      session,
+      events.filter((event) => !('write' in event)),
+    )
+  }
+
+  private guided(session: AccountSession, events: GuideEvent[]) {
     for (const event of events) {
       if ('guide' in event) {
         this.emit(session, { guide: event.guide })
         if (event.guide.step === 'notSignedIn')
           void this.finish(session, 'closed', '账号终端已关闭').catch(() => undefined)
-      } else if ('command' in event) void this.logOut(session)
+      } else if ('finish' in event) void this.finish(session, 'closed', '账号终端已关闭').catch(() => undefined)
+      else if ('write' in event) void this.autoWrite(session, event.write)
+      else if ('command' in event) void this.logOut(session, event.command)
       else if ('identify' in event) void this.identifyScreen(session)
       else void this.confirmAccount(session, event.confirm)
     }
+  }
+
+  /** A choice the user already made in the window, typed into the menu it belongs to. */
+  private async autoWrite(session: AccountSession, keys: string) {
+    const signal = session.guideControl!.signal
+    try {
+      await sleep(AGY_GUIDE_TIMING.commandDelayMs, undefined, { signal })
+      if (session.state === 'running' && !session.stopping) await session.terminal.write(keys)
+    } catch {
+      // Closing the window aborts it; nothing else to undo.
+    }
+  }
+
+  /** The native account: agy's own credential store, or this CLI's account status. */
+  private evidence(session: AccountSession, signal: AbortSignal): Promise<AccountEvidence | undefined> {
+    return session.cli === 'antigravity'
+      ? this.identity(session.cli, signal)
+      : this.readStatus(session.cli, session.project, signal)
+  }
+
+  /** The CLI ended its own login/logout: read the account before reporting the window closed. */
+  private async guidedExit(session: AccountSession, exitCode: number | undefined) {
+    if (!session.guide || session.stopping) return
+    session.exitCode = exitCode
+    const events = session.guide.exited(exitCode)
+    const confirm = events.find((event): event is { confirm: AccountChange } => 'confirm' in event)
+    this.guided(
+      session,
+      events.filter((event) => !('confirm' in event)),
+    )
+    if (confirm) await this.confirmAccount(session, confirm.confirm, true)
   }
 
   private settleLater(session: AccountSession) {
     const now = Date.now()
     session.firstOutputAt ??= now
     clearTimeout(session.settleTimer)
-    const capped = session.firstOutputAt + AGY_GUIDE_TIMING.settleCapMs - now
+    const agy = session.guide instanceof AgyAccountGuide
+    const quiet = agy ? AGY_GUIDE_TIMING.quietMs : AGY_GUIDE_TIMING.flowQuietMs
+    // A spinner never lets the screen settle; the cap still reads it once.
+    const capped = session.firstOutputAt + (agy ? AGY_GUIDE_TIMING.settleCapMs : quiet + AGY_GUIDE_TIMING.settleCapMs) - now
     session.settleTimer = setTimeout(
       () => {
         if (session.state === 'running' && !session.stopping) this.guided(session, session.guide!.settled())
       },
-      Math.max(0, Math.min(AGY_GUIDE_TIMING.quietMs, capped)),
+      Math.max(0, Math.min(quiet, capped)),
     )
   }
 
   /** A settled screen with no known step: the native account decides whether it is signed in. */
   private async identifyScreen(session: AccountSession) {
     const signal = session.guideControl!.signal
-    const identity = await this.identity(session.cli, signal).catch(() => undefined)
+    const identity = await this.evidence(session, signal).catch(() => undefined)
     if (signal.aborted || session.state !== 'running' || session.stopping) return
-    this.guided(session, session.guide!.identified(identity?.state))
+    this.guided(session, session.guide!.identified(identity))
   }
 
-  /** The one command the plugin types for the user (2026-10-26 request): agy has no logout subcommand. */
-  private async logOut(session: AccountSession) {
+  /** The sign-out command the plugin types for the user (2026-10-26 request) in a CLI without a logout subcommand. */
+  private async logOut(session: AccountSession, command: string) {
     const signal = session.guideControl!.signal
     try {
       // Let the input box take focus after its first full draw.
       await sleep(AGY_GUIDE_TIMING.commandDelayMs, undefined, { signal })
       if (session.state !== 'running' || session.stopping) return
-      await session.terminal.write('/logout')
+      await session.terminal.write(command)
       await sleep(AGY_GUIDE_TIMING.commandDelayMs, undefined, { signal })
       if (session.state !== 'running' || session.stopping) return
       await session.terminal.write('\r')
       // The first Enter may only accept the slash-command completion. Never press it
       // again once the account is gone or agy shows its login menu (Enter would sign in).
       await sleep(AGY_GUIDE_TIMING.confirmEnterMs, undefined, { signal })
-      const identity = await this.identity(session.cli, signal).catch(() => undefined)
+      const identity = await this.evidence(session, signal).catch(() => undefined)
       signal.throwIfAborted()
       if (
         identity?.state === 'authenticated' &&
-        !session.guide!.loginMenuAfterCommand() &&
+        session.guide!.retryEnter() &&
         session.state === 'running' &&
         !session.stopping
       )
         await session.terminal.write('\r')
     } catch {
-      if (!signal.aborted) this.emit(session, { guide: AGY_GUIDES.logoutUnconfirmed })
+      if (!signal.aborted) this.guided(session, session.guide!.unconfirmed('logout'))
       return
     }
     await this.confirmAccount(session, 'logout')
   }
 
   /** The native account state, not terminal text, decides that a login or logout took effect. */
-  private async confirmAccount(session: AccountSession, change: 'login' | 'logout') {
+  private async confirmAccount(session: AccountSession, change: AccountChange, exited = false) {
     const signal = session.guideControl!.signal
     const until = Date.now() + (change === 'login' ? AGY_GUIDE_TIMING.loginConfirmMs : AGY_GUIDE_TIMING.logoutConfirmMs)
+    const guide = session.guide!
     try {
+      const before = await session.before
       while (Date.now() < until) {
         await sleep(AGY_GUIDE_TIMING.pollMs, undefined, { signal })
-        const identity = await this.identity(session.cli, signal).catch(() => undefined)
+        const after = await this.evidence(session, signal).catch(() => undefined)
         signal.throwIfAborted()
-        if (change === 'login' && identity?.state === 'authenticated') {
-          this.emit(session, { guide: AGY_GUIDES.signedIn })
-          // agy stays on its main screen after signing in; nothing is left for the user to do there.
-          await this.finish(session, 'closed', '账号终端已关闭').catch(() => undefined)
+        if (guide.proves(change, before, after, session.exitCode)) {
+          // Nothing is left for the user to do in the native terminal.
+          this.guided(session, guide.confirmed(change))
           return
         }
-        if (change === 'logout' && identity?.state === 'unconfigured') {
-          this.emit(session, { guide: AGY_GUIDES.loggedOut })
-          await this.finish(session, 'closed', '账号终端已关闭').catch(() => undefined)
-          return
-        }
+        // A finished process will not change the account any more.
+        if (exited && after) break
       }
     } catch {
       return
     }
-    if (change === 'login') this.guided(session, session.guide!.unconfirmed())
-    else this.emit(session, { guide: AGY_GUIDES.logoutUnconfirmed })
+    this.guided(session, guide.unconfirmed(change))
   }
 
   async resize(parent: string, id: string, cols: number, rows: number): Promise<void> {

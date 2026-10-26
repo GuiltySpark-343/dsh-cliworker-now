@@ -2,7 +2,15 @@ import { useEffect, useRef, useState, type MutableRefObject } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Button, StateDot, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { AccountAction, AccountFrame, AccountGuide, AccountSource, ZCodeLoginProvider } from '../shared/accounts.ts'
+import type {
+  AccountAction,
+  AccountFrame,
+  AccountGuide,
+  AccountResponse,
+  AccountSource,
+  ZCodeLoginProvider,
+} from '../shared/accounts.ts'
+import { GUIDED_ACCOUNT_CLIS, SINGLE_ACCOUNT_CLIS } from '../shared/account-links.ts'
 import { CLI_LABELS, type CliId } from '../shared/types.ts'
 import { value, type API } from './workers.ts'
 import { accountTerminalCSS } from './account-terminal-css.ts'
@@ -10,7 +18,7 @@ import { createZcodeLoginLinkParser } from './zcode-login-link.ts'
 import { createZcodeLoginLinkProvider } from './zcode-login-link-provider.ts'
 import { t, type MessageKey, useT } from './i18n.ts'
 import { hostText } from './operation-error.ts'
-import { AgyAccountWizard, googleSignInLink } from './agy-account-wizard.tsx'
+import { LoginWindow } from './account-login/login-window.tsx'
 
 const STARTUP_TIMEOUT_MS = 20_000
 const CLEANUP_TIMEOUT_MS = 12_000
@@ -98,9 +106,10 @@ export function AccountTerminal({
   api,
   sessionId,
   cli,
-  action,
+  action: requested,
   source,
   provider,
+  signedIn = false,
   onClose,
   onFinished,
   closeControl,
@@ -111,11 +120,20 @@ export function AccountTerminal({
   action: AccountAction
   source?: AccountSource
   provider?: ZCodeLoginProvider
+  /** The CLI already holds an account; a single-account login first offers to switch. */
+  signedIn?: boolean
   onClose: () => void
   onFinished: () => void
   closeControl?: AccountCloseControl
 }) {
   useT()
+  // Switching accounts runs a sign-out window, then the sign-in window, in this one dialog.
+  const [action, setAction] = useState(requested)
+  const switching = useRef(false)
+  const [holding, setHolding] = useState(
+    () => requested === 'login' && signedIn && SINGLE_ACCOUNT_CLIS.has(cli) && GUIDED_ACCOUNT_CLIS.has(cli),
+  )
+  const respond = useRef<(response: AccountResponse) => void>(() => {})
   const element = useRef<HTMLDivElement>(null)
   const callbacks = useRef({ onClose, onFinished })
   callbacks.current = { onClose, onFinished }
@@ -124,8 +142,8 @@ export function AccountTerminal({
   const contextClipboard = useRef<() => Promise<void>>(async () => {})
   const send = useRef<(data: string) => void>(() => {})
   const refit = useRef<() => void>(() => {})
-  // Antigravity sign-in/out is drawn by the plugin; the native terminal stays behind it.
-  const guided = cli === 'antigravity' && action !== 'manage'
+  // Guided sign-in/out is drawn by the plugin; the native terminal stays behind it.
+  const guided = GUIDED_ACCOUNT_CLIS.has(cli) && action !== 'manage'
   const [rawVisible, setRawVisible] = useState(false)
   const rawShown = useRef(false)
   rawShown.current = !guided || rawVisible
@@ -137,6 +155,7 @@ export function AccountTerminal({
   const [notice, setNotice] = useState('')
   const [guide, setGuide] = useState<AccountGuide>()
   useEffect(() => {
+    if (holding) return
     const ownGeneration = ++generation.current
     setPhase('loading')
     setInstruction('')
@@ -409,6 +428,19 @@ export function AccountTerminal({
           })
       }
       send.current = sendInput
+      respond.current = (response) => {
+        if (!canWrite()) return
+        if (typeof api.cliworker.accountRespond !== 'function') {
+          setNotice(t('插件服务尚未更新，请重启 DeepSeek Harness 后重试。现有记录不会丢失。'))
+          return
+        }
+        void api.cliworker
+          .accountRespond(sessionId, id, JSON.stringify(response))
+          .then(value)
+          .catch(() => {
+            if (alive) setNotice(t('操作未能送达，请重新开始'))
+          })
+      }
       input = view.onData(sendInput)
       startupTimer = setTimeout(() => {
         fail(t('启动超过 20 秒，已取消本次请求。请确认 CLI 可用后重试'))
@@ -496,6 +528,7 @@ export function AccountTerminal({
     return () => {
       alive = false
       send.current = () => {}
+      respond.current = () => {}
       refit.current = () => {}
       clearLoginLink()
       if (generation.current === ownGeneration) generation.current++
@@ -505,9 +538,9 @@ export function AccountTerminal({
       void stopSession().catch(() => undefined)
       void disposeStream().catch(() => undefined)
     }
-  }, [api, sessionId, cli, action, source, provider, attempt])
+  }, [api, sessionId, cli, action, source, provider, attempt, holding])
 
-  const close = (retry = false): Promise<boolean> => {
+  const close = (retry = false, next?: AccountAction): Promise<boolean> => {
     if (closing.current) return closing.current
     const ownGeneration = generation.current
     setPhase('stopping')
@@ -515,7 +548,11 @@ export function AccountTerminal({
       try {
         await waitForCleanup(stop.current())
         if (generation.current !== ownGeneration) return false
-        if (retry) setAttempt((value) => value + 1)
+        // A new action starts its own terminal; bumping the attempt too would start it twice.
+        if (next && next !== action) {
+          setGuide(undefined)
+          setAction(next)
+        } else if (retry) setAttempt((value) => value + 1)
         else callbacks.current.onClose()
         return true
       } catch {
@@ -534,6 +571,25 @@ export function AccountTerminal({
   useEffect(() => {
     if (rawVisible) refit.current()
   }, [rawVisible])
+  // The Host could not follow the screen: show the native terminal for the user to continue.
+  useEffect(() => {
+    if (guide?.template === 'native') setRawVisible(true)
+  }, [guide])
+  useEffect(() => {
+    if (!switching.current || action !== 'logout' || (guide?.step !== 'loggedOut' && guide?.step !== 'notSignedIn')) return
+    switching.current = false
+    void close(true, 'login')
+  })
+  const switchAccount = () => {
+    switching.current = true
+    if (holding) {
+      generation.current++
+      setAction('logout')
+      setHolding(false)
+      return
+    }
+    void close(true, 'logout')
+  }
   useEffect(() => {
     if (!closeControl) return
     const request = () => close()
@@ -555,21 +611,22 @@ export function AccountTerminal({
         </div>
       )}
       {guided && phase !== 'stopping' && (
-        <AgyAccountWizard
+        <LoginWindow
+          cli={cli}
           action={action}
-          phase={phase}
-          guide={guide}
+          phase={holding ? 'closed' : phase}
+          guide={
+            holding
+              ? { step: 'alreadySignedIn', tone: 'info', template: 'result', text: t('当前已登录 {cli}', { cli: CLI_LABELS[cli] }) }
+              : guide
+          }
           rawVisible={rawVisible}
           notice={notice}
           onToggleRaw={() => setRawVisible((shown) => !shown)}
-          onSend={(data) => send.current(data)}
-          onOpenLink={(url) => {
-            const link = googleSignInLink(url)
-            // Harness routes HTTP(S) new-window requests to the native browser.
-            if (link) window.open(link, '_blank', 'noopener,noreferrer')
-          }}
+          onRespond={(response) => respond.current(response)}
           onRestart={() => void close(true)}
-          onDone={() => void close()}
+          onDone={() => (holding ? callbacks.current.onClose() : void close())}
+          onSwitchAccount={SINGLE_ACCOUNT_CLIS.has(cli) ? switchAccount : undefined}
         />
       )}
       {(phase === 'loading' || phase === 'stopping') && (!guided || phase === 'stopping') && (

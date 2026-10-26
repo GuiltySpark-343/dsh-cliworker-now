@@ -1,4 +1,15 @@
-import type { AccountAction, AccountGuide } from '../shared/accounts.ts'
+import type { AccountAction, AccountGuide, AccountResponse } from '../shared/accounts.ts'
+import {
+  CONTROL,
+  compact,
+  FlowGuide,
+  GUIDE_SIZE,
+  GuideResponseError,
+  type AccountChange,
+  type AccountEvidence,
+  type AccountGuideDriver,
+  type GuideEvent,
+} from './account-guide/engine.ts'
 
 /**
  * Screen texts of agy 1.4.7 (checked on macOS 2026-10-26). Whitespace is
@@ -14,39 +25,49 @@ const MARKERS = {
   ready: '? for shortcuts',
 } as const
 
+const PLAN = ['选择登录方式', '在浏览器中授权', '粘贴授权码，按回车登录']
+const login = { plan: PLAN } as const
+
 export const AGY_GUIDES = {
-  trust: { step: 'trust', tone: 'action', text: 'Antigravity 首次在此项目文件夹运行，需要你确认是否信任该文件夹。' },
-  method: { step: 'method', tone: 'action', text: '选择登录方式：Google 账号登录（Google OAuth）。' },
+  trust: { step: 'trust', tone: 'action', template: 'trust', ...login, stage: 0, text: 'Antigravity 首次在此项目文件夹运行，需要你确认是否信任该文件夹。' },
+  method: {
+    step: 'method',
+    tone: 'action',
+    template: 'choice',
+    ...login,
+    stage: 0,
+    text: '使用 Google 账号登录 Antigravity。',
+    options: [{ id: 'google', label: '使用 Google 账号登录', detail: '如需使用 Google Cloud 项目登录，请打开原生终端操作。' }],
+  },
   code: {
     step: 'code',
     tone: 'action',
-    text: '在浏览器中登录 Google 并允许授权，然后复制页面显示的授权码，粘贴后按回车。',
+    template: 'browserCode',
+    ...login,
+    stage: 1,
+    text: '浏览器已打开 Google 登录页面。登录并点击「允许」后，页面会显示一串授权码，把它复制下来。',
   },
-  pasted: { step: 'pasted', tone: 'action', text: '授权码已粘贴，请按回车完成登录。' },
-  confirming: { step: 'confirming', tone: 'info', text: '正在确认登录…' },
-  signedIn: { step: 'signedIn', tone: 'success', text: '已登录 Antigravity' },
+  pasted: { step: 'pasted', tone: 'action', template: 'browserCode', ...login, stage: 1, text: '授权码已粘贴，请按回车完成登录。' },
+  confirming: { step: 'confirming', tone: 'info', template: 'waiting', ...login, stage: 2, text: '正在确认登录…' },
+  signedIn: { step: 'signedIn', tone: 'success', template: 'result', text: '已登录 Antigravity' },
   unconfirmed: {
     step: 'unconfirmed',
     tone: 'warning',
+    template: 'browserCode',
+    ...login,
+    stage: 1,
     text: '未能确认登录：授权码可能不完整或已过期。请重新开始登录，或查看原生终端中的提示。',
   },
-  alreadySignedIn: { step: 'alreadySignedIn', tone: 'info', text: '当前已登录 Antigravity。如需切换账号，请先退出登录。' },
-  loggingOut: { step: 'loggingOut', tone: 'info', text: '正在退出 Antigravity…' },
-  loggedOut: { step: 'loggedOut', tone: 'success', text: '已退出 Antigravity' },
-  notSignedIn: { step: 'notSignedIn', tone: 'info', text: '当前未登录 Antigravity，无需退出。' },
-  logoutUnconfirmed: { step: 'logoutUnconfirmed', tone: 'warning', text: '未能确认已退出，请查看原生终端中的提示。' },
+  alreadySignedIn: { step: 'alreadySignedIn', tone: 'info', template: 'result', text: '当前已登录 Antigravity。如需切换账号，请先退出登录。' },
+  loggingOut: { step: 'loggingOut', tone: 'info', template: 'waiting', text: '正在退出 Antigravity…' },
+  loggedOut: { step: 'loggedOut', tone: 'success', template: 'result', text: '已退出 Antigravity' },
+  notSignedIn: { step: 'notSignedIn', tone: 'info', template: 'result', text: '当前未登录 Antigravity，无需退出。' },
+  logoutUnconfirmed: { step: 'logoutUnconfirmed', tone: 'warning', template: 'result', text: '未能确认已退出，请查看原生终端中的提示。' },
 } as const satisfies Record<string, AccountGuide>
 
-export type AgyGuideEvent =
-  | { guide: AccountGuide }
-  | { command: 'logout' }
-  | { confirm: 'login' | 'logout' }
-  | { identify: true }
+export type AgyGuideEvent = GuideEvent
 
 const SCREEN_LIMIT = 4096
-// Drawing sequences carry no text: drop CSI/OSC/charset controls before matching.
-const CONTROL = /\x1b\[[0-9;?<=>]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>78]/g
-const compact = (text: string) => text.replace(/\s+/g, '').toLowerCase()
 // agy draws its sign-in address as an OSC 8 hyperlink; take the target, never the wrapped text.
 const LINK = /\x1b\]8;[^;\x07\x1b]*;([^\x07\x1b]+)(?:\x07|\x1b\\)/g
 const RAW_LIMIT = 8192
@@ -65,7 +86,8 @@ const PATTERNS = Object.fromEntries(
 ) as Record<keyof typeof MARKERS, string>
 
 /** Follows one Antigravity login or logout terminal; never stores what the user types. */
-export class AgyAccountGuide {
+export class AgyAccountGuide implements AccountGuideDriver {
+  readonly size = GUIDE_SIZE
   private screen = ''
   private raw = ''
   private link?: string
@@ -94,7 +116,7 @@ export class AgyAccountGuide {
       if (seen('method')) return this.show(AGY_GUIDES.notSignedIn)
       if (!seen('ready')) return []
       this.commandSent = true
-      return [...this.show(AGY_GUIDES.loggingOut), { command: 'logout' }]
+      return [...this.show(AGY_GUIDES.loggingOut), { command: '/logout' }]
     }
     // Login steps only move forward; a redraw of an earlier screen is ignored.
     if (seen('code') && this.order('code')) return this.show(AGY_GUIDES.code)
@@ -126,13 +148,14 @@ export class AgyAccountGuide {
   }
 
   /** The native account state read after `settled`. */
-  identified(state: string | undefined): AgyGuideEvent[] {
+  identified(evidence: AccountEvidence | string | undefined): AgyGuideEvent[] {
+    const state = typeof evidence === 'string' ? evidence : evidence?.state
     this.identifying = false
     if ((this.step && (this.step !== 'trust' || !this.trustAnswered)) || this.commandSent) return []
     if (state === 'authenticated') {
       if (this.action === 'login') return this.show(AGY_GUIDES.alreadySignedIn)
       this.commandSent = true
-      return [...this.show(AGY_GUIDES.loggingOut), { command: 'logout' }]
+      return [...this.show(AGY_GUIDES.loggingOut), { command: '/logout' }]
     }
     if (state === 'unconfigured' && this.action === 'logout') return this.show(AGY_GUIDES.notSignedIn)
     return []
@@ -156,10 +179,51 @@ export class AgyAccountGuide {
   }
 
   /** The login could not be confirmed in time; the user may paste a fresh code. */
-  unconfirmed(): AgyGuideEvent[] {
+  unconfirmed(change: AccountChange = 'login'): AgyGuideEvent[] {
+    if (change === 'logout') return [{ guide: AGY_GUIDES.logoutUnconfirmed }]
     this.typed = false
     this.step = 'code'
-    return [{ guide: AGY_GUIDES.unconfirmed }]
+    return [{ guide: this.withLink(AGY_GUIDES.unconfirmed) }]
+  }
+
+  /** An answer from the plugin window, turned into the keys agy expects. */
+  respond(response: AccountResponse): AgyGuideEvent[] {
+    if (this.action === 'manage') throw new GuideResponseError()
+    if ('confirm' in response && this.step === 'trust' && !this.trustAnswered) {
+      if (response.confirm === 'decline') return [{ finish: true }]
+      this.screen = ''
+      this.trustAnswered = true
+      return [{ write: '\r' }]
+    }
+    if (this.action !== 'login') throw new GuideResponseError()
+    if ('option' in response && response.option === 'google' && this.step === 'method') return [{ write: '\r' }]
+    if ('code' in response && ['code', 'pasted', 'unconfirmed'].includes(this.step ?? '')) {
+      const value = response.code.trim()
+      if (!value || value.length > 2048 || /[\x00-\x1f\x7f]/.test(value)) throw new GuideResponseError()
+      // agy enables bracketed paste; a pasted code then Enter is what its input box expects.
+      return [
+        { write: FlowGuide.paste(value, { action: 'login', bracketedPaste: true }), enter: true },
+        ...this.show(AGY_GUIDES.confirming),
+        { confirm: 'login' },
+      ]
+    }
+    throw new GuideResponseError()
+  }
+
+  exited(): AgyGuideEvent[] {
+    return []
+  }
+
+  confirmed(change: AccountChange): AgyGuideEvent[] {
+    return [...this.show(change === 'login' ? AGY_GUIDES.signedIn : AGY_GUIDES.loggedOut), { finish: true }]
+  }
+
+  retryEnter(): boolean {
+    return !this.loginMenuAfterCommand()
+  }
+
+  proves(change: AccountChange, _before: AccountEvidence | undefined, after: AccountEvidence | undefined): boolean {
+    return change === 'login' ? after?.state === 'authenticated' : after?.state === 'unconfigured'
   }
 
   private order(step: 'method' | 'code') {

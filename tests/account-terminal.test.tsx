@@ -10,6 +10,7 @@ import type {
   ZCodeLoginProvider,
 } from '../src/shared/accounts.ts'
 import type { CliId } from '../src/shared/types.ts'
+import { AGY_GUIDES } from '../src/host/agy-account-guide.ts'
 
 // Simulated PTY/Gateway and renderer only; these tests never invoke an installed CLI.
 const terminals = vi.hoisted(() => [] as any[])
@@ -185,6 +186,7 @@ async function setup(initiallyOpen = true) {
   const accountStartForSource = vi.fn(pendingStart)
   const accountStartForProvider = vi.fn(pendingStart)
   const accountWrite = vi.fn().mockResolvedValue(ok())
+  const accountRespond = vi.fn().mockResolvedValue(ok(true))
   const accountStop = vi.fn().mockResolvedValue(ok())
   const accountResize = vi.fn().mockResolvedValue(ok())
   const accountWatch = vi.fn(() => {
@@ -200,6 +202,7 @@ async function setup(initiallyOpen = true) {
       accountStartForProvider,
       accountWatch,
       accountWrite,
+      accountRespond,
       accountStop,
       accountResize,
     },
@@ -208,13 +211,16 @@ async function setup(initiallyOpen = true) {
     onFinished = vi.fn()
   const closeControl: AccountCloseControl = { current: undefined }
   const container = new EventTarget()
+  // Kimi keeps the native terminal; guided CLIs draw the login window instead.
   const render = (
-    cli: CliId = 'codex',
+    cli: CliId = 'kimi',
     action: AccountAction = 'login',
     source?: AccountSource,
     provider?: ZCodeLoginProvider,
+    signedIn?: boolean,
   ) => (
     <AccountTerminal
+      signedIn={signedIn}
       api={api}
       sessionId="parent"
       cli={cli}
@@ -234,13 +240,14 @@ async function setup(initiallyOpen = true) {
     mounted.push(renderer)
   })
   const update = async (
-    cli: CliId = 'codex',
+    cli: CliId = 'kimi',
     action: AccountAction = 'login',
     source?: AccountSource,
     provider?: ZCodeLoginProvider,
+    signedIn?: boolean,
   ) => {
     await act(async () => {
-      renderer.update(render(cli, action, source, provider))
+      renderer.update(render(cli, action, source, provider, signedIn))
     })
   }
   const start = async (id = 'terminal-a', index = 0) => {
@@ -256,7 +263,13 @@ async function setup(initiallyOpen = true) {
         .props.onClick()
     })
   }
-  const close = () => click('关闭终端')
+  // The guided window has no terminal header; the dialog closes it.
+  const close = async () => {
+    if (renderer.root.findAllByType('button').some((button) => button.children.includes('关闭终端'))) return click('关闭终端')
+    await act(async () => {
+      await closeControl.current?.()
+    })
+  }
   const contextClipboard = async () => {
     await act(async () => {
       renderer.root.findByProps({ className: 'cwn-account-terminal-view' }).props.onContextMenuCapture({
@@ -281,6 +294,7 @@ async function setup(initiallyOpen = true) {
     api,
     accountWatch,
     accountWrite,
+    accountRespond,
     accountStop,
     onClose,
     onFinished,
@@ -542,7 +556,7 @@ it.each(['close', 'change', 'unmount'])(
     if (action === 'close') await f.close()
     else if (action === 'unmount') await f.unmount()
     else {
-      await f.update('kimi')
+      await f.update('codex', 'manage')
       await f.start('next-terminal', 1)
     }
     await act(async () => {
@@ -738,7 +752,8 @@ it.each(['close', 'closed', 'failed', 'change', 'retry', 'unmount'])(
         })
       })
       if (action === 'retry') {
-        await f.click('重新打开终端')
+        // ZCode signs in through the guided window.
+        await f.click('重新开始登录')
         await f.start('retry-terminal', 1)
       }
     }
@@ -1177,15 +1192,15 @@ describe('Antigravity sign-in window (simulated Host frames)', () => {
     expect(f.renderer.root.findByProps({ className: 'cwn-account-terminal-view' }).props.hidden).toBe(false)
   })
 
-  it('selects Google sign-in, opens only the Google page and submits a pasted code with Enter', async () => {
-    vi.useFakeTimers()
+  it('selects Google sign-in, opens only the Google page and submits a pasted code once', async () => {
     const f = await setup(false)
     await f.update('antigravity', 'login')
     await f.start()
-    await push(f, { guide: guide('method') }, 1)
+    await push(f, { guide: AGY_GUIDES.method }, 1)
+    expect(JSON.stringify(f.renderer.toJSON())).toContain('Google Cloud 项目')
     await f.click('使用 Google 账号登录')
-    expect(f.accountWrite).toHaveBeenLastCalledWith('parent', 'terminal-a', '\r')
-    await push(f, { guide: guide('code', { link: LINK }) }, 2)
+    expect(f.accountRespond).toHaveBeenLastCalledWith('parent', 'terminal-a', JSON.stringify({ option: 'google' }))
+    await push(f, { guide: { ...AGY_GUIDES.code, link: LINK } }, 2)
     await f.click('重新打开登录页面')
     expect(window.open).toHaveBeenCalledExactlyOnceWith(LINK, '_blank', 'noopener,noreferrer')
     const input = () => f.renderer.root.findByProps({ 'aria-label': '授权码' })
@@ -1200,13 +1215,11 @@ describe('Antigravity sign-in window (simulated Host frames)', () => {
     await act(async () => {
       f.renderer.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() })
     })
-    expect(f.accountWrite).toHaveBeenLastCalledWith('parent', 'terminal-a', '\x1b[200~4/synthetic-authorization-code\x1b[201~')
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(300)
-    })
-    expect(f.accountWrite).toHaveBeenLastCalledWith('parent', 'terminal-a', '\r')
+    // The Host turns the code into agy's bracketed paste and Enter; the window never types keys itself.
+    expect(f.accountRespond).toHaveBeenLastCalledWith('parent', 'terminal-a', JSON.stringify({ code: '4/synthetic-authorization-code' }))
+    expect(f.accountWrite).not.toHaveBeenCalled()
     expect(JSON.stringify(f.renderer.toJSON())).toContain('正在确认登录…')
-    await push(f, { guide: guide('signedIn', { tone: 'success' }) }, 3)
+    await push(f, { guide: AGY_GUIDES.signedIn }, 3)
     await push(f, { status: 'closed', cleanupConfirmed: true }, 4)
     expect(JSON.stringify(f.renderer.toJSON())).toContain('已登录 Antigravity')
     await f.click('完成')
@@ -1217,7 +1230,7 @@ describe('Antigravity sign-in window (simulated Host frames)', () => {
     const f = await setup(false)
     await f.update('antigravity', 'login')
     await f.start()
-    await push(f, { guide: guide('code', { link: 'https://example.com/phish' }) }, 1)
+    await push(f, { guide: { ...AGY_GUIDES.code, link: 'https://example.com/phish' } }, 1)
     expect(buttons(f)).not.toContain('重新打开登录页面')
     expect(window.open).not.toHaveBeenCalled()
   })
@@ -1226,8 +1239,8 @@ describe('Antigravity sign-in window (simulated Host frames)', () => {
     const f = await setup(false)
     await f.update('antigravity', 'login')
     await f.start()
-    await push(f, { guide: guide('unconfirmed', { tone: 'warning', text: '模拟未确认' }) }, 1)
-    expect(JSON.stringify(f.renderer.toJSON())).toContain('模拟未确认')
+    await push(f, { guide: AGY_GUIDES.unconfirmed }, 1)
+    expect(JSON.stringify(f.renderer.toJSON())).toContain('授权码可能不完整或已过期')
     await f.click('重新开始登录')
     expect(f.accountStop).toHaveBeenCalledOnce()
     expect(f.accountStart).toHaveBeenCalledTimes(2)
@@ -1237,24 +1250,25 @@ describe('Antigravity sign-in window (simulated Host frames)', () => {
     const f = await setup(false)
     await f.update('antigravity', 'logout')
     await f.start()
-    expect(JSON.stringify(f.renderer.toJSON())).toContain('正在检查登录状态…')
-    await push(f, { guide: guide('loggingOut', { tone: 'info' }) }, 1)
+    expect(JSON.stringify(f.renderer.toJSON())).toContain('正在启动 Antigravity…')
+    await push(f, { guide: AGY_GUIDES.loggingOut }, 1)
     expect(JSON.stringify(f.renderer.toJSON())).toContain('正在退出 Antigravity…')
-    await push(f, { guide: guide('loggedOut', { tone: 'success' }) }, 2)
+    await push(f, { guide: AGY_GUIDES.loggedOut }, 2)
     await push(f, { status: 'closed', cleanupConfirmed: true }, 3)
     expect(JSON.stringify(f.renderer.toJSON())).toContain('已退出 Antigravity')
     expect(f.accountWrite).not.toHaveBeenCalled()
+    expect(f.accountRespond).not.toHaveBeenCalled()
   })
 
   it('asks the user about folder trust before an automatic sign-out continues', async () => {
     const f = await setup(false)
     await f.update('antigravity', 'logout')
     await f.start()
-    await push(f, { guide: guide('trust') }, 1)
-    expect(JSON.stringify(f.renderer.toJSON())).toContain('确认后插件会自动退出登录')
-    expect(f.accountWrite).not.toHaveBeenCalled()
+    await push(f, { guide: AGY_GUIDES.trust }, 1)
+    expect(JSON.stringify(f.renderer.toJSON())).toContain('是否信任该文件夹')
+    expect(f.accountRespond).not.toHaveBeenCalled()
     await f.click('信任并继续')
-    expect(f.accountWrite).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', '\r')
+    expect(f.accountRespond).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', JSON.stringify({ confirm: 'trust' }))
   })
 
   it('shows the terminal status on the same footer line as the native terminal toggle', async () => {
@@ -1262,10 +1276,18 @@ describe('Antigravity sign-in window (simulated Host frames)', () => {
     await f.update('antigravity', 'logout')
     await f.start()
     await push(f, { message: '模拟终端状态' }, 1)
-    const foot = f.renderer.root.findByProps({ className: 'cwn-agy-foot' })
-    expect(JSON.stringify(foot.findByProps({ className: 'cwn-agy-notice' }).children)).toContain('模拟终端状态')
+    const foot = f.renderer.root.findByProps({ className: 'cwn-login-foot' })
+    expect(JSON.stringify(foot.findByProps({ className: 'cwn-login-notice' }).children)).toContain('模拟终端状态')
     expect(foot.findAllByType('button').map((button) => button.children.join(''))).toEqual(['显示原生终端'])
     expect(f.renderer.root.findAllByProps({ className: 'cwn-account-instruction' })).toEqual([])
+  })
+
+  it('shows the native terminal when the Host cannot follow the screen', async () => {
+    const f = await setup(false)
+    await f.update('antigravity', 'login')
+    await f.start()
+    await push(f, { guide: { step: 'native', tone: 'warning', template: 'native', text: '无法识别当前步骤，请在原生终端中继续。' } }, 1)
+    expect(f.renderer.root.findByProps({ className: 'cwn-account-terminal-view' }).props.hidden).toBe(false)
   })
 
   it('keeps the plain terminal for Antigravity account management', async () => {
@@ -1277,3 +1299,32 @@ describe('Antigravity sign-in window (simulated Host frames)', () => {
   })
 })
 
+
+it('offers to switch a signed-in single-account CLI and signs out before the new login', async () => {
+  const f = await setup(false)
+  await f.update('codex', 'login', undefined, undefined, true)
+  // Nothing starts until the user chooses to switch.
+  expect(f.accountStart).not.toHaveBeenCalled()
+  expect(JSON.stringify(f.renderer.toJSON())).toContain('当前已登录 Codex')
+  await f.click('切换账号')
+  expect(f.accountStart).toHaveBeenLastCalledWith('parent', 'codex', 'logout', expect.any(AbortSignal))
+  await f.start()
+  await act(async () => {
+    f.streams[0].push({ seq: 1, guide: { step: 'loggedOut', tone: 'success', template: 'result', text: '已退出 Codex' } })
+    f.streams[0].push({ seq: 2, status: 'closed', cleanupConfirmed: true })
+  })
+  await vi.waitFor(() => expect(f.accountStart).toHaveBeenLastCalledWith('parent', 'codex', 'login', expect.any(AbortSignal)))
+  expect(f.accountStart.mock.calls.map((call) => call[2])).toEqual(['logout', 'login'])
+})
+
+it('does not start a login after a sign-out that was not confirmed', async () => {
+  const f = await setup(false)
+  await f.update('codex', 'login', undefined, undefined, true)
+  await f.click('切换账号')
+  await f.start()
+  await act(async () => {
+    f.streams[0].push({ seq: 1, guide: { step: 'logoutUnconfirmed', tone: 'warning', template: 'result', text: '未确认退出' } })
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(f.accountStart).toHaveBeenCalledTimes(1)
+})

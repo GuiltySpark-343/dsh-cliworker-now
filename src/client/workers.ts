@@ -7,7 +7,7 @@ import { setLanguagePreference, t } from './i18n.ts'
 
 export type Snapshot = WorkerSnapshot & { configuring?: boolean }
 export type API = Pick<ClientRemote, '$stream'> & {
-  cliworker: Omit<ClientRemote['cliworker'], 'ensureHarnessConversation' | 'repairHarnessConversation' | 'permissionForWorker' | 'configureWorkerPermission' | 'setWorkerGoal' | 'setWorkerGoalStatus' | 'clearWorkerGoal' | 'forkWorker'> & {
+  cliworker: Omit<ClientRemote['cliworker'], 'ensureHarnessConversation' | 'repairHarnessConversation' | 'permissionForWorker' | 'configureWorkerPermission' | 'setWorkerGoal' | 'setWorkerGoalStatus' | 'clearWorkerGoal' | 'forkWorker' | 'accountRespond'> & {
     /** Optional until an older Host has upgraded its native-conversation bridge. */
     ensureHarnessConversation?: (parentId: string, workerId: string) => Promise<RemoteResult<string>>
     /** Explicitly repair an unreadable owned display binding; never submits a CLI prompt. */
@@ -18,6 +18,8 @@ export type API = Pick<ClientRemote, '$stream'> & {
     setWorkerGoalStatus?: (parentId: string, workerId: string, status: 'active' | 'paused', expectedRevision: number, signal: AbortSignal) => Promise<RemoteResult<string>>
     clearWorkerGoal?: (parentId: string, workerId: string, expectedRevision: number, signal: AbortSignal) => Promise<RemoteResult<void>>
     forkWorker?: (parentId: string, workerId: string, atMessageId: string, signal: AbortSignal) => Promise<RemoteResult<string>>
+    /** The user's answer to a plugin-drawn login window step (JSON); absent on older Hosts. */
+    accountRespond?: (parentId: string, accountId: string, response: string) => Promise<RemoteResult<boolean>>
   }
 }
 export const value = <T>(result: RemoteResult<T>): T => {

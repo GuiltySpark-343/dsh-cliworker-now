@@ -63,7 +63,7 @@ it('shows the trust step first and an already signed-in main screen without typi
 it('types /logout once, only after the signed-in main screen is ready', () => {
   const guide = new AgyAccountGuide('logout')
   expect(guide.output('\x1b[2J Signing in...')).toEqual([])
-  expect(guide.output(READY)).toEqual([{ guide: AGY_GUIDES.loggingOut }, { command: 'logout' }])
+  expect(guide.output(READY)).toEqual([{ guide: AGY_GUIDES.loggingOut }, { command: '/logout' }])
   expect(guide.output(READY)).toEqual([])
   expect(guide.input('/logout\r')).toEqual([])
 })
@@ -111,7 +111,7 @@ it('asks for the native account once a screen with no known step settles', () =>
   logout.output('\x1b[2J synthetic main screen without the guessed marker')
   expect(logout.settled()).toEqual([{ identify: true }])
   expect(logout.settled()).toEqual([])
-  expect(logout.identified('authenticated')).toEqual([{ guide: AGY_GUIDES.loggingOut }, { command: 'logout' }])
+  expect(logout.identified('authenticated')).toEqual([{ guide: AGY_GUIDES.loggingOut }, { command: '/logout' }])
   expect(logout.identified('authenticated')).toEqual([])
 
   const signedOut = new AgyAccountGuide('logout')
@@ -143,7 +143,7 @@ it('never asks while a known step is on screen', () => {
 it('treats the signed-out line as a sign-in check, not as a signed-out account (real agy 1.4.7 start)', () => {
   const logout = new AgyAccountGuide('logout')
   expect(logout.output(SIGNED_OUT + '\u28fe  Signing in...')).toEqual([])
-  expect(logout.output(READY)).toEqual([{ guide: AGY_GUIDES.loggingOut }, { command: 'logout' }])
+  expect(logout.output(READY)).toEqual([{ guide: AGY_GUIDES.loggingOut }, { command: '/logout' }])
   expect(logout.loginMenuAfterCommand()).toBe(false)
   logout.output(METHOD)
   expect(logout.loginMenuAfterCommand()).toBe(true)
@@ -160,12 +160,12 @@ it('continues an automatic sign-out only after the user answers the folder trust
   expect(guide.output(READY)).toEqual([])
   expect(guide.settled()).toEqual([])
   expect(guide.input('\r')).toEqual([])
-  expect(guide.output(READY)).toEqual([{ guide: AGY_GUIDES.loggingOut }, { command: 'logout' }])
+  expect(guide.output(READY)).toEqual([{ guide: AGY_GUIDES.loggingOut }, { command: '/logout' }])
   const settling = new AgyAccountGuide('logout')
   settling.output(TRUST)
   settling.input('\r')
   settling.output('synthetic main screen')
   expect(settling.settled()).toEqual([{ identify: true }])
-  expect(settling.identified('authenticated')).toContainEqual({ command: 'logout' })
+  expect(settling.identified('authenticated')).toContainEqual({ command: '/logout' })
 })
 

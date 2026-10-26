@@ -1642,3 +1642,152 @@ describe('Antigravity account terminal guide (synthetic agy screens)', () => {
   })
 })
 
+
+describe('guided login windows of other CLIs (synthetic screens)', () => {
+  const timing = { ...AGY_GUIDE_TIMING }
+  afterEach(() => Object.assign(AGY_GUIDE_TIMING, timing))
+  const fast = () =>
+    Object.assign(AGY_GUIDE_TIMING, {
+      commandDelayMs: 1,
+      pollMs: 5,
+      loginConfirmMs: 150,
+      logoutConfirmMs: 150,
+      confirmEnterMs: 5,
+      flowQuietMs: 5,
+      settleCapMs: 50,
+    })
+  const frames = (f: ReturnType<typeof fixture>, id: string) => {
+    const seen: { guide?: { step: string; link?: string }; status?: string }[] = []
+    void (async () => {
+      for await (const frame of f.manager.watch('p', id, f.signal)) seen.push(frame)
+    })().catch(() => undefined)
+    return { seen, steps: () => seen.flatMap((frame) => (frame.guide ? [frame.guide.step] : [])) }
+  }
+  const account = (f: ReturnType<typeof fixture>, signedIn: () => boolean) =>
+    vi.spyOn(f.manager as any, 'readStatus').mockImplementation(async () => ({
+      state: signedIn() ? 'authenticated' : 'unconfigured',
+      verification: 'local',
+      summary: '',
+      ...(signedIn() ? { accountLabel: 'synthetic@example.com' } : {}),
+    }))
+
+  it('opens a guided window large enough for long sign-in links', async () => {
+    fast()
+    const f = fixture()
+    account(f, () => false)
+    await f.manager.start('p', 'codex', 'login', f.cwd, f.signal)
+    expect(vi.mocked(f.backend.spawnTerminal!).mock.calls[0][0]).toMatchObject({ cols: 200, rows: 60 })
+  })
+
+  it('confirms a Codex sign-in from its account status after codex exits, typing nothing', async () => {
+    fast()
+    const f = fixture()
+    let signedIn = false
+    account(f, () => signedIn)
+    const { id } = await f.manager.start('p', 'codex', 'login', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write(
+      'If your browser did not open, navigate to this URL to authenticate:\r\n\r\nhttps://auth.openai.com/oauth/authorize?state=synthetic\r\n',
+    )
+    await vi.waitFor(() => expect(watched.steps()).toEqual(['browser']))
+    expect(watched.seen.at(-1)!.guide!.link).toBe('https://auth.openai.com/oauth/authorize?state=synthetic')
+    signedIn = true
+    f.result.resolve({ exitCode: 0, signal: null })
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed' }))
+    expect(watched.steps()).toEqual(['browser', 'confirming', 'signedIn'])
+    expect(f.terminal.write).not.toHaveBeenCalled()
+  })
+
+  it('reports an unconfirmed sign-in when the account did not change', async () => {
+    fast()
+    const f = fixture()
+    account(f, () => false)
+    const { id } = await f.manager.start('p', 'codex', 'login', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write('navigate to this URL to authenticate:\r\nhttps://auth.openai.com/x\r\n')
+    await vi.waitFor(() => expect(watched.steps()).toEqual(['browser']))
+    f.result.resolve({ exitCode: 1, signal: null })
+    await vi.waitFor(() => expect(watched.seen.at(-1)?.status).toMatch(/closed|failed/))
+    expect(watched.steps()).toContain('unconfirmed')
+    expect(watched.steps()).not.toContain('signedIn')
+  })
+
+  it('types a pasted Claude code and then Enter, keeping the code out of every frame', async () => {
+    fast()
+    const f = fixture()
+    let signedIn = false
+    account(f, () => signedIn)
+    const { id } = await f.manager.start('p', 'claude', 'login', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write('If the browser didn\'t open, visit: https://claude.com/cai/oauth/authorize?state=synthetic\r\nPaste code here if prompted > ')
+    await vi.waitFor(() => expect(watched.steps()).toEqual(['code']))
+    signedIn = true
+    await f.manager.respond('p', id, { code: 'synthetic-code#synthetic-state' })
+    expect(vi.mocked(f.terminal.write).mock.calls).toEqual([['synthetic-code#synthetic-state'], ['\r']])
+    await vi.waitFor(() => expect(watched.steps().at(-1)).toBe('signedIn'))
+    expect(JSON.stringify(watched.seen)).not.toContain('synthetic-code')
+    await expect(f.manager.respond('p', id, { code: 'again' })).rejects.toThrow()
+    await f.manager.stop('p', id)
+  })
+
+  it('hands an unrecognised screen to the native terminal and types nothing', async () => {
+    fast()
+    const f = fixture()
+    account(f, () => false)
+    const { id } = await f.manager.start('p', 'codex', 'login', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write('synthetic screen of a newer codex')
+    await vi.waitFor(() => expect(watched.steps()).toEqual(['native']))
+    expect(f.terminal.write).not.toHaveBeenCalled()
+    await f.manager.stop('p', id)
+  })
+
+  it('signs out of a settled Qoder TUI with /logout once the account reads as signed in', async () => {
+    fast()
+    const f = fixture()
+    account(f, () => !vi.mocked(f.terminal.write).mock.calls.some(([data]) => data === '\r'))
+    const { id } = await f.manager.start('p', 'qoder', 'logout', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write('\x1b[2Jsynthetic Qoder main screen')
+    await vi.waitFor(() => expect(watched.steps().at(-1)).toBe('loggedOut'))
+    expect(vi.mocked(f.terminal.write).mock.calls).toEqual([['/logout'], ['\r']])
+    expect(watched.steps()).toEqual(['loggingOut', 'loggedOut'])
+  })
+
+  it('waits for the user to trust the Qoder folder before signing out', async () => {
+    fast()
+    const f = fixture()
+    // Signed out only by the Enter that follows /logout.
+    account(f, () => !vi.mocked(f.terminal.write).mock.calls.some(([data], index, calls) => data === '\r' && calls[index - 1]?.[0] === '/logout'))
+    const { id } = await f.manager.start('p', 'qoder', 'logout', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write('Do you trust the files in this folder?\r\n❯ 1. Trust folder\r\n  2. Don\'t trust and exit')
+    await vi.waitFor(() => expect(watched.steps()).toEqual(['trust']))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(f.terminal.write).not.toHaveBeenCalled()
+    await f.manager.respond('p', id, { confirm: 'trust' })
+    f.output.write('\x1b[2Jsynthetic Qoder main screen')
+    await vi.waitFor(() => expect(watched.steps().at(-1)).toBe('loggedOut'))
+    expect(vi.mocked(f.terminal.write).mock.calls.map(([data]) => data)).toEqual(['\r', '/logout', '\r'])
+  })
+
+  it('closes a Grok sign-out at once when there is no session, typing nothing', async () => {
+    fast()
+    const f = fixture()
+    account(f, () => false)
+    const { id } = await f.manager.start('p', 'grok', 'logout', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write('No cached session to log out of.\r\n')
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed' }))
+    expect(watched.steps()).toEqual(['notSignedIn'])
+    expect(f.terminal.write).not.toHaveBeenCalled()
+  })
+
+  it('refuses answers for the manage terminal, which stays native', async () => {
+    fast()
+    const f = fixture()
+    const { id } = await f.manager.start('p', 'codex', 'manage', f.cwd, f.signal)
+    await expect(f.manager.respond('p', id, { code: 'x' })).rejects.toThrow()
+    await f.manager.stop('p', id)
+  })
+})

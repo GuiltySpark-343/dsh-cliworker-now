@@ -915,6 +915,7 @@ function CliSettings({
                 action={action}
                 source={accountSource}
                 provider={loginProvider}
+                signedIn={account?.data?.state === 'authenticated'}
                 onClose={closeAccount}
                 onFinished={finishedAccountAction}
               />
