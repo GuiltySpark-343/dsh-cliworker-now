@@ -10,6 +10,7 @@ import {
   type AccountIdentitySource,
 } from './account-identity.ts'
 import type { ProcessBackend, RuntimeConfig } from './process.ts'
+import { macAgyAccountIdentity } from './agy-macos-account.ts'
 
 type WindowsAgyAccount = { identity: AccountIdentity; principalHash?: string }
 interface AccountSnapshotScope {
@@ -136,6 +137,8 @@ export function nativeAgyAccountIdentity(
   config: RuntimeConfig,
   platform: NodeJS.Platform = process.platform,
 ): AccountIdentitySource {
+  // macOS keeps the login in the keychain; only Linux still reads the token file.
+  if (platform === 'darwin') return macAgyAccountIdentity(backend, config)
   if (platform !== 'win32') return localAccountIdentity()
   return async (cli, signal) =>
     cli === 'antigravity' ? (await readWindowsAgyAccount(backend, config, signal)).identity : undefined

@@ -2731,3 +2731,10 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 2.6：Claude 延迟分支首轮（`--fork-session`）在改绑后无任何事件即失败时改接一次——清除待分支来源、新会话附带分支截点前记录；改接也失败时恢复待分支状态，下一轮仍按改绑处理；改接后继承自原任务、早于改接的轮次拒绝原生分支。其他 CLI 的分支元数据操作在本地完成，失败照常报告。
 - 测试：`tests/cross-account-continuation.test.ts` 新增延迟分支 3 项（改接一次、改接失败恢复并下一轮再改接、同账号失败不改接；合成 AGY 进程模拟延迟分支，换回旧 `runtime.ts` 时前 2 项失败）与退出重登 2 项（未登录续聊失败、不启动、保留会话与绑定；重登原账号原生续接且无改绑说明，登录其他账号原生续接并有一条改绑说明）。相关 9 文件 249 项通过；全量 227 文件 4479 通过、13 跳过；类型检查、`build-preview.mjs`、OpenSpec 严格校验 36 项通过。
 - 未执行：正式构建与 Desktop 退出重登实测（5.2）。
+
+## 2026-10-26 macOS Antigravity 登录状态与绑定改读钥匙串（OpenSpec `fix-agy-macos-keychain-account`，`feat/general-settings`，未发布）
+
+- 起因：用户在 Antigravity 账号终端 `/logout` 后，设置页仍显示已登录，`agy-11` 续聊报「CLI 模型查询失败」（未启动进程，会话与绑定保留）。本机核对：agy 1.4.7 使用 go-keyring，`/logout` 后钥匙串 `gemini`/`antigravity` 条目不存在，遗留 `~/.gemini/jetski-standalone-oauth-token` 为 10-23 写入未变，agy 日志报 `You are not logged into Antigravity`。
+- 修复：新增 `src/host/agy-macos-account.ts`，以参数数组调用 `/usr/bin/security find-generic-password -s gemini -a antigravity -w`，Host 内解码 go-keyring 前缀；条目不存在（44）即未登录、不回退文件，其他失败报无法读取且不带输出。`account-identity.ts` 抽出 `agyIdentityFromCredential` 供文件与钥匙串共用；`nativeAgyAccountIdentity` 与绑定在 `darwin` 上改读钥匙串，主体计算与 `~/.gemini` 来源标识不变。Linux、Windows 不变。
+- 测试：新增 `tests/agy-macos-account.test.ts`（11）；`authorized-catalog-windows-agy` macOS 用例改为合成 `/usr/bin/security` 进程（3 种编码、旧文件属另一账号时以钥匙串为准、缺条目即拒绝且不查模型），`cli-account-binding` mock 钥匙串读取。换回旧接入代码时 6 个新用例失败。全量 228 文件 4493 通过、13 跳过；类型检查、OpenSpec 严格校验 37 项、`build-preview.mjs` 通过。
+- 未执行：重新登录后真实钥匙串读取（是否弹出访问提示、编码形式）与 `agy-11` 原生续接（任务 3.1、3.2）。

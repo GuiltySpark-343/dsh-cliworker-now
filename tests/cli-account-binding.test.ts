@@ -55,6 +55,19 @@ vi.mock('../src/host/agy-windows-account.ts', async (original) => ({
   ...(await original<typeof import('../src/host/agy-windows-account.ts')>()),
   readWindowsAgyAccount: vi.fn(async () => fixture.windowsAgy ?? { identity: { state: 'unconfigured' } }),
 }))
+// macOS keeps the AGY login in the keychain item, which holds the same JSON as the
+// token file; these synthetic fixtures stand in for that item, never a real keychain.
+vi.mock('../src/host/agy-macos-account.ts', async (original) => {
+  const { existsSync, readFileSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  return {
+    ...(await original<typeof import('../src/host/agy-macos-account.ts')>()),
+    readMacAgyCredential: vi.fn(async () => {
+      const path = join(fixture.home, '.gemini/jetski-standalone-oauth-token')
+      return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : undefined
+    }),
+  }
+})
 import { readCliAccountBinding, readCodexOwnAccountSource } from '../src/host/cli-account-binding.ts'
 import { captureCatalogMetadata, catalogFor } from '../src/host/adapters.ts'
 import { authorizeSelection } from '../src/host/authorized-catalog.ts'

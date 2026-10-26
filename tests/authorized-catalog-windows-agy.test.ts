@@ -7,7 +7,7 @@ import { authorizedCatalog } from '../src/host/authorized-catalog.ts'
 import { catalogFor } from '../src/host/adapters.ts'
 import { DEFAULT_CONFIG, ProcessCleanupUnconfirmedError, type ProcessBackend } from '../src/host/process.ts'
 
-const state = vi.hoisted(() => ({ home: '' }))
+const state = vi.hoisted(() => ({ home: '', keychain: undefined as string | undefined }))
 vi.mock('node:os', async (actual) => ({
   ...(await actual<typeof import('node:os')>()),
   homedir: () => state.home,
@@ -15,6 +15,7 @@ vi.mock('node:os', async (actual) => ({
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
 beforeEach(() => {
   state.home = mkdtempSync(join(tmpdir(), 'cwn-agy-operation-synthetic-'))
+  state.keychain = undefined
   mkdirSync(join(state.home, '.gemini/antigravity-cli'), { recursive: true })
   Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
 })
@@ -31,13 +32,20 @@ const signal = () => new AbortController().signal
 function fixture(projections: object[] = [account(), account()], onModels?: () => void) {
   let accountReads = 0
   let modelReads = 0
+  let keychainReads = 0
   const handles: { terminate: ReturnType<typeof vi.fn>; waitForExit: ReturnType<typeof vi.fn> }[] = []
   const backend: ProcessBackend = {
     resolveExecutable: vi.fn(async () => 'synthetic-agy'),
     spawn: vi.fn((spec) => {
       let output: string
+      let exitCode = 0
       if (spec.argv.some((arg) => arg.endsWith('windows-agy-account.ps1'))) {
         output = JSON.stringify(projections[accountReads++] ?? { state: 'unconfigured' })
+      } else if (spec.argv[0] === '/usr/bin/security') {
+        // synthetic keychain item; 44 is security's "item not found".
+        keychainReads++
+        output = state.keychain === undefined ? '' : state.keychain + '\n'
+        if (state.keychain === undefined) exitCode = 44
       } else {
         expect(spec.argv).toEqual(['synthetic-agy', 'models'])
         modelReads++
@@ -47,7 +55,7 @@ function fixture(projections: object[] = [account(), account()], onModels?: () =
       const handle = {
         stdout: Readable.from([output]),
         stderr: Readable.from([]),
-        done: Promise.resolve({ exitCode: 0 }),
+        done: Promise.resolve({ exitCode }),
         terminate: vi.fn(),
         waitForExit: vi.fn(async () => true),
       }
@@ -55,22 +63,25 @@ function fixture(projections: object[] = [account(), account()], onModels?: () =
       return handle as ReturnType<ProcessBackend['spawn']>
     }),
   }
-  return { backend, handles, counts: () => ({ accountReads, modelReads }) }
+  return { backend, handles, counts: () => ({ accountReads, modelReads }), keychainReads: () => keychainReads }
 }
 
 it.each(['win32', 'darwin'] as const)('AGY background current model discovery scopes updater suppression on %s', async system => {
   Object.defineProperty(process, 'platform', { ...platform, value: system })
   vi.stubEnv('AGY_CLI_DISABLE_AUTO_UPDATE', 'false')
-  writeFileSync(join(state.home, '.gemini/jetski-standalone-oauth-token'), JSON.stringify({
+  const login = JSON.stringify({
     auth_method: 'consumer', token: { access_token: 'synthetic-access', refresh_token: 'synthetic-refresh' },
-  }))
+  })
+  if (system === 'darwin') state.keychain = login
+  else writeFileSync(join(state.home, '.gemini/jetski-standalone-oauth-token'), login)
   const f = fixture()
   const catalog = await catalogFor('antigravity', f.backend, DEFAULT_CONFIG, state.home, signal())
   expect(catalog.models.map(model => model.id)).toEqual(['synthetic-model'])
   const launches = vi.mocked(f.backend.spawn).mock.calls.map(([spec]) => spec)
   expect(launches.find(spec => spec.argv[1] === 'models')?.env)
     .toEqual(system === 'win32' ? { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' } : {})
-  for (const spec of launches.filter(spec => spec.argv.some(arg => arg.endsWith('windows-agy-account.ps1'))))
+  for (const spec of launches.filter(spec =>
+    spec.argv[0] === '/usr/bin/security' || spec.argv.some(arg => arg.endsWith('windows-agy-account.ps1'))))
     expect(spec.env).toBeUndefined()
   expect(process.env.AGY_CLI_DISABLE_AUTO_UPDATE).toBe('false')
   for (const handle of f.handles) expect(handle.waitForExit).toHaveBeenCalledOnce()
@@ -219,20 +230,40 @@ it.each([true, false])(
   },
 )
 
-it('preserves the Mac native file route and never invokes the Windows credential helper', async () => {
-  Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' })
-  const claims = Buffer.from(
-    JSON.stringify({ sub: 'synthetic-own-subject', iss: 'https://accounts.google.com' }),
-  ).toString('base64url')
-  writeFileSync(
-    join(state.home, '.gemini/jetski-standalone-oauth-token'),
-    JSON.stringify({
+it.each(['plain', 'go-keyring-base64:', 'go-keyring-encoded:'] as const)(
+  'reads the Mac keychain item (%s), not the stale token file, and never invokes the Windows helper',
+  async (encoding) => {
+    Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' })
+    const claims = (sub: string) =>
+      Buffer.from(JSON.stringify({ sub, iss: 'https://accounts.google.com' })).toString('base64url')
+    const login = (sub: string) => JSON.stringify({
       auth_method: 'consumer',
       token: { refresh_token: 'synthetic-refresh', access_token: 'synthetic-access' },
-      id_token: `synthetic.${claims}.signature`,
-    }),
-  )
+      id_token: `synthetic.${claims(sub)}.signature`,
+    })
+    // The stale file belongs to another synthetic account and must not decide the binding.
+    writeFileSync(join(state.home, '.gemini/jetski-standalone-oauth-token'), login('synthetic-stale-subject'))
+    const raw = login('synthetic-own-subject')
+    state.keychain = encoding === 'plain' ? raw
+      : encoding + Buffer.from(raw).toString(encoding === 'go-keyring-base64:' ? 'base64' : 'hex')
+    const f = fixture([])
+    const own = await authorizedCatalog('antigravity', f.backend, DEFAULT_CONFIG, state.home, signal())
+    expect(f.counts()).toEqual({ accountReads: 0, modelReads: 1 })
+    expect(f.keychainReads()).toBe(3)
+    state.keychain = login('synthetic-stale-subject')
+    const stale = await authorizedCatalog('antigravity', fixture([]).backend, DEFAULT_CONFIG, state.home, signal())
+    expect(stale.binding).not.toBe(own.binding)
+  },
+)
+
+it('treats a missing Mac keychain item as signed out even when the stale token file remains', async () => {
+  Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' })
+  writeFileSync(join(state.home, '.gemini/jetski-standalone-oauth-token'), JSON.stringify({
+    auth_method: 'consumer', token: { access_token: 'synthetic-access', refresh_token: 'synthetic-refresh' },
+  }))
   const f = fixture([])
-  await authorizedCatalog('antigravity', f.backend, DEFAULT_CONFIG, state.home, signal())
-  expect(f.counts()).toEqual({ accountReads: 0, modelReads: 1 })
+  await expect(authorizedCatalog('antigravity', f.backend, DEFAULT_CONFIG, state.home, signal()))
+    .rejects.toMatchObject({ code: 'CLI_OWN_ACCOUNT_REQUIRED' })
+  expect(f.counts()).toEqual({ accountReads: 0, modelReads: 0 })
+  expect(f.keychainReads()).toBe(1)
 })

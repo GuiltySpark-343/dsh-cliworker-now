@@ -17,6 +17,7 @@ import { readCodexAccount } from './codex-account.ts'
 import { accountEmail } from './account-identity.ts'
 import { assertAgyNativeAccountRoute } from './agy-models.ts'
 import { readWindowsAgyAccount } from './agy-windows-account.ts'
+import { readMacAgyCredential } from './agy-macos-account.ts'
 import { readFirstPartyModelSources } from './first-party-models.ts'
 import { KimiOAuthModelError } from './kimi-oauth-models.ts'
 import { readPiOmpAccountMaterial, safePiOmpAncestors } from './pi-omp-native.ts'
@@ -321,7 +322,12 @@ async function material(
       }
     }
     const root = join(home, '.gemini')
-    const auth = await document(join(root, 'jetski-standalone-oauth-token'), signal)
+    // The macOS keychain item holds the same JSON as the Linux file. The source
+    // stays the native account root, so one account keeps one binding.
+    const auth =
+      process.platform === 'darwin'
+        ? ((await readMacAgyCredential(backend, config, signal)) ?? {})
+        : await document(join(root, 'jetski-standalone-oauth-token'), signal)
     const principal =
       auth.auth_method === 'consumer' && object(auth.token)
         ? oauthPrincipal({ ...auth.token, id_token: auth.id_token, email: accountEmail(auth.id_token_email) })
