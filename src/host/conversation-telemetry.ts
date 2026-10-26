@@ -1,13 +1,13 @@
 import { z } from 'zod'
 import { CLI_IDS, cliOf, isRetiredCli, type Worker } from '../shared/types.ts'
-import type { ConversationTelemetryCheckpoint, LastRunUsageSnapshot } from '../shared/telemetry.ts'
+import type { ConversationTelemetryCheckpoint, LastRunUsageSnapshot, TokenUsage } from '../shared/telemetry.ts'
 import { nativeUsageReport } from '../shared/native-usage-report.ts'
 import { nativeTokenUsage } from '../shared/native-token-usage.ts'
 import type { RunTelemetry } from './telemetry.ts'
 import { hermesCanonicalUsage } from './hermes-canonical-usage.ts'
 
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
-const sessionUsage = z.object({
+export const sessionUsageSchema = z.object({
   total: count,
   input: count.optional(),
   output: count.optional(),
@@ -23,7 +23,7 @@ export const conversationTelemetrySchema = z.object({
   cli: z.enum(CLI_IDS),
   conversationId: z.string().min(1).max(1024),
   runId: z.uuid(),
-  usage: sessionUsage,
+  usage: sessionUsageSchema,
   sessionDurationSeconds: z.number().finite().nonnegative().optional(),
 }).strict()
 
@@ -33,7 +33,7 @@ export const lastRunUsageSnapshotSchema = z.object({
   cli: z.enum(CLI_IDS),
   conversationId: z.string().min(1).max(1024),
   runId: z.uuid(),
-  usage: sessionUsage.extend({ scope: z.literal('run') }),
+  usage: sessionUsageSchema.extend({ scope: z.literal('run') }),
 }).strict().superRefine((value, context) => {
   if (!nativeTokenUsage(value.cli, value.usage) && !nativeUsageReport(value.cli, value.usage))
     context.addIssue({ code: 'custom', message: 'Run usage buckets are inconsistent' })
@@ -80,7 +80,7 @@ export function captureConversationTelemetry(
   const cli = cliOf(worker.preference)
   if (cli === 'zcode') return undefined
   if (!worker.conversationId || worker.conversationId.length > 1024 || isRetiredCli(cli)) return undefined
-  const usage = sessionUsage.safeParse(current.usage)
+  const usage = sessionUsageSchema.safeParse(current.usage)
   if (!usage.success) return matchingCheckpoint(worker)
   return {
     policy: 1,
@@ -94,8 +94,46 @@ export function captureConversationTelemetry(
   }
 }
 
-/** Prefer session receipts, then current accounting, then an explicitly run-scoped prior receipt. */
+/** Exact sum of two session receipts; a bucket missing from either side is unknown, not zero. */
+export function addSessionUsage(left: TokenUsage | undefined, right: TokenUsage): TokenUsage {
+  if (!left) return right
+  const both = (a?: number, b?: number) => (a === undefined || b === undefined ? undefined : a + b)
+  const orchestration =
+    left.orchestration && right.orchestration
+      ? Object.fromEntries(
+          (['input', 'output', 'cacheRead'] as const)
+            .map((key) => [key, both(left.orchestration![key], right.orchestration![key])])
+            .filter(([, value]) => value !== undefined),
+        )
+      : undefined
+  return Object.fromEntries(
+    Object.entries({
+      total: left.total + right.total,
+      input: both(left.input, right.input),
+      output: both(left.output, right.output),
+      cacheRead: both(left.cacheRead, right.cacheRead),
+      cacheWrite: both(left.cacheWrite, right.cacheWrite),
+      reasoning: both(left.reasoning, right.reasoning),
+      orchestration: orchestration && Object.keys(orchestration).length ? orchestration : undefined,
+      scope: 'session',
+    }).filter(([, value]) => value !== undefined),
+  ) as unknown as TokenUsage
+}
+
+/** A task continued in a new session after an account change keeps counting
+ * the sessions it left; only session-scoped usage is combined. */
 export function withConversationTelemetry(worker: Worker, current: RunTelemetry): RunTelemetry {
+  const visible = currentConversationTelemetry(worker, current)
+  const previous = sessionUsageSchema.safeParse(worker.previousSessionUsage)
+  if (!previous.success) return visible
+  if (!visible.usage) return { ...visible, usage: previous.data }
+  return visible.usage.scope === 'session'
+    ? { ...visible, usage: addSessionUsage(previous.data, visible.usage) }
+    : visible
+}
+
+/** Prefer session receipts, then current accounting, then an explicitly run-scoped prior receipt. */
+function currentConversationTelemetry(worker: Worker, current: RunTelemetry): RunTelemetry {
   const cumulative = captureConversationTelemetry(worker, current)
   if (!cumulative) {
     if (current.usage !== undefined) return current

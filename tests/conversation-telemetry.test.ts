@@ -8,7 +8,7 @@ import type { SubprocessHandle } from '@deepseek-ai/dsh-subprocess'
 import { WorkerRuntime } from '../src/host/runtime.ts'
 import { WorkerStorage } from '../src/host/storage.ts'
 import { DEFAULT_CONFIG, type ProcessBackend } from '../src/host/process.ts'
-import { captureConversationTelemetry, withConversationTelemetry } from '../src/host/conversation-telemetry.ts'
+import { addSessionUsage, captureConversationTelemetry, withConversationTelemetry } from '../src/host/conversation-telemetry.ts'
 import type { TokenUsage } from '../src/shared/telemetry.ts'
 import type { Worker } from '../src/shared/types.ts'
 
@@ -217,5 +217,39 @@ describe('same CLI conversation cumulative telemetry', () => {
     expect(reopened.storage.workers.get(f.worker.id)?.conversationTelemetry).toBeUndefined()
     expect(reopened.runtime.snapshot(f.worker.parentSessionId, f.worker.id).selected?.conversationId)
       .toBe('synthetic-cli-session')
+  })
+})
+
+describe('usage across sessions of one task after an account change', () => {
+  it('adds only buckets both sessions reported and keeps the session scope', () => {
+    expect(addSessionUsage(undefined, usage())).toEqual(usage())
+    expect(addSessionUsage(usage(), usage(200))).toEqual({
+      total: 314, input: 300, output: 14, cacheRead: 80, scope: 'session',
+    })
+    // An unknown bucket on one side is not counted as zero.
+    expect(addSessionUsage({ total: 50, input: 40, scope: 'session' }, usage()))
+      .toEqual({ total: 157, input: 140, scope: 'session' })
+    expect(addSessionUsage(
+      { total: 10, scope: 'session', orchestration: { input: 3, output: 1 } },
+      { total: 20, scope: 'session', orchestration: { input: 5 } },
+    )).toEqual({ total: 30, scope: 'session', orchestration: { input: 8 } })
+  })
+
+  it('adds the left sessions to session usage, shows them alone before a receipt, and leaves run usage alone', () => {
+    const f = fixture()
+    f.worker.previousSessionUsage = usage(200)
+    expect(withConversationTelemetry(f.worker, { replies: {}, usage: usage() }).usage).toEqual({
+      total: 314, input: 300, output: 14, cacheRead: 80, scope: 'session',
+    })
+    expect(withConversationTelemetry(f.worker, { replies: {} }).usage).toEqual(usage(200))
+    const run = { ...usage(), scope: 'run' as const }
+    expect(withConversationTelemetry(f.worker, { replies: {}, usage: run }).usage).toEqual(run)
+    // Context occupancy stays the current session's own figure.
+    const current = withConversationTelemetry(f.worker, {
+      replies: {}, usage: usage(), contextUsed: 45, contextCapacity: 200,
+    })
+    expect(current.contextUsed).toBe(45)
+    f.worker.previousSessionUsage = { total: -1 } as TokenUsage
+    expect(withConversationTelemetry(f.worker, { replies: {}, usage: usage() }).usage).toEqual(usage())
   })
 })

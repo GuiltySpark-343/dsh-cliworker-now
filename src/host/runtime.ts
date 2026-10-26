@@ -54,7 +54,12 @@ import {
 import { join } from 'node:path'
 import { AgyContextReader } from './agy-context.ts'
 import { attachTelemetry, TelemetryReader } from './telemetry.ts'
-import { captureConversationTelemetry, captureLastRunUsageSnapshot, withConversationTelemetry } from './conversation-telemetry.ts'
+import {
+  addSessionUsage,
+  captureConversationTelemetry,
+  captureLastRunUsageSnapshot,
+  withConversationTelemetry,
+} from './conversation-telemetry.ts'
 import { captureContextTelemetry, withContextTelemetry, withoutContextTelemetry } from './context-telemetry.ts'
 import { NativeSupplementalContextReader } from './native-supplemental-context.ts'
 import { HermesSessionTelemetryReader } from './hermes-session-telemetry.ts'
@@ -74,6 +79,7 @@ import { AgyProtocol } from './protocol.ts'
 import { FollowupQueue } from './followup-queue.ts'
 import { supportsWorkerNativeSteering, type RunningMessageMode } from '../shared/running-message.ts'
 import type { GeneralSettings } from '../shared/cli-settings.ts'
+import type { TokenUsage } from '../shared/telemetry.ts'
 import type { NativeHarnessConnection } from './native-harness-tools.ts'
 import type { NativeAttachment } from './native-attachments.mjs'
 import { workerPermissionOptions } from '../shared/worker-permissions.ts'
@@ -129,7 +135,7 @@ interface Task {
   /** The admitted message already reached a native process (queue item removed). */
   delivered?: boolean
   /** The turn continues in a new native session after the original could not be resumed. */
-  carryover?: { previousConversationId: string }
+  carryover?: { previousConversationId: string; previousSessionUsage?: TokenUsage }
 }
 /** A message for a run whose account has since changed is queued instead of steered. */
 class AccountChangedDuringRunError extends Error {
@@ -2551,8 +2557,9 @@ export class WorkerRuntime {
     )
       return this.carryOver(task, directory, unreachable)
     if (task.carryover && !worker.conversationId) {
-      // The new session never started; keep the original for a later attempt.
+      // The new session never started; keep the original and its uncombined usage.
       worker.conversationId = task.carryover.previousConversationId
+      worker.previousSessionUsage = task.carryover.previousSessionUsage
       this.storage.save(worker)
     }
     this.finish(task, status, error, interruptionReason)
@@ -2561,7 +2568,13 @@ export class WorkerRuntime {
   private async carryOver(task: Task, directory: string, unreachable: boolean): Promise<void> {
     const { worker } = task
     const context = carryoverContext(this.storage.history(worker.id), worker.runId)
-    task.carryover = { previousConversationId: worker.conversationId! }
+    task.carryover = {
+      previousConversationId: worker.conversationId!,
+      previousSessionUsage: worker.previousSessionUsage,
+    }
+    // Token usage keeps counting across sessions; the context window is the new session's own.
+    const left = captureConversationTelemetry(worker, this.runTelemetry(worker, worker.runId))
+    if (left) worker.previousSessionUsage = addSessionUsage(worker.previousSessionUsage, left.usage)
     worker.conversationId = undefined
     this.storage.save(worker)
     this.storage.append(worker, {

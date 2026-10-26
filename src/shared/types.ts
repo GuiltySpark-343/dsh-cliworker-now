@@ -134,6 +134,9 @@ export interface Worker {
   previousConversationIds?: string[]
   /** A session receipt is replaced, never added to another invocation's cumulative receipt. */
   conversationTelemetry?: ConversationTelemetryCheckpoint
+  /** Final cumulative usage of native sessions this task left after an account change;
+   * the task's displayed session usage adds it to the current session's receipt. */
+  previousSessionUsage?: import('./telemetry.ts').TokenUsage
   /** Last full run receipt, kept independently from session cumulative accounting. */
   lastRunUsageSnapshot?: LastRunUsageSnapshot
   /** Last verified native window; never derived from cumulative accounting. */

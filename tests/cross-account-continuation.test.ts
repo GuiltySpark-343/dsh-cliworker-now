@@ -68,7 +68,7 @@ function setup() {
     launch: Launch
     send(event: unknown): void
     finish(exitCode?: number): void
-    succeed(id?: string): void
+    succeed(id?: string, input?: number): void
   }[] = []
   const backend: ProcessBackend = {
     resolveExecutable: vi.fn(async () => '/synthetic/agy'),
@@ -90,9 +90,14 @@ function setup() {
       }
       processes.push({
         launch, send, finish,
-        succeed(id = OLD) {
+        succeed(id = OLD, input?: number) {
           send({ event: 'init', conversation_id: id })
-          send({ event: 'result', result: { conversation_id: id, status: 'SUCCESS', response: 'synthetic answer' } })
+          send({ event: 'result', result: {
+            conversation_id: id, status: 'SUCCESS', response: 'synthetic answer',
+            ...(input === undefined ? {} : {
+              usage: { input_tokens: input, output_tokens: 7, cache_read_tokens: 40, total_tokens: input + 7 },
+            }),
+          } })
           finish(0)
         },
       })
@@ -114,9 +119,9 @@ function setup() {
     await vi.waitFor(() => expect(backend.spawn).toHaveBeenCalledTimes(count))
     return processes[count - 1]!
   }
-  const completed = async () => {
+  const completed = async (input?: number) => {
     const task = submit()
-    ;(await spawned(1)).succeed()
+    ;(await spawned(1)).succeed(OLD, input)
     expect((await task.done).status).toBe('completed')
     expect(storage.accountBinding(task.worker.id)).toBe(A)
     return task.worker.id
@@ -312,6 +317,40 @@ describe('cross-account continuation with synthetic AGY processes', () => {
     expect(persistedWorker(f.storage, id).conversationId).toBe(OLD)
     expect(f.storage.history(id).filter(event => event.text === CARRYOVER_FAILED_NOTICE)).toHaveLength(1)
     expect(f.backend.spawn).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps counting token usage from the left session while context is the new session\'s own', async () => {
+    const f = setup()
+    const id = await f.completed(100)
+    const usage = () => f.runtime.snapshot(PARENT, id).telemetry?.usage
+    expect(usage()).toMatchObject({ total: 107, scope: 'session' })
+    account = B
+    const task = f.submit(id)
+    ;(await f.spawned(2)).finish(1)
+    const fresh = await f.spawned(3)
+    expect(task.worker.previousSessionUsage).toMatchObject({ total: 107, input: 100 })
+    expect(usage()).toMatchObject({ total: 107 })
+    fresh.succeed(NEW, 50)
+    expect(await task.done).toMatchObject({ status: 'completed', conversationId: NEW })
+    expect(usage()).toEqual({ total: 164, input: 150, output: 14, cacheRead: 80, scope: 'session' })
+    expect(persistedWorker(f.storage, id).previousSessionUsage).toMatchObject({ total: 107 })
+    await f.runtime.close()
+    const reopened = new WorkerRuntime(new WorkerStorage(f.storage.directory), f.backend, DEFAULT_CONFIG)
+    cleanup.push(() => reopened.close())
+    expect(reopened.snapshot(PARENT, id).telemetry?.usage).toMatchObject({ total: 164 })
+  })
+
+  it('does not add the original session to itself when the carryover also fails', async () => {
+    const f = setup()
+    const id = await f.completed(100)
+    account = B
+    const task = f.submit(id)
+    ;(await f.spawned(2)).finish(1)
+    ;(await f.spawned(3)).finish(1)
+    expect(await task.done).toMatchObject({ status: 'failed', conversationId: OLD })
+    expect(task.worker.previousSessionUsage).toBeUndefined()
+    expect(persistedWorker(f.storage, id).previousSessionUsage).toBeUndefined()
+    expect(f.runtime.snapshot(PARENT, id).telemetry?.usage).toMatchObject({ total: 107 })
   })
 
   it('does not carry over after a user stops a rebound resumed run', async () => {

@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { WorkerRuntime } from '../src/host/runtime.ts'
 import { WorkerStorage } from '../src/host/storage.ts'
 import { DEFAULT_CONFIG } from '../src/host/process.ts'
+import { readCliAccountBinding } from '../src/host/cli-account-binding.ts'
 import type { Worker } from '../src/shared/types.ts'
 
 vi.mock('../src/host/cli-account-binding.ts', async original => ({
@@ -71,4 +72,20 @@ it('模拟：missing native identity never invents an ID or deletes the source',
   await expect((f.runtime as any).forkNative(f.worker, {}, new AbortController().signal)).rejects.toThrow('没有返回新的会话 ID')
   expect(f.requests).toHaveLength(1)
   expect(f.worker.conversationId).toBe('模拟原ID')
+})
+it('模拟：a branch after an account change forks under the current account and leaves rebinding to its first turn', async () => {
+  const f = fixture()
+  vi.mocked(readCliAccountBinding).mockResolvedValueOnce('模拟账号B')
+  const result = await (f.runtime as any).forkNative(f.worker, {}, new AbortController().signal)
+  expect(result.conversationId).toBe('模拟回执新ID')
+  expect(readCliAccountBinding).toHaveBeenCalled()
+  expect(f.requests).toHaveLength(1)
+  // Metadata operations never write a binding; the source keeps its own.
+  expect((f.runtime as any).storage.accountBinding(f.worker.id)).toBe('模拟账号epoch')
+})
+it('模拟：a branch without a signed-in account is refused before any native operation', async () => {
+  const f = fixture()
+  vi.mocked(readCliAccountBinding).mockRejectedValueOnce(new Error('本 CLI 未登录'))
+  await expect((f.runtime as any).forkNative(f.worker, {}, new AbortController().signal)).rejects.toThrow('未登录')
+  expect(f.requests).toHaveLength(0)
 })

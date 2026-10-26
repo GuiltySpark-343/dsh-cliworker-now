@@ -21,7 +21,7 @@ import {
 import { join } from 'node:path'
 import { randomUUID, createHash } from 'node:crypto'
 import { z } from 'zod'
-import { conversationTelemetrySchema, lastRunUsageSnapshotSchema } from './conversation-telemetry.ts'
+import { conversationTelemetrySchema, lastRunUsageSnapshotSchema, sessionUsageSchema } from './conversation-telemetry.ts'
 import { contextTelemetrySchema } from './context-telemetry.ts'
 import { LANGUAGE_PREFERENCES, MAX_CONCURRENT_LIMIT, type CliSettings } from '../shared/cli-settings.ts'
 import { parseNativeResponse } from './native-response.mjs'
@@ -130,6 +130,7 @@ const workerSchema = z.object({
   previousConversationIds: z.array(z.string().min(1)).max(64).optional().catch(undefined),
   // Bad optional telemetry must not make an otherwise valid conversation unreadable.
   conversationTelemetry: conversationTelemetrySchema.optional().catch(undefined),
+  previousSessionUsage: sessionUsageSchema.optional().catch(undefined),
   lastRunUsageSnapshot: lastRunUsageSnapshotSchema.optional().catch(undefined),
   contextTelemetry: contextTelemetrySchema.optional().catch(undefined),
   contextInvalidatedRunId: z.uuid().optional().catch(undefined),
