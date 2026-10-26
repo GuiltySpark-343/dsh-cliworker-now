@@ -2767,3 +2767,15 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 结果（磁盘核对 `2fd9686d…` 事件与 `worker.json`）：run `f10a5521…` 原生续接同一会话 `98bda1e4-e006-4248-87cc-7dceb4526a0a`，结果 `SUCCESS`、状态 `completed`，回复 `24-nretnal-eulb`；本轮无任何含「账号」的诊断，绑定 `…57063469` 与上一轮相同（钥匙串→钥匙串稳定），无 `previousConversationIds`/`reboundConversationId`。界面：设置页「已登录」，无终端占用或「账号终端清理失败」，未弹钥匙串、模型或权限卡；任务详情三轮均无「账号已变更」。
 - 终端关闭：关闭后无残留 agy 进程或其僵尸子进程，续聊未被「请先关闭账号终端」阻止（系统中另有的僵尸进程属于 clash-verge，无关）。关闭瞬间的界面提示未目视。
 - 未验证：退出登录期间的设置页状态与续聊提示（用户已重登，无法事后核对；需再退出一次时检查）。
+
+## 2026-10-26 Desktop 复测：Antigravity 退出期间的状态（`fix-agy-macos-keychain-account` 3.1）
+
+- 过程：用户在 Antigravity 账号终端 `/logout` 后保持退出（钥匙串 `gemini`/`antigravity` 查询退出码 44，条目不存在）；Codex Computer Use 读取设置页并让 `agy-11` 续聊。
+- 结果：设置页显示「未登录」，第二行为「Antigravity 无法确认当前自身账号，请检查该 CLI 的登录或 API 配置」；续聊被拒绝且提示同一文案，主 Agent 据此重试两次。磁盘核对：未启动进程，Worker 仍为 `completed`、最近 run `f10a5521…`，绑定 `…57063469` 未变，无新增事件。
+- 发现：拒绝文案没有告诉用户需要登录及去哪里登录，主 Agent 也无法判断不应重试。已在 `guide-agy-account-terminal` 改为明确的登录说明（见下节），待 Desktop 复测。
+
+## 2026-10-26 Antigravity 账号终端引导与自动退出（OpenSpec `guide-agy-account-terminal`，`feat/general-settings`，未发布）
+
+- 实现：`agy-account-guide.ts` 识别 agy 1.4.7 画面（去控制序列与空白后匹配），Host 只发固定文案；「退出登录」在识别到主界面后写入一次 `/logout` 与回车，以钥匙串状态确认后自动关闭终端；「登录账号」显示选择方式、浏览器授权并粘贴授权码、已粘贴按回车、确认中、已登录等步骤，登录与退出均以 `identity()` 轮询确认。Antigravity 未登录时续聊说明改为「尚未登录 Antigravity，请在「CLI Worker 设置 → Antigravity」点击「登录账号」完成登录后再继续」。
+- 自动检查（模拟画面，标注合成）：`agy-account-guide` 8 项；`accounts` 新增 6 项 Host 集成（自动退出写入与关闭、未登录不写、退出未确认、登录只写用户输入且帧不含授权码、登录超时、关闭后停止轮询）；相关 7 个文件 238 项通过。
+- 未验证：主界面就绪标记 `? for shortcuts` 为占位，需用户重新登录后只读探测真实已登录画面校准；真实退出、登录引导与退出期间续聊提示待 Desktop 验收。

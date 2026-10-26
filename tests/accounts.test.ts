@@ -20,7 +20,7 @@ import type {
   SubprocessTerminalSpawnSpec,
 } from '@deepseek-ai/dsh-subprocess'
 import { SubprocessExecutableNotFoundError } from '@deepseek-ai/dsh-subprocess'
-import { AccountManager } from '../src/host/accounts.ts'
+import { AccountManager, AGY_GUIDE_TIMING } from '../src/host/accounts.ts'
 import { CliExecutablePathStore } from '../src/host/cli-executable-paths.ts'
 import { DEFAULT_CONFIG, type ProcessBackend, type RuntimeConfig } from '../src/host/process.ts'
 import type { CliId } from '../src/shared/types.ts'
@@ -937,7 +937,8 @@ describe('user-operated account terminals (synthetic PTY)', () => {
     else expect(spec.cwd).toBe(f.cwd)
     expect(spec.terminalType).toBe('xterm-256color')
     expect(f.terminal.write).not.toHaveBeenCalled()
-    if (cli === 'antigravity' || (cli === 'kimi' && action === 'logout'))
+    if (cli === 'antigravity' && action === 'login') expect(opened.instruction).toContain('完成登录')
+    else if (cli === 'antigravity' || (cli === 'kimi' && action === 'logout'))
       expect(opened.instruction).toContain(`/${action}`)
     await f.manager.stop('parent', opened.id)
   })
@@ -1449,3 +1450,116 @@ describe('extended CLI account capabilities (synthetic credentials and PTYs)', (
     },
   )
 })
+
+describe('Antigravity account terminal guide (synthetic agy screens)', () => {
+  const timing = { ...AGY_GUIDE_TIMING }
+  afterEach(() => Object.assign(AGY_GUIDE_TIMING, timing))
+  const fast = () =>
+    Object.assign(AGY_GUIDE_TIMING, { commandDelayMs: 1, pollMs: 5, loginConfirmMs: 150, logoutConfirmMs: 150 })
+  const READY = '\x1b[3;1H>\x1b[K\r\n\x1b[90m? for shortcuts\x1b[0m'
+  const SIGNED_OUT = 'Welcome to the Antigravity CLI. You are currently not signed in.\r\n'
+  const METHOD = 'Select login method:\r\n> 1. Google OAuth\r\n'
+  const CODE = 'If you aren\'t automatically redirected, paste the authorization code below:'
+  // Frames are read without ending the session: watch() closes a running terminal when it stops.
+  const frames = (f: ReturnType<typeof fixture>, id: string) => {
+    const seen: { guide?: { step: string }; status?: string }[] = []
+    void (async () => {
+      for await (const frame of f.manager.watch('p', id, f.signal)) seen.push(frame)
+    })().catch(() => undefined)
+    return { seen, steps: () => seen.flatMap((frame) => (frame.guide ? [frame.guide.step] : [])) }
+  }
+  const state = (value: 'authenticated' | 'unconfigured') => ({ state: value, verification: 'local' as const, summary: '' })
+
+  it('types /logout once after the main screen, confirms the sign-out and closes the terminal', async () => {
+    fast()
+    const f = fixture()
+    f.identity.mockImplementation(async () =>
+      state(vi.mocked(f.terminal.write).mock.calls.some(([data]) => data === '\r') ? 'unconfigured' : 'authenticated'),
+    )
+    const { id } = await f.manager.start('p', 'antigravity', 'logout', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write('Signing in...')
+    await tick()
+    expect(f.terminal.write).not.toHaveBeenCalled()
+    f.output.write(READY)
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed', cleanupConfirmed: true }))
+    expect(vi.mocked(f.terminal.write).mock.calls).toEqual([['/logout'], ['\r']])
+    expect(watched.steps()).toEqual(['loggingOut', 'loggedOut'])
+    expect(f.manager.isBusy('antigravity')).toBe(false)
+  })
+
+  it('types nothing for a signed-out logout terminal and closes it', async () => {
+    fast()
+    const f = fixture()
+    const { id } = await f.manager.start('p', 'antigravity', 'logout', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write(SIGNED_OUT + READY)
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed' }))
+    expect(f.terminal.write).not.toHaveBeenCalled()
+    expect(watched.steps()).toEqual(['notSignedIn'])
+  })
+
+  it('reports an unconfirmed sign-out and leaves the terminal to the user', async () => {
+    fast()
+    const f = fixture()
+    f.identity.mockResolvedValue(state('authenticated'))
+    const { id } = await f.manager.start('p', 'antigravity', 'logout', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write(READY)
+    await vi.waitFor(() => expect(watched.steps()).toContain('logoutUnconfirmed'))
+    expect(f.manager.isBusy('antigravity')).toBe(true)
+    await f.manager.stop('p', id)
+  })
+
+  it('guides a sign-in to the pasted code and confirms it from the native account, typing nothing itself', async () => {
+    fast()
+    const f = fixture()
+    let signedIn = false
+    f.identity.mockImplementation(async () => state(signedIn ? 'authenticated' : 'unconfigured'))
+    const { id } = await f.manager.start('p', 'antigravity', 'login', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write(SIGNED_OUT + METHOD)
+    await vi.waitFor(() => expect(watched.steps()).toEqual(['method']))
+    f.output.write(CODE)
+    await vi.waitFor(() => expect(watched.steps()).toEqual(['method', 'code']))
+    await f.manager.write('p', id, '\x1b[200~synthetic-authorization-code\x1b[201~')
+    await vi.waitFor(() => expect(watched.steps().at(-1)).toBe('pasted'))
+    signedIn = true
+    await f.manager.write('p', id, '\r')
+    await vi.waitFor(() => expect(watched.steps().at(-1)).toBe('signedIn'))
+    expect(watched.steps()).toEqual(['method', 'code', 'pasted', 'confirming', 'signedIn'])
+    expect(vi.mocked(f.terminal.write).mock.calls).toEqual([['\x1b[200~synthetic-authorization-code\x1b[201~'], ['\r']])
+    expect(JSON.stringify(watched.seen.filter((frame) => frame.guide))).not.toContain('synthetic-authorization-code')
+    await f.manager.stop('p', id)
+  })
+
+  it('asks for a fresh code when the sign-in is not confirmed in time', async () => {
+    fast()
+    const f = fixture()
+    f.identity.mockResolvedValue(state('unconfigured'))
+    const { id } = await f.manager.start('p', 'antigravity', 'login', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write(SIGNED_OUT + METHOD + CODE)
+    await vi.waitFor(() => expect(watched.steps().at(-1)).toBe('code'))
+    await f.manager.write('p', id, '\x1b[200~synthetic-expired-code\x1b[201~')
+    await f.manager.write('p', id, '\r')
+    await vi.waitFor(() => expect(watched.steps().at(-1)).toBe('unconfirmed'))
+    await f.manager.stop('p', id)
+  })
+
+  it('stops confirming when the terminal is closed', async () => {
+    fast()
+    Object.assign(AGY_GUIDE_TIMING, { loginConfirmMs: 60_000 })
+    const f = fixture()
+    f.identity.mockResolvedValue(state('unconfigured'))
+    const { id } = await f.manager.start('p', 'antigravity', 'login', f.cwd, f.signal)
+    f.output.write(CODE)
+    await tick()
+    await f.manager.write('p', id, '\x1b[200~synthetic-code\x1b[201~\r')
+    await f.manager.stop('p', id)
+    const calls = f.identity.mock.calls.length
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(f.identity.mock.calls.length).toBe(calls)
+  })
+})
+

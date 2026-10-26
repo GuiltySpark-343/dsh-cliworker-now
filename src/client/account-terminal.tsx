@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Button, StateDot, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { AccountAction, AccountFrame, AccountSource, ZCodeLoginProvider } from '../shared/accounts.ts'
+import type { AccountAction, AccountFrame, AccountGuide, AccountSource, ZCodeLoginProvider } from '../shared/accounts.ts'
 import { CLI_LABELS, type CliId } from '../shared/types.ts'
 import { value, type API } from './workers.ts'
 import { accountTerminalCSS } from './account-terminal-css.ts'
@@ -127,11 +127,13 @@ export function AccountTerminal({
   const [phase, setPhase] = useState<'loading' | 'running' | 'closed' | 'failed' | 'stopping'>('loading')
   const [instruction, setInstruction] = useState('')
   const [notice, setNotice] = useState('')
+  const [guide, setGuide] = useState<AccountGuide>()
   useEffect(() => {
     const ownGeneration = ++generation.current
     setPhase('loading')
     setInstruction('')
     setNotice('')
+    setGuide(undefined)
     let alive = true,
       id = '',
       ended = false,
@@ -446,6 +448,7 @@ export function AccountTerminal({
                 }
               }
               if (frame.message) setNotice(hostText(frame.message))
+              if (frame.guide) setGuide(frame.guide)
             }
             item.accept()
             if (frame.status === 'closed' || frame.status === 'failed') {
@@ -539,6 +542,11 @@ export function AccountTerminal({
         </div>
       )}
       {instruction && <p className="cwn-account-instruction">{hostText(instruction)}</p>}
+      {guide && (
+        <p className="cwn-account-guide" data-tone={guide.tone} data-step={guide.step} role="status" aria-live="polite">
+          {hostText(guide.text)}
+        </p>
+      )}
       <div
         className="cwn-account-terminal-view"
         ref={element}

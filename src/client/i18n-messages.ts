@@ -733,6 +733,21 @@ export const en = {
   '这条消息早于改接到新会话，当前会话中没有它的原生记录，请从改接之后的消息分支': 'This message predates the move to a new session, which has no native record of it. Branch from a message after the move',
   '已附带此前 {count} 条记录': 'Included {count} earlier records',
   '已附带此前 {count} 条记录，省略 {omitted} 条': 'Included {count} earlier records and omitted {omitted}',
+  '按下方提示在 Antigravity 原生终端中完成登录。': 'Follow the steps below to sign in to Antigravity in its native terminal.',
+  '插件会在 Antigravity 原生终端中自动输入 /logout 退出登录。': 'The plugin types /logout in the Antigravity native terminal to sign you out.',
+  'Antigravity 询问是否信任当前文件夹：选择「Yes, I trust this folder」后按回车。': 'Antigravity asks whether to trust this folder: choose “Yes, I trust this folder” and press Enter.',
+  '第 1 步：用 ↑/↓ 选择「1. Google OAuth」，按回车。': 'Step 1: use ↑/↓ to choose “1. Google OAuth”, then press Enter.',
+  '第 2 步：在自动打开的浏览器中登录 Google 并授权，页面会显示授权码。复制授权码，点击下方终端后粘贴（右键，或 ⌘V / Ctrl+V）。浏览器没有打开时，在终端中选中登录链接复制到浏览器打开。': 'Step 2: sign in to Google and authorize in the browser that opens; the page shows an authorization code. Copy it, click the terminal below and paste (right-click, or ⌘V / Ctrl+V). If no browser opens, select the sign-in link in the terminal and open it in your browser.',
+  '授权码已粘贴，请按回车完成登录。': 'Authorization code pasted. Press Enter to finish signing in.',
+  '正在确认登录…': 'Confirming sign-in…',
+  '已登录 Antigravity，可以关闭终端。': 'Signed in to Antigravity. You can close the terminal.',
+  '暂未确认登录，请查看终端中的提示；授权码过期时请重新授权，粘贴新的授权码后按回车。': 'Sign-in is not confirmed yet. Check the terminal; if the code expired, authorize again, paste the new code and press Enter.',
+  '当前已登录 Antigravity；如需切换账号，请先退出登录。': 'You are already signed in to Antigravity. To switch accounts, sign out first.',
+  '正在退出 Antigravity…': 'Signing out of Antigravity…',
+  '已退出 Antigravity。': 'Signed out of Antigravity.',
+  '当前未登录 Antigravity，无需退出。': 'You are not signed in to Antigravity; nothing to sign out of.',
+  '未能确认已退出，请在终端中查看提示。': 'Sign-out could not be confirmed. Check the terminal.',
+  '尚未登录 Antigravity，请在「CLI Worker 设置 → Antigravity」点击「登录账号」完成登录后再继续': 'You are not signed in to Antigravity. In “CLI Worker settings → Antigravity”, click “Sign in” and finish signing in, then continue.',
   // @end
 } as const satisfies Record<string, string>
 

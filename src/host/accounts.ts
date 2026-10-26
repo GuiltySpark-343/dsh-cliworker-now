@@ -1,3 +1,5 @@
+import { setTimeout as sleep } from 'node:timers/promises'
+import { AGY_GUIDES, AgyAccountGuide, type AgyGuideEvent } from './agy-account-guide.ts'
 import {
   readClaudeOwnRoute,
   readClaudeOfficialAccountRoute,
@@ -66,6 +68,8 @@ const MAX_OUTPUT_BYTES = 256 * 1024
 const MAX_FRAMES = 512
 const MAX_INPUT_BYTES = 16 * 1024
 const ACTIONS: AccountAction[] = ['login', 'logout', 'manage']
+/** Antigravity terminal guide timing; tests shorten it. */
+export const AGY_GUIDE_TIMING = { commandDelayMs: 400, pollMs: 1500, loginConfirmMs: 60_000, logoutConfirmMs: 20_000 }
 
 const validateCli = (cli: CliId) => {
   if (!(CLI_IDS as readonly string[]).includes(cli)) throw new Error('不支持的 CLI')
@@ -81,7 +85,9 @@ const instructionFor = (cli: CliId, action: AccountAction): string => {
   if (cli === 'antigravity')
     return action === 'manage'
       ? '在 Antigravity 原生终端中使用 /login 登录，或 /logout 退出。'
-      : `在 Antigravity 原生终端中输入 /${action} 并按 Enter。`
+      : action === 'login'
+        ? '按下方提示在 Antigravity 原生终端中完成登录。'
+        : '插件会在 Antigravity 原生终端中自动输入 /logout 退出登录。'
   if (cli === 'kimi' && action !== 'login')
     return action === 'logout'
       ? '在 Kimi 原生终端中输入 /logout 并按 Enter，再选择要退出的提供商。'
@@ -230,6 +236,9 @@ interface AccountSession {
   changed: Set<() => void>
   output: Promise<void>
   exited: boolean
+  /** Step hints and the one automatic `/logout` of an Antigravity login/logout terminal. */
+  guide?: AgyAccountGuide
+  guideControl?: AbortController
   cleanup?: Promise<void>
   release?: () => void | Promise<void>
   deadline?: ReturnType<typeof setTimeout>
@@ -797,6 +806,9 @@ export class AccountManager {
             changed: new Set(),
             output: Promise.resolve(),
             exited: false,
+            ...(cli === 'antigravity' && action !== 'manage'
+              ? { guide: new AgyAccountGuide(action), guideControl: new AbortController() }
+              : {}),
             release,
           }
           const own = session
@@ -902,6 +914,7 @@ export class AccountManager {
         const text = typeof chunk === 'string' ? chunk : decoder.write(chunk)
         for (let offset = 0; offset < text.length; offset += 4096)
           this.emit(session, { data: text.slice(offset, offset + 4096) })
+        if (session.guide) this.guided(session, session.guide.output(text))
       }
       const tail = decoder.end()
       if (tail) this.emit(session, { data: tail })
@@ -969,6 +982,62 @@ export class AccountManager {
     } catch {
       throw new Error('无法写入账号终端，请重新打开')
     }
+    if (session.guide) this.guided(session, session.guide.input(data))
+  }
+
+  private guided(session: AccountSession, events: AgyGuideEvent[]) {
+    for (const event of events) {
+      if ('guide' in event) {
+        this.emit(session, { guide: event.guide })
+        if (event.guide.step === 'notSignedIn')
+          void this.finish(session, 'closed', '账号终端已关闭').catch(() => undefined)
+      } else if ('command' in event) void this.logOut(session)
+      else void this.confirmAccount(session, event.confirm)
+    }
+  }
+
+  /** The one command the plugin types for the user (2026-10-26 request): agy has no logout subcommand. */
+  private async logOut(session: AccountSession) {
+    const signal = session.guideControl!.signal
+    try {
+      // Let the input box take focus after its first full draw.
+      await sleep(AGY_GUIDE_TIMING.commandDelayMs, undefined, { signal })
+      if (session.state !== 'running' || session.stopping) return
+      await session.terminal.write('/logout')
+      await sleep(AGY_GUIDE_TIMING.commandDelayMs, undefined, { signal })
+      if (session.state !== 'running' || session.stopping) return
+      await session.terminal.write('\r')
+    } catch {
+      if (!signal.aborted) this.emit(session, { guide: AGY_GUIDES.logoutUnconfirmed })
+      return
+    }
+    await this.confirmAccount(session, 'logout')
+  }
+
+  /** The native account state, not terminal text, decides that a login or logout took effect. */
+  private async confirmAccount(session: AccountSession, change: 'login' | 'logout') {
+    const signal = session.guideControl!.signal
+    const until = Date.now() + (change === 'login' ? AGY_GUIDE_TIMING.loginConfirmMs : AGY_GUIDE_TIMING.logoutConfirmMs)
+    try {
+      while (Date.now() < until) {
+        await sleep(AGY_GUIDE_TIMING.pollMs, undefined, { signal })
+        const identity = await this.identity(session.cli, signal).catch(() => undefined)
+        signal.throwIfAborted()
+        if (change === 'login' && identity?.state === 'authenticated') {
+          this.emit(session, { guide: AGY_GUIDES.signedIn })
+          return
+        }
+        if (change === 'logout' && identity?.state === 'unconfigured') {
+          this.emit(session, { guide: AGY_GUIDES.loggedOut })
+          await this.finish(session, 'closed', '账号终端已关闭').catch(() => undefined)
+          return
+        }
+      }
+    } catch {
+      return
+    }
+    if (change === 'login') this.guided(session, session.guide!.unconfirmed())
+    else this.emit(session, { guide: AGY_GUIDES.logoutUnconfirmed })
   }
 
   async resize(parent: string, id: string, cols: number, rows: number): Promise<void> {
@@ -1039,6 +1108,7 @@ export class AccountManager {
   private finish(session: AccountSession, state: 'closed' | 'failed', message: string): Promise<void> {
     if (session.cleanup) return session.cleanup
     session.stopping = true
+    session.guideControl?.abort()
     clearTimeout(session.deadline)
     clearTimeout(session.attachDeadline)
     session.cleanup = (async () => {

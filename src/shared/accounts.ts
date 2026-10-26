@@ -34,12 +34,20 @@ export interface AccountStatus {
   verification?: 'cli' | 'local'
   actions: AccountActionDescriptor[]
 }
+/** A Host-authored step hint for an account terminal; never CLI output. */
+export interface AccountGuide {
+  step: string
+  tone: 'info' | 'action' | 'success' | 'warning'
+  text: string
+}
 /** Ephemeral, user-operated terminal transport; never stored with worker events. */
 export interface AccountFrame {
   seq: number
   data?: string
   status?: 'running' | 'closed' | 'failed'
   message?: string
+  /** Current guide; absent on older Hosts and for CLIs without one. */
+  guide?: AccountGuide
   /** Host has confirmed process-range exit and released account resources. */
   cleanupConfirmed?: boolean
 }

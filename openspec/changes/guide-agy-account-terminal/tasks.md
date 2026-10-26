@@ -1,0 +1,19 @@
+## 1. 实现
+
+- [x] 1.1 `src/host/agy-account-guide.ts`：终端输出标记识别（去控制序列与空白）、登录步骤只前进、粘贴/回车判定、退出命令只发一次；固定中文文案。
+- [x] 1.2 `src/host/accounts.ts`：Antigravity 登录/退出会话挂接引导；自动写入 `/logout` 与回车；`identity()` 轮询确认登录/退出，超时提示；关闭时中止。
+- [x] 1.3 `src/shared/accounts.ts` `AccountFrame.guide`；`src/client/account-terminal.tsx` 引导横幅；`src/client/styles.ts`；英文词条。
+- [x] 1.4 `src/host/cli-account-binding.ts`：Antigravity 未登录时给出明确的登录说明。
+- [ ] 1.5 以真实已登录主界面校准就绪标记 `MARKERS.ready`（当前为占位）。
+
+## 2. 自动检查
+
+- [x] 2.1 `tests/agy-account-guide.test.ts`：合成 agy 画面（标注模拟）覆盖登录全流程、粘贴/键入、重绘不回退、超时后重粘、信任与已登录、退出只在主界面写入、未登录/信任/管理不写入、文案不含输入。
+- [x] 2.2 `tests/accounts.test.ts`：Host 自动退出写入 `/logout`+回车并确认后关闭解除占用；未登录不写入并关闭；退出未确认保留终端；登录引导只写用户输入且帧中不含授权码；登录超时提示；关闭后停止轮询。
+- [ ] 2.3 全量测试、类型检查、OpenSpec 严格校验、隔离构建。
+
+## 3. 真实验收（macOS，用户本人登录）
+
+- [ ] 3.1 点击「退出登录」：自动输入 `/logout`，钥匙串条目消失，终端自动关闭，设置页显示未登录。
+- [ ] 3.2 退出期间续聊：显示明确的登录说明，不启动进程。
+- [ ] 3.3 点击「登录账号」：各步引导出现，粘贴后提示按回车，回车后显示已登录。

@@ -50,6 +50,8 @@ function sort(v: unknown): unknown {
 }
 
 /** Safe public error; neither secrets nor native paths are interpolated. */
+/** A sign-out is told as such, so a caller asks the user to sign in rather than retrying. */
+export const AGY_SIGNED_OUT = '尚未登录 Antigravity，请在「CLI Worker 设置 → Antigravity」点击「登录账号」完成登录后再继续'
 export class CliAccountBindingError extends Error {
   readonly code = 'CLI_OWN_ACCOUNT_REQUIRED'
   constructor(cli: CliId, reason?: string) {
@@ -307,6 +309,7 @@ async function material(
     await assertAgyNativeAccountRoute(signal, home)
     if (process.platform === 'win32') {
       const account = await readWindowsAgyAccount(backend, config, signal)
+      if (account.identity.state === 'unconfigured') throw new CliAccountBindingError(cli, AGY_SIGNED_OUT)
       // AGY 1.4.x credentials may carry only id_token_email; bind that local email instead.
       const principal =
         account.identity.state !== 'authenticated'
@@ -322,12 +325,13 @@ async function material(
       }
     }
     const root = join(home, '.gemini')
-    // The macOS keychain item holds the same JSON as the Linux file. The source
-    // stays the native account root, so one account keeps one binding.
+    // The macOS keychain item holds the Linux file's JSON, but agy 1.4.7 writes it
+    // with only `id_token_email`, so its principal is the email.
     const auth =
       process.platform === 'darwin'
-        ? ((await readMacAgyCredential(backend, config, signal)) ?? {})
+        ? await readMacAgyCredential(backend, config, signal)
         : await document(join(root, 'jetski-standalone-oauth-token'), signal)
+    if (!auth) throw new CliAccountBindingError(cli, AGY_SIGNED_OUT)
     const principal =
       auth.auth_method === 'consumer' && object(auth.token)
         ? oauthPrincipal({ ...auth.token, id_token: auth.id_token, email: accountEmail(auth.id_token_email) })
