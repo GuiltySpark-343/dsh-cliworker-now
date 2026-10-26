@@ -73,6 +73,7 @@ export const LEGACY_ACCOUNT_RECORD_NOTICE = '此历史任务缺少账号记录�
 export const ACCOUNT_REBOUND_NOTICE = '账号已变更，已改用当前账号继续'
 export const CARRYOVER_FAILED_NOTICE = '原会话无法在当前账号续接，已在新会话中继续'
 export const CARRYOVER_UNREACHABLE_NOTICE = '原会话不在当前账号的会话记录中，已在新会话中继续'
+export const CARRYOVER_FORK_REFUSED = '这条消息早于改接到新会话，当前会话中没有它的原生记录，请从改接之后的消息分支'
 export type Effort = (typeof EFFORTS)[number]
 export type WorkerStatus =
   | 'queued'
@@ -132,6 +133,11 @@ export interface Worker {
   conversationId?: string
   /** Native sessions this task left when it continued in a new session under another account. */
   previousConversationIds?: string[]
+  /** The session rebound to the current account and not yet shown to resume under it;
+   * a later turn may still carry it over to a new session. */
+  reboundConversationId?: string
+  /** Run in which the current session replaced the one before it; earlier runs belong to older sessions. */
+  carryoverRunId?: string
   /** A session receipt is replaced, never added to another invocation's cumulative receipt. */
   conversationTelemetry?: ConversationTelemetryCheckpoint
   /** Final cumulative usage of native sessions this task left after an account change;

@@ -16,6 +16,7 @@ import {
   ACCOUNT_REBOUND_NOTICE,
   CARRYOVER_FAILED_NOTICE,
   CARRYOVER_UNREACHABLE_NOTICE,
+  CARRYOVER_FORK_REFUSED,
   isRetiredCli,
   isUserInterrupted,
   RETIRED_HARNESS_NOTICE,
@@ -130,8 +131,8 @@ interface Task {
   accountWait?: { retryAt: number }
   /** Goal frozen at admission; a carried-over prompt is rebuilt with the same goal. */
   goal?: string
-  /** This existing task's account binding changed for this turn. */
-  rebound?: boolean
+  /** A steering message was handed to a native process of this turn. */
+  steerSubmitted?: boolean
   /** The admitted message already reached a native process (queue item removed). */
   delivered?: boolean
   /** The turn continues in a new native session after the original could not be resumed. */
@@ -465,12 +466,12 @@ export class WorkerRuntime {
     const priorSteer = this.tasks.get(id)?.steering.get(requestId)
     if (priorSteer) {
       if (priorSteer.prompt !== prompt) throw new Error('重复提交标识对应的消息不同')
-      await priorSteer.done
-      return
+      return this.steerOrQueue(priorSteer.done, parent, id, prompt, expectedRunId, requestId)
     }
     const receipt = this.followups.receipt(id, prompt, requestId)
     if (receipt) {
-      if (requestedMode === 'steer' && receipt.delivery !== 'steer')
+      // A steer queued after an account change answers its retries with the same queue item.
+      if (requestedMode === 'steer' && receipt.delivery !== 'steer' && !(receipt.delivery === 'queue' && receipt.item))
         throw new Error('这条消息已经以其他方式提交，请刷新会话')
       if (receipt.delivery === 'steer') {
         if (receipt.acknowledged) return
@@ -503,19 +504,34 @@ export class WorkerRuntime {
     const prior = this.tasks.get(id)?.steering.get(requestId)
     if (prior) {
       if (prior.prompt !== prompt) throw new Error('重复提交标识对应的消息不同')
-      await prior.done
-      return
+      return this.steerOrQueue(prior.done, parent, id, prompt, expectedRunId, requestId)
     }
     const receipt = this.followups.receipt(id, prompt, requestId)
     if (receipt) {
+      // A steer queued after an account change answers its retries with the same queue item.
+      if (receipt.delivery === 'queue' && receipt.item) return receipt.item
       if (receipt.delivery !== 'steer') throw new Error('这条消息已经以其他方式提交，请刷新会话')
       if (receipt.acknowledged) return
       throw Object.assign(new Error('该引导请求已提交，接收状态尚未确认，请核查本轮记录'), {
         code: 'STEER_UNKNOWN',
       })
     }
+    return this.steerOrQueue(
+      this.steerRunningMessage(worker, prompt, requestId, signal),
+      parent, id, prompt, expectedRunId, requestId,
+    )
+  }
+  /** Every caller of one steer request gets the same queue item once the run's account changed. */
+  private async steerOrQueue(
+    steering: Promise<void>,
+    parent: string,
+    id: string,
+    prompt: string,
+    expectedRunId: string,
+    requestId: string,
+  ): Promise<QueuedFollowup | undefined> {
     try {
-      await this.steerRunningMessage(worker, prompt, requestId, signal)
+      await steering
     } catch (error) {
       if (!(error instanceof AccountChangedDuringRunError)) throw error
       return this.queueFollowup(parent, id, prompt, expectedRunId, requestId)
@@ -568,6 +584,8 @@ export class WorkerRuntime {
       this.queuedExecutionGuard?.(worker)
       this.followups.recordSteering(worker.id, prompt, requestId, false)
       submitted = true
+      // A carried-over prompt cannot repeat this message, so the turn is no longer replayed.
+      task.steerSubmitted = true
       await task.steer!(prompt, requestId, control)
       // A matching native receipt acknowledges delivery even if the run ends immediately afterwards.
       this.storage.append(snapshot, {
@@ -1188,6 +1206,14 @@ export class WorkerRuntime {
       if (!state?.historySourceWorkerId || !state.historySourceConversationId) throw new Error('原生完成轮日志缺失，无法映射分支截点')
       current = state.historySourceWorkerId
       conversationId = state.historySourceConversationId
+    }
+    // A run before a carryover belongs to an older session; the current one has no native copy of it.
+    const owner = this.storage.workers.get(current)
+    if (owner?.carryoverRunId && owner.carryoverRunId !== runId && owner.conversationId === conversationId) {
+      const events = this.storage.history(current)
+      const at = events.findIndex((event) => event.runId === runId)
+      const carried = events.findIndex((event) => event.runId === owner.carryoverRunId)
+      if (at >= 0 && carried >= 0 && at < carried) throw new Error(CARRYOVER_FORK_REFUSED)
     }
     return { workerId: current, conversationId }
   }
@@ -2017,6 +2043,12 @@ export class WorkerRuntime {
     interruptionReason?: Worker['interruptionReason'],
   ): void {
     const worker = task.worker
+    if (task.carryover && !worker.conversationId) {
+      // The new session never started (including a stop while waiting for the
+      // account); keep the original, its uncombined usage and its rebound state.
+      worker.conversationId = task.carryover.previousConversationId
+      worker.previousSessionUsage = task.carryover.previousSessionUsage
+    }
     worker.status = status
     worker.error = error
     worker.interruptionReason = interruptionReason
@@ -2126,12 +2158,19 @@ export class WorkerRuntime {
           limit: number,
         ) => new BridgeProtocol(emit, identify, limit)
       : protocolFor
-    // Any reply, reasoning or tool event means the resumed turn already started.
+    // Any reply, reasoning, tool event or delivered result means the resumed turn already started.
     let observed = false
+    let spawned = false
     const protocol = createProtocol(
       cliOf(worker.preference),
       (event) => {
-        if (event.kind === 'assistant' || event.kind === 'reasoning' || event.kind === 'tool') observed = true
+        if (
+          event.kind === 'assistant' ||
+          event.kind === 'reasoning' ||
+          event.kind === 'tool' ||
+          (event.kind === 'result' && (event.state === 'SUCCESS' || !!event.text.trim()))
+        )
+          observed = true
         if (event.observedModel) {
           worker.observedModel = event.observedModel
           this.storage.save(worker)
@@ -2144,8 +2183,12 @@ export class WorkerRuntime {
           throw new Error('Resume conversation_id does not match the requested conversation')
         if (pendingFork?.sourceConversationId === id) throw new Error('原生分支没有创建新的会话 ID')
         const left = task.carryover?.previousConversationId
-        if (left && left !== id && !worker.conversationId && !worker.previousConversationIds?.includes(left))
-          worker.previousConversationIds = [...(worker.previousConversationIds ?? []), left].slice(-64)
+        if (left && left !== id && !worker.conversationId) {
+          if (!worker.previousConversationIds?.includes(left))
+            worker.previousConversationIds = [...(worker.previousConversationIds ?? []), left].slice(-64)
+          worker.carryoverRunId = worker.runId
+          worker.reboundConversationId = undefined
+        }
         worker.conversationId = id
         this.storage.save(worker)
         if (pendingFork?.sourceConversationId) {
@@ -2165,6 +2208,7 @@ export class WorkerRuntime {
     let metadataReady = false
     let busyAccount = false
     let rebound = false
+    let reboundResume = false
     try {
       let admitted = await task.admission
       task.accountKey = JSON.stringify([cliOf(worker.preference), admitted])
@@ -2196,9 +2240,12 @@ export class WorkerRuntime {
         throw new Error('模型与思考强度不匹配，请重新选择')
       controller.signal.throwIfAborted()
       rebound = continuing && previousBinding !== binding
-      if (rebound) task.rebound = true
+      // Kept until the session resumes under this account, so a retry after a
+      // failed carryover can still carry it over.
+      if (rebound && expectedConversation) worker.reboundConversationId = expectedConversation
+      reboundResume = !!expectedConversation && worker.reboundConversationId === expectedConversation
       if (
-        task.rebound &&
+        reboundResume &&
         !task.carryover &&
         expectedConversation &&
         !pendingFork?.sourceConversationId &&
@@ -2372,6 +2419,7 @@ export class WorkerRuntime {
         message.spawnAttempted = true
       }
       task.spawnAttempted = true
+      spawned = true
       handle = await spawnManagedAgent(this.backend, {
         argv: execution.argv,
         env: 'env' in execution ? execution.env : undefined,
@@ -2455,7 +2503,8 @@ export class WorkerRuntime {
         )
     } catch (error) {
       failure = error
-      busyAccount = accountBusy(error) && !task.spawnAttempted
+      // Per attempt: a carryover after a spawned resume can still wait for its account.
+      busyAccount = accountBusy(error) && !spawned
       failureBeforeStop =
         !!task.admissionFailure ||
         (!controller.signal.aborted &&
@@ -2547,19 +2596,19 @@ export class WorkerRuntime {
       !task.nativeStopRequested &&
       (unreachable ||
         // Only a resume rejected before any reply or tool event is safe to redo in a new session.
-        (task.rebound &&
+        (reboundResume &&
           !!expectedConversation &&
           !pendingFork?.sourceConversationId &&
-          task.spawnAttempted &&
+          spawned &&
           quiescent &&
           !observed &&
+          !task.steerSubmitted &&
           !(failure instanceof ProcessCleanupUnconfirmedError)))
     )
       return this.carryOver(task, directory, unreachable)
-    if (task.carryover && !worker.conversationId) {
-      // The new session never started; keep the original and its uncombined usage.
-      worker.conversationId = task.carryover.previousConversationId
-      worker.previousSessionUsage = task.carryover.previousSessionUsage
+    // The resumed session answered under the current account.
+    if (!task.carryover && reboundResume && (observed || status === 'completed')) {
+      worker.reboundConversationId = undefined
       this.storage.save(worker)
     }
     this.finish(task, status, error, interruptionReason)

@@ -114,4 +114,27 @@ describe('carryoverContext with synthetic history', () => {
     expect(result.text.startsWith('【CLI Worker 历史记录】\n')).toBe(true)
     expect(result.text.endsWith('【历史记录结束】\n\n本次消息：\n')).toBe(true)
   })
+
+  it('carries only priority messages that reached a CLI in an earlier run, once each', () => {
+    const submission = (seq: number, runId: string, id: string, text: string, state: WorkerEvent['deliveryState'],
+      admittedRunId?: string) => event(seq, runId, 'submission', text, { queuedFollowupId: id, deliveryState: state, admittedRunId })
+    const result = carryoverContext([
+      event(1, 'old', 'user', 'synthetic original request'),
+      submission(2, 'old', 'cancelled', 'synthetic cancelled priority', 'pending'),
+      submission(3, 'old', 'cancelled', 'synthetic cancelled priority', 'cancelled'),
+      submission(4, 'old', 'superseded', 'synthetic superseded priority', 'superseded'),
+      submission(5, 'old', 'delivered', 'synthetic delivered priority', 'running', 'old'),
+      event(6, 'old', 'user', 'synthetic delivered priority', { queuedFollowupId: 'delivered' }),
+      submission(7, 'old', 'delivered', 'synthetic delivered priority', 'completed', 'old'),
+      event(8, 'old', 'assistant', 'synthetic priority answer'),
+      // The current priority message was pending in the old run and admitted to this one.
+      submission(9, 'old', 'current', 'synthetic current priority', 'pending'),
+      submission(10, 'current', 'current', 'synthetic current priority', 'running', 'current'),
+    ], 'current')
+    expect(result.text).not.toContain('synthetic cancelled priority')
+    expect(result.text).not.toContain('synthetic superseded priority')
+    expect(result.text).not.toContain('synthetic current priority')
+    expect(result.text.split('[用户] synthetic delivered priority')).toHaveLength(2)
+    expect(result).toMatchObject({ included: 3, omitted: 0 })
+  })
 })

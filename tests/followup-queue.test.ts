@@ -23,7 +23,8 @@ import { WorkerStorage } from '../src/host/storage.ts'
 import { CliWorkerService } from '../src/host/index.ts'
 import { DEFAULT_CONFIG, ProcessCleanupUnconfirmedError, type ProcessBackend } from '../src/host/process.ts'
 import { authorizeSelection } from '../src/host/authorized-catalog.ts'
-import type { Worker } from '../src/shared/types.ts'
+import { CARRYOVER_FAILED_NOTICE, type Worker } from '../src/shared/types.ts'
+import { OWN_ACCOUNT_BUSY } from '../src/host/own-account-lease.mjs'
 import { readCliAccountBinding } from '../src/host/cli-account-binding.ts'
 import { extendedLaunch } from '../src/host/extended-adapters.ts'
 
@@ -70,7 +71,7 @@ function fixture(
   cleanups.push(() => rmSync(project, { recursive: true, force: true }))
   const directory = join(project, 'state'),
     storage = new WorkerStorage(directory)
-  const calls: Array<{ spec: SubprocessSpawnSpec; finish: (status?: string) => void }> = []
+  const calls: Array<{ spec: SubprocessSpawnSpec; finish: (status?: string, response?: string) => void }> = []
   const backend: ProcessBackend = {
     resolveExecutable: async () => '/synthetic/agy',
     spawn: (spec) => {
@@ -84,9 +85,9 @@ function fixture(
       }
       calls.push({
         spec,
-        finish: (status = 'SUCCESS') => {
+        finish: (status = 'SUCCESS', response = 'synthetic answer') => {
           if (options.cli) {
-            stdout.write(JSON.stringify({ type: 'result', status, response: 'synthetic answer' }) + '\n')
+            stdout.write(JSON.stringify({ type: 'result', status, response }) + '\n')
             close()
             return
           }
@@ -597,6 +598,90 @@ it('rechecks account, parent ownership, run identity and execution permission be
   gate.resolve('synthetic-account')
   await expect(pending).rejects.toThrow('planning changed')
   expect(steer).not.toHaveBeenCalled()
+})
+
+it('answers duplicate and retried steers with the one queue item they became after an account switch', async () => {
+  const steer = vi.fn(async () => {}),
+    f = fixture({ cli: 'pi', steer })
+  f.start()
+  await f.ready(1)
+  const gate = deferred<string>()
+  vi.mocked(readCliAccountBinding).mockReturnValueOnce(gate.promise)
+  const requestId = randomUUID()
+  const send = () => f.runtime.steerMessage('parent', f.worker.id, 'switched', f.worker.runId, requestId)
+  const first = send(),
+    duplicate = send()
+  gate.resolve('another-account')
+  const [a, b] = await Promise.all([first, duplicate])
+  expect(a).toMatchObject({ id: requestId, prompt: 'switched', state: 'pending' })
+  expect(b).toEqual(a)
+  expect(await send()).toEqual(a)
+  expect(
+    await f.runtime.sendRunningMessage('parent', f.worker.id, 'switched', f.worker.runId, requestId, undefined, 'steer'),
+  ).toEqual(a)
+  expect(f.items().map((item) => item.id)).toEqual([requestId])
+  expect(steer).not.toHaveBeenCalled()
+})
+
+/** The task's stored account is synthetic-account; the CLI is now signed in to another one. */
+function switchAccount() {
+  vi.mocked(readCliAccountBinding).mockResolvedValue('another-account')
+  vi.mocked(authorizeSelection).mockImplementation(async (preference) => ({ binding: 'another-account', preference }) as any)
+  cleanups.push(() => {
+    vi.mocked(authorizeSelection).mockImplementation(async (preference) => ({ binding: 'synthetic-account', preference }) as any)
+  })
+}
+const carried = (f: ReturnType<typeof fixture>) =>
+  f.storage.history(f.worker.id).filter((event) => event.text === CARRYOVER_FAILED_NOTICE)
+
+it('waits for a busy account before a carryover after a spawned resume, then continues in a new session', async () => {
+  switchAccount()
+  const f = fixture({ cli: 'pi' })
+  const task = f.start()
+  // The rebound resume is refused before any reply.
+  ;(await f.ready(1)).finish('ERROR', '')
+  vi.mocked(extendedLaunch).mockRejectedValueOnce(new Error(OWN_ACCOUNT_BUSY))
+  await vi.waitFor(() =>
+    expect(f.storage.history(f.worker.id).map((event) => event.text)).toContain('账号正被另一个任务使用，排队等待'),
+  )
+  expect(f.worker.status).toBe('queued')
+  expect(f.worker.conversationId).toBeUndefined()
+  const fresh = await vi.waitFor(() => {
+    expect(f.calls).toHaveLength(2)
+    return f.calls[1]!
+  }, { timeout: 5000 })
+  expect(fresh.spec.argv).not.toContain('synthetic-session')
+  fresh.finish()
+  expect((await task.done).status).toBe('completed')
+  expect(carried(f)).toHaveLength(1)
+})
+
+it('restores the original session when a carryover waiting for its account is stopped', async () => {
+  switchAccount()
+  const f = fixture({ cli: 'pi' })
+  const task = f.start()
+  ;(await f.ready(1)).finish('ERROR', '')
+  vi.mocked(extendedLaunch).mockRejectedValueOnce(new Error(OWN_ACCOUNT_BUSY))
+  await vi.waitFor(() => expect(f.worker.status).toBe('queued'))
+  await f.runtime.stop('parent', f.worker.id)
+  expect((await task.done).conversationId).toBe('synthetic-session')
+  expect(f.storage.workers.get(f.worker.id)?.conversationId).toBe('synthetic-session')
+  expect(f.calls).toHaveLength(1)
+})
+
+it('does not replay a rebound turn in a new session once a steer reached its native process', async () => {
+  switchAccount()
+  const steer = vi.fn(async () => {}),
+    f = fixture({ cli: 'pi', steer })
+  const task = f.start()
+  const resumed = await f.ready(1)
+  await vi.waitFor(() => expect((f.runtime as any).tasks.get(f.worker.id)?.steer).toBeDefined())
+  expect(await f.runtime.steerMessage('parent', f.worker.id, 'only once', f.worker.runId, randomUUID())).toBeUndefined()
+  expect(steer).toHaveBeenCalledTimes(1)
+  resumed.finish('ERROR', '')
+  expect(await task.done).toMatchObject({ status: 'failed', conversationId: 'synthetic-session' })
+  expect(f.calls).toHaveLength(1)
+  expect(carried(f)).toEqual([])
 })
 
 it('closes an in-flight steering admission when its run ends, without sending to a later run', async () => {

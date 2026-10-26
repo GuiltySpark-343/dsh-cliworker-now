@@ -13,7 +13,7 @@ import { ACCOUNT_CHANGED } from '../src/host/authorized-catalog.ts'
 import * as crossAccount from '../src/host/cross-account-resume.ts'
 import { DEFAULT_CONFIG, type ProcessBackend } from '../src/host/process.ts'
 import {
-  ACCOUNT_REBOUND_NOTICE, CARRYOVER_FAILED_NOTICE, CARRYOVER_UNREACHABLE_NOTICE,
+  ACCOUNT_REBOUND_NOTICE, CARRYOVER_FAILED_NOTICE, CARRYOVER_FORK_REFUSED, CARRYOVER_UNREACHABLE_NOTICE,
   type Preference,
 } from '../src/shared/types.ts'
 
@@ -351,6 +351,71 @@ describe('cross-account continuation with synthetic AGY processes', () => {
     expect(task.worker.previousSessionUsage).toBeUndefined()
     expect(persistedWorker(f.storage, id).previousSessionUsage).toBeUndefined()
     expect(f.runtime.snapshot(PARENT, id).telemetry?.usage).toMatchObject({ total: 107 })
+  })
+
+  it('does not replay a rebound resume that delivered a successful result before exiting nonzero', async () => {
+    const f = setup()
+    const id = await f.completed()
+    account = B
+    const task = f.submit(id)
+    const resumed = await f.spawned(2)
+    resumed.send({ event: 'init', conversation_id: OLD })
+    resumed.send({ event: 'result', result: { conversation_id: OLD, status: 'SUCCESS', response: 'synthetic done' } })
+    resumed.finish(1)
+    await task.done
+    expect(task.worker.conversationId).toBe(OLD)
+    expect(f.backend.spawn).toHaveBeenCalledTimes(2)
+    expectNoCarryover(f.storage, id)
+  })
+
+  it('still carries over on the next turn after both the resume and the carryover failed under B', async () => {
+    const f = setup()
+    const id = await f.completed()
+    account = B
+    const first = f.submit(id)
+    ;(await f.spawned(2)).finish(1)
+    ;(await f.spawned(3)).finish(1)
+    expect(await first.done).toMatchObject({ status: 'failed', conversationId: OLD, reboundConversationId: OLD })
+    expect(f.storage.accountBinding(id)).toBe(B)
+    const retry = f.submit(id)
+    const resumed = await f.spawned(4)
+    expect(resumed.launch.argv).toContain(OLD)
+    resumed.finish(1)
+    const fresh = await f.spawned(5)
+    expectFresh(fresh.launch.argv)
+    fresh.succeed(NEW)
+    expect(await retry.done).toMatchObject({ status: 'completed', conversationId: NEW, previousConversationIds: [OLD] })
+    expect(persistedWorker(f.storage, id).reboundConversationId).toBeUndefined()
+  })
+
+  it('clears the rebound mark once the resumed session answers under the current account', async () => {
+    const f = setup()
+    const id = await f.completed()
+    account = B
+    const task = f.submit(id)
+    ;(await f.spawned(2)).succeed(OLD)
+    expect(await task.done).toMatchObject({ status: 'completed', conversationId: OLD })
+    expect(persistedWorker(f.storage, id).reboundConversationId).toBeUndefined()
+    // A later same-account failure before any event is reported, not replayed.
+    const next = f.submit(id)
+    ;(await f.spawned(3)).finish(1)
+    expect((await next.done).status).toBe('failed')
+    expectNoCarryover(f.storage, id)
+  })
+
+  it('refuses a native branch cut from a run before the carryover, and maps later runs to the new session', async () => {
+    const f = setup()
+    const id = await f.completed()
+    const before = f.storage.workers.get(id)!.runId
+    account = B
+    const task = f.submit(id)
+    ;(await f.spawned(2)).finish(1)
+    ;(await f.spawned(3)).succeed(NEW)
+    const worker = await task.done
+    expect(worker.carryoverRunId).toBe(worker.runId)
+    const source = (runId: string) => (f.runtime as any).forkRunSource(worker, runId)
+    expect(() => source(before)).toThrow(CARRYOVER_FORK_REFUSED)
+    expect(source(worker.runId)).toEqual({ workerId: id, conversationId: NEW })
   })
 
   it('does not carry over after a user stops a rebound resumed run', async () => {

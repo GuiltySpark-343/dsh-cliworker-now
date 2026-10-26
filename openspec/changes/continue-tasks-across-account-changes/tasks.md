@@ -19,6 +19,7 @@
 - [x] 2.4 改接：新原生会话、沿用模式/角色/模型/强度、替换 `conversationId` 并保留 `previousConversationIds`、追加诊断说明；改接也未建会话时恢复原 ID。
 - [x] 2.5 改接后 Token 用量跨会话累加（`previousSessionUsage` + `addSessionUsage`，缺失分项保持未知），上下文占用为新会话自身数值；改接失败时恢复原累计。
 - [ ] 2.6 分支的原生分支操作失败时改接（未做，待第 0 节实验确认各 CLI 换号后分支操作的失败方式；目前分支仅取消账号拦截，由子任务首轮改绑）。
+- [x] 2.7 审查修复（Codex gpt-6-astra high 审查 `1b83943`，7 项均复现属实）：成功结果算已执行；已提交引导不改接；摘录排除未送达插队消息；改接失败后保留改绑待确认状态；改接前的运行拒绝原生分支；引导转排队幂等；逐次判断进程是否已启动，等待账号中停止时恢复原 ID。
 
 ## 3. Client
 
@@ -29,8 +30,8 @@
 
 - [x] 4.1 改绑：换号续聊自动继续且无提示；无账号拒绝；新账号模型不可用拒绝且不启动；新任务排队换号仍拒绝；A→B→A 竞态仍拒绝；旧记录改绑（`tests/cross-account-continuation.test.ts`、`tests/runtime-account-isolation.test.ts`）。
 - [x] 4.2 排队续聊以旧账号受理后按新账号授权；子对话目录与改选读当前账号且不改绑（`tests/cli-settings.test.ts`、`tests/worker-management.test.ts`）；运行中消息转排队、本轮进程未收到（`tests/followup-queue.test.ts`）；Client 排队回执（`tests/panel.test.tsx`）；换号后分支以当前账号执行元数据操作、不写绑定，未登录时不启动（`tests/worker-fork-runtime-native.test.ts`）。
-- [x] 4.3 改接：续接前失败触发一次改接；改接失败恢复原 ID；有回复或工具事件后失败不改接；用户停止不改接；同账号失败不改接；方式表 `'carryover'` 与预检不可达直接改接、未启动原生续接；改接后用量累加、重开后保持，改接失败不重复计入（`tests/cross-account-continuation.test.ts`、`tests/conversation-telemetry.test.ts`）。
-- [x] 4.4 摘录：预算省略标注、保留首轮需求与最近完整轮次、不含工具输入输出、单条截断、起止标记中和（`tests/carryover-context.test.ts`）。
+- [x] 4.3 改接：续接前失败触发一次改接；改接失败恢复原 ID；有回复或工具事件后失败不改接；用户停止不改接；同账号失败不改接；方式表 `'carryover'` 与预检不可达直接改接、未启动原生续接；改接后用量累加、重开后保持，改接失败不重复计入（`tests/cross-account-continuation.test.ts`、`tests/conversation-telemetry.test.ts`）；成功结果后非零退出不改接、改接失败后下一轮仍改接、续接成功后清除改绑标记、改接前运行拒绝分支（`tests/cross-account-continuation.test.ts`）；已提交引导不改接、改接准备遇账号占用排队后继续、等待中停止恢复原 ID、引导转排队幂等（`tests/followup-queue.test.ts`）。
+- [x] 4.4 摘录：预算省略标注、保留首轮需求与最近完整轮次、不含工具输入输出、单条截断、起止标记中和、只收录已送达的插队消息且不重复（`tests/carryover-context.test.ts`）。
 - [x] 4.5 全量测试、类型检查、`build-preview.mjs`、OpenSpec 严格校验。
 
 ## 5. 文档与真实验收

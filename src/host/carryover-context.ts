@@ -31,6 +31,17 @@ function entry(row: TimelineItem): string | undefined {
   return text.length > ENTRY_LIMIT ? `${text.slice(0, ENTRY_LIMIT)}…（此条已截断）` : text
 }
 
+/** Earlier conversation only: priority submissions count once they reached a CLI in an earlier run. */
+function earlier(row: TimelineItem, currentRunId: string): boolean {
+  if (row.id.startsWith('submission:'))
+    return (
+      !!row.admittedRunId &&
+      row.admittedRunId !== currentRunId &&
+      (row.deliveryState === 'running' || row.deliveryState === 'completed')
+    )
+  return !row.id.startsWith(currentRunId + ':')
+}
+
 /**
  * Deterministic excerpt of a task's earlier public record for a new native
  * session. No model is called. The first user request and the most recent
@@ -43,7 +54,9 @@ export function carryoverContext(
   budget = CARRYOVER_BUDGET,
 ): CarryoverContext {
   const turns: string[][] = []
-  for (const row of foldEvents(events.filter((event) => event.runId !== currentRunId))) {
+  // Fold first, so a submission's identity spans runs before the current turn is removed.
+  for (const row of foldEvents(events)) {
+    if (!earlier(row, currentRunId)) continue
     const text = entry(row)
     if (!text) continue
     if (row.kind === 'user' || !turns.length) turns.push([])

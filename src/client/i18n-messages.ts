@@ -726,6 +726,7 @@ export const en = {
   '账号已变更，已改用当前账号继续': 'The account changed; continuing with the current account',
   '原会话无法在当前账号续接，已在新会话中继续': 'The original session could not be resumed with the current account, so it continues in a new session',
   '原会话不在当前账号的会话记录中，已在新会话中继续': 'The original session is not in the current account’s session records, so it continues in a new session',
+  '这条消息早于改接到新会话，当前会话中没有它的原生记录，请从改接之后的消息分支': 'This message predates the move to a new session, which has no native record of it. Branch from a message after the move',
   '已附带此前 {count} 条记录': 'Included {count} earlier records',
   '已附带此前 {count} 条记录，省略 {omitted} 条': 'Included {count} earlier records and omitted {omitted}',
   '账号已变更，本轮结束后以当前账号发送': 'The account changed; this message will be sent with the current account after this turn',

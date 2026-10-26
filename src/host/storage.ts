@@ -128,6 +128,8 @@ const workerSchema = z.object({
   mode: z.enum(['plan', 'accept-edits']),
   conversationId: z.string().optional(),
   previousConversationIds: z.array(z.string().min(1)).max(64).optional().catch(undefined),
+  reboundConversationId: z.string().min(1).max(1024).optional().catch(undefined),
+  carryoverRunId: z.uuid().optional().catch(undefined),
   // Bad optional telemetry must not make an otherwise valid conversation unreadable.
   conversationTelemetry: conversationTelemetrySchema.optional().catch(undefined),
   previousSessionUsage: sessionUsageSchema.optional().catch(undefined),
