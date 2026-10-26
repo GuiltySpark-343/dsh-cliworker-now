@@ -117,7 +117,8 @@ export function localAccountIdentity(
         state: 'authenticated',
         authMethod: 'oauth',
         verification: 'local',
-        accountLabel: accountEmail(idTokenClaims(value.id_token)?.email),
+        // AGY 1.4.x may keep only id_token_email instead of the full ID token.
+        accountLabel: accountEmail(idTokenClaims(value.id_token)?.email) ?? accountEmail(value.id_token_email),
         summary: '已登录 Antigravity',
       }
     } catch (error) {

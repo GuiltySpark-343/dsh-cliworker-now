@@ -1,4 +1,5 @@
 import { readCliAccountBinding } from './cli-account-binding.ts'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { SettingsCatalogCache } from './settings-catalog-cache.ts'
 import { resolveModel } from '../shared/models.ts'
 import { visibleModelChoices } from '../shared/model-presentation.ts'
@@ -75,8 +76,11 @@ import { RUNNING_MESSAGE_MODES } from '../shared/running-message.ts'
 import { workerPermissionOptions, type WorkerPermissionState } from '../shared/worker-permissions.ts'
 import { WindowsCliInstallationError, WindowsCliNotFoundError } from './windows-cli-installation.ts'
 import { ACCOUNT_CHANGED, authorizedCatalog, authorizeSelection } from './authorized-catalog.ts'
+import { ownAccountBusy as accountBusy } from './own-account-lease.mjs'
 import { WorkerStorage, type DispatchSetup } from './storage.ts'
 import { WorkerRuntime, type Submission } from './runtime.ts'
+import type { MergeResolution } from './isolated-workspace.ts'
+import { integrationReport, isolationGuidance, readResolutions } from './isolated-merge-decisions.ts'
 import { AccountManager } from './accounts.ts'
 import {
   CLI_DELEGATION_GUIDANCE,
@@ -161,6 +165,10 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
   }
 }
 
+/** Catalog reads hold a busy Pi/OMP account for seconds; a run holds it longer. */
+const BUSY_ACCOUNT_WAIT_MS = 30_000
+const BUSY_ACCOUNT_RETRY_MS = 1000
+const EXCLUSIVE_ACCOUNT_CLIS = new Set<CliId>(['omp', 'pi'])
 const preferenceSchema = validate.object({
   cli: validate.enum(CLI_IDS).optional(),
   model: validate.string().min(1),
@@ -443,7 +451,10 @@ export class CliWorkerService extends TypertRemoteService {
             : parent.ctx.get('sandboxPolicy')!.resolve({ session: parent.session }).mode,
         )
         child.ctx.get('planMode')?.set(child, worker.mode === 'plan')
-        const support = nativeHarnessToolCapability(cli)
+        // Host tools act on the parent's project; an isolated run must not write there.
+        const support = input.isolated
+          ? { transport: false, reason: '本轮在隔离副本中运行，未接通 DSH 工具桥，避免写入原项目' }
+          : nativeHarnessToolCapability(cli)
         if (!support.transport) {
           worker.harnessConversation = {
             ...binding,
@@ -661,19 +672,66 @@ export class CliWorkerService extends TypertRemoteService {
   }
   private async queryCatalog(...args: Parameters<typeof authorizedCatalog>) {
     try {
-      return await authorizedCatalog(...args)
+      return await this.freshCatalog(...args)
     } catch (error) {
       if (error instanceof ProcessCleanupUnconfirmedError) this.runtime.blockCatalogOnCleanup(args[0], error)
+      if (accountBusy(error)) return this.busyAccountCatalog(error, ...args)
       throw error
     }
   }
+  private async freshCatalog(...args: Parameters<typeof authorizedCatalog>) {
+    const [cli, , , project] = args
+    const revision = this.settingsCatalogs?.revision(cli)
+    const result = await authorizedCatalog(...args)
+    // Parallel dispatches waiting on this exclusive account read the fresh result.
+    if (EXCLUSIVE_ACCOUNT_CLIS.has(cli) && revision !== undefined)
+      try {
+        this.settingsCatalogs?.remember(project, result, revision)
+      } catch {
+        // A source change during the read is caught by the next fresh check.
+      }
+    return result
+  }
+  /**
+   * A Pi/OMP OAuth account is exclusive while another run or catalog read holds
+   * it. Dispatch only needs this account's choices to queue the task, and the run
+   * authorizes afresh once the account is free, so a busy account uses its last
+   * verified catalog. Without one, wait for the short catalog reads to finish.
+   */
+  private async busyAccountCatalog(busy: unknown, ...args: Parameters<typeof authorizedCatalog>) {
+    const [cli, backend, config, project, signal, expected] = args
+    const saved = async () => {
+      const binding = await readCliAccountBinding(cli, backend, config, project, signal)
+      if (expected && binding !== expected) throw new Error(ACCOUNT_CHANGED)
+      const catalog = this.settingsCatalogs?.display(project, cli, binding)
+      return catalog && { catalog, binding }
+    }
+    for (const deadline = Date.now() + BUSY_ACCOUNT_WAIT_MS; ; ) {
+      const hit = await saved()
+      if (hit) return hit
+      if (Date.now() >= deadline) throw busy
+      await sleep(BUSY_ACCOUNT_RETRY_MS, undefined, { signal })
+      // Another read may have finished while this one slept.
+      const later = await saved()
+      if (later) return later
+      try {
+        return await this.freshCatalog(...args)
+      } catch (error) {
+        if (!accountBusy(error)) throw error
+      }
+    }
+  }
   private async querySelection(...args: Parameters<typeof authorizeSelection>) {
+    const [preference, ...rest] = args
     try {
       return await authorizeSelection(...args)
     } catch (error) {
       if (error instanceof ProcessCleanupUnconfirmedError)
-        this.runtime.blockCatalogOnCleanup(cliOf(args[0]), error)
-      throw error
+        this.runtime.blockCatalogOnCleanup(cliOf(preference), error)
+      if (!accountBusy(error)) throw error
+      const result = await this.busyAccountCatalog(error, cliOf(preference), ...rest)
+      validatePreference(preference, result.catalog)
+      return { ...result, preference: resolveModel(preference, result.catalog.models) }
     }
   }
   /** Read installation paths without saving discovery or opening a native account/model process. */
@@ -775,7 +833,11 @@ export class CliWorkerService extends TypertRemoteService {
       this.runtime.changed()
     }
   }
-  /** Serialize only this conversation's selection; a cancelled waiter never owns the question. */
+  /**
+   * Serialize only this conversation's questions; a cancelled waiter never owns
+   * the question. A settled setup asks nothing, so its catalog check leaves the
+   * queue and parallel dispatches of one conversation start together.
+   */
   private async chooseDispatch(agent: Agent, callerSignal: AbortSignal, cli: CliId): Promise<DispatchSetup> {
     const signal = AbortSignal.any([callerSignal, this.disposed.signal])
     signal.throwIfAborted()
@@ -783,143 +845,164 @@ export class CliWorkerService extends TypertRemoteService {
     const project = this.project(agent)
     const key = JSON.stringify([agent.id, project, cli])
     const waits = (this.dispatchWaits ??= new Map())
-    const previous = waits.get(key) ?? Promise.resolve()
-    let release!: () => void
-    const owned = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    const tail = previous.then(() => owned)
-    waits.set(key, tail)
-    void tail.then(() => {
-      if (waits.get(key) === tail) waits.delete(key)
-    })
+    const turn = () => {
+      const previous = waits.get(key) ?? Promise.resolve()
+      let release!: () => void
+      const owned = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const tail = previous.then(() => owned)
+      waits.set(key, tail)
+      void tail.then(() => {
+        if (waits.get(key) === tail) waits.delete(key)
+      })
+      return { previous, release }
+    }
     this.pending.set(agent.id, (this.pending.get(agent.id) ?? 0) + 1)
     this.runtime.changed()
     try {
-      await waitForInput(previous, signal)
-      signal.throwIfAborted()
-      this.assertExecution(agent)
-      this.runtime.assertCliEnabled(cli)
-      this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
-      const catalogRevision = this.settingsCatalogs.revision(cli)
-      const { catalog, binding } = await this.queryCatalog(cli, this.backend, this.options, project, signal)
-      signal.throwIfAborted()
-      this.runtime.assertCliEnabled(cli)
-      this.settingsCatalogs.remember(project, { catalog, binding }, catalogRevision)
-      const models = catalog.models
-      const valid = (setup: DispatchSetup | undefined): setup is DispatchSetup => {
-        if (!setup || setup.binding !== binding || cliOf(setup.preference) !== cli) return false
+      for (let queued = false; ; queued = true) {
+        const { previous, release } = turn()
+        let held = true
         try {
-          validatePreference(setup.preference, catalog)
-          return resolveModel(setup.preference, models).model === setup.preference.model
-        } catch {
-          return false
+          await waitForInput(previous, signal)
+          signal.throwIfAborted()
+          this.assertExecution(agent)
+          this.runtime.assertCliEnabled(cli)
+          if (!queued && this.runtime.storage.conversationSetup(agent.id, project, cli)) {
+            release()
+            held = false
+          }
+          this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
+          const catalogRevision = this.settingsCatalogs.revision(cli)
+          const { catalog, binding } = await this.queryCatalog(cli, this.backend, this.options, project, signal)
+          signal.throwIfAborted()
+          this.runtime.assertCliEnabled(cli)
+          this.settingsCatalogs.remember(project, { catalog, binding }, catalogRevision)
+          const models = catalog.models
+          const valid = (setup: DispatchSetup | undefined): setup is DispatchSetup => {
+            if (!setup || setup.binding !== binding || cliOf(setup.preference) !== cli) return false
+            try {
+              validatePreference(setup.preference, catalog)
+              return resolveModel(setup.preference, models).model === setup.preference.model
+            } catch {
+              return false
+            }
+          }
+          let asked = false
+          const ask = async (questions: AskUserQuestionItem[]) => {
+            signal.throwIfAborted()
+            asked = true
+            const response = await waitForInput(
+              agent.ctx.get('userQuestions')!.ask({ agent, signal, questions }),
+              signal,
+            )
+            signal.throwIfAborted()
+            this.runtime.assertCliEnabled(cli)
+            return response
+          }
+          const current = this.runtime.storage.conversationSetup(agent.id, project, cli)
+          let setup: DispatchSetup | undefined = valid(current) ? current : undefined
+          // The settled setup no longer fits this catalog: ask again in turn.
+          if (!setup && !held) continue
+          let selected = false
+          // The only unasked start: the user turned asking off and the saved complete setup still checks out.
+          if (!setup && !this.runtime.storage.dispatchAskSettings(project, cli).ask) {
+            const saved = this.runtime.storage.dispatchSetup(project, cli)
+            if (valid(saved)) setup = saved
+          } else if (!current) {
+            const saved = this.runtime.storage.dispatchSetup(project, cli)
+            if (valid(saved)) {
+              const modelLabel =
+                models.find(
+                  (model) =>
+                    model.id === saved.preference.model ||
+                    Object.values(model.variants ?? {}).includes(saved.preference.model),
+                )?.label ?? saved.preference.model
+              const response = await ask([
+                {
+                  id: 'cliworker_reuse',
+                  header: '沿用设定',
+                  question: `是否沿用 ${modelLabel} · ${effortLabel(saved.preference.effort)} · ${saved.role?.name ?? '不使用角色预设'}？`,
+                  options: [{ label: '沿用' }, { label: '重新选择' }],
+                },
+              ])
+              const answer = response.answers.find((item) => item.id === 'cliworker_reuse')
+              if (
+                answer?.custom !== undefined ||
+                answer?.selected.length !== 1 ||
+                !['沿用', '重新选择'].includes(answer.selected[0]!)
+              )
+                throw new Error('请选择沿用或重新选择；任务尚未启动')
+              if (answer.selected[0] === '沿用') setup = saved
+            }
+          }
+          if (!setup) {
+            const choices = visibleModelChoices(models)
+            const response = await ask([
+              {
+                id: 'cliworker_model',
+                header: `${CLI_LABELS[cli]} 模型`,
+                question: '选择模型',
+                options: choices.map((model) => ({ label: model.label })),
+              },
+            ])
+            const answer = response.answers.find((item) => item.id === 'cliworker_model')
+            const chosen =
+              answer?.custom === undefined && answer?.selected.length === 1
+                ? choices.find((model) => model.label === answer.selected[0])
+                : undefined
+            if (!chosen?.efforts?.length) throw new Error('请选择列表中的模型')
+            const offered = structuredClone(this.runtime.storage.rolePresets())
+            const questions: AskUserQuestionItem[] = []
+            if (chosen.efforts.length > 1)
+              questions.push({
+                id: 'cliworker_effort',
+                header: '思考强度',
+                question: `选择 ${chosen.label} 的思考强度`,
+                options: chosen.efforts.map((effort) => ({ label: effortLabel(effort) })),
+              })
+            questions.push(roleQuestion(offered))
+            const selection = await ask(questions)
+            const effortAnswer = selection.answers.find((item) => item.id === 'cliworker_effort')
+            const effort =
+              chosen.efforts.length === 1
+                ? chosen.efforts[0]
+                : effortAnswer?.custom === undefined && effortAnswer?.selected.length === 1
+                  ? chosen.efforts.find((effort) => effortLabel(effort) === effortAnswer.selected[0])
+                  : undefined
+            const preference = resolveModel(preferenceSchema.parse({ cli, model: chosen.id, effort }), models)
+            setup = { preference, role: readRoleAnswer(offered, selection) ?? null, binding }
+            selected = true
+          }
+          // A remembered answer is never execution authority. Detect changes during any
+          // question; an unasked setup was just checked, and launch checks it again.
+          if (asked) {
+            const checked = await this.querySelection(
+              setup.preference,
+              this.backend,
+              this.options,
+              project,
+              signal,
+              binding,
+            )
+            if (checked.preference.model !== setup.preference.model)
+              throw new Error('模型与思考强度已变更，请重新选择')
+          }
+          signal.throwIfAborted()
+          this.assertExecution(agent)
+          this.runtime.assertCliEnabled(cli)
+          if (this.project(agent) !== project) throw new Error('项目已变更，请重新选择')
+          if (selected) this.runtime.storage.setDispatchSetup(project, setup)
+          if (current !== setup) this.runtime.storage.setConversationSetup(agent.id, project, setup)
+          ;(this.selectionBindings ??= new WeakMap()).set(setup.preference, binding)
+          ;(this.selectionProjects ??= new WeakMap()).set(setup.preference, project)
+          return setup
+        } finally {
+          if (held) release()
         }
       }
-      const ask = async (questions: AskUserQuestionItem[]) => {
-        signal.throwIfAborted()
-        const response = await waitForInput(
-          agent.ctx.get('userQuestions')!.ask({ agent, signal, questions }),
-          signal,
-        )
-        signal.throwIfAborted()
-        this.runtime.assertCliEnabled(cli)
-        return response
-      }
-      const current = this.runtime.storage.conversationSetup(agent.id, project, cli)
-      let setup: DispatchSetup | undefined = valid(current) ? current : undefined
-      let selected = false
-      // The only unasked start: the user turned asking off and the saved complete setup still checks out.
-      if (!setup && !this.runtime.storage.dispatchAskSettings(project, cli).ask) {
-        const saved = this.runtime.storage.dispatchSetup(project, cli)
-        if (valid(saved)) setup = saved
-      } else if (!current) {
-        const saved = this.runtime.storage.dispatchSetup(project, cli)
-        if (valid(saved)) {
-          const modelLabel =
-            models.find(
-              (model) =>
-                model.id === saved.preference.model ||
-                Object.values(model.variants ?? {}).includes(saved.preference.model),
-            )?.label ?? saved.preference.model
-          const response = await ask([
-            {
-              id: 'cliworker_reuse',
-              header: '沿用设定',
-              question: `是否沿用 ${modelLabel} · ${effortLabel(saved.preference.effort)} · ${saved.role?.name ?? '不使用角色预设'}？`,
-              options: [{ label: '沿用' }, { label: '重新选择' }],
-            },
-          ])
-          const answer = response.answers.find((item) => item.id === 'cliworker_reuse')
-          if (
-            answer?.custom !== undefined ||
-            answer?.selected.length !== 1 ||
-            !['沿用', '重新选择'].includes(answer.selected[0]!)
-          )
-            throw new Error('请选择沿用或重新选择；任务尚未启动')
-          if (answer.selected[0] === '沿用') setup = saved
-        }
-      }
-      if (!setup) {
-        const choices = visibleModelChoices(models)
-        const response = await ask([
-          {
-            id: 'cliworker_model',
-            header: `${CLI_LABELS[cli]} 模型`,
-            question: '选择模型',
-            options: choices.map((model) => ({ label: model.label })),
-          },
-        ])
-        const answer = response.answers.find((item) => item.id === 'cliworker_model')
-        const chosen =
-          answer?.custom === undefined && answer?.selected.length === 1
-            ? choices.find((model) => model.label === answer.selected[0])
-            : undefined
-        if (!chosen?.efforts?.length) throw new Error('请选择列表中的模型')
-        const offered = structuredClone(this.runtime.storage.rolePresets())
-        const questions: AskUserQuestionItem[] = []
-        if (chosen.efforts.length > 1)
-          questions.push({
-            id: 'cliworker_effort',
-            header: '思考强度',
-            question: `选择 ${chosen.label} 的思考强度`,
-            options: chosen.efforts.map((effort) => ({ label: effortLabel(effort) })),
-          })
-        questions.push(roleQuestion(offered))
-        const selection = await ask(questions)
-        const effortAnswer = selection.answers.find((item) => item.id === 'cliworker_effort')
-        const effort =
-          chosen.efforts.length === 1
-            ? chosen.efforts[0]
-            : effortAnswer?.custom === undefined && effortAnswer?.selected.length === 1
-              ? chosen.efforts.find((effort) => effortLabel(effort) === effortAnswer.selected[0])
-              : undefined
-        const preference = resolveModel(preferenceSchema.parse({ cli, model: chosen.id, effort }), models)
-        setup = { preference, role: readRoleAnswer(offered, selection) ?? null, binding }
-        selected = true
-      }
-      // A remembered answer is never execution authority. Detect changes during any question.
-      const checked = await this.querySelection(
-        setup.preference,
-        this.backend,
-        this.options,
-        project,
-        signal,
-        binding,
-      )
-      if (checked.preference.model !== setup.preference.model)
-        throw new Error('模型与思考强度已变更，请重新选择')
-      signal.throwIfAborted()
-      this.assertExecution(agent)
-      this.runtime.assertCliEnabled(cli)
-      if (this.project(agent) !== project) throw new Error('项目已变更，请重新选择')
-      if (selected) this.runtime.storage.setDispatchSetup(project, setup)
-      if (current !== setup) this.runtime.storage.setConversationSetup(agent.id, project, setup)
-      ;(this.selectionBindings ??= new WeakMap()).set(setup.preference, binding)
-      ;(this.selectionProjects ??= new WeakMap()).set(setup.preference, project)
-      return setup
     } finally {
-      release()
       const pending = (this.pending.get(agent.id) ?? 1) - 1
       if (pending) this.pending.set(agent.id, pending)
       else this.pending.delete(agent.id)
@@ -1036,9 +1119,12 @@ export class CliWorkerService extends TypertRemoteService {
               response: worker.lastResult,
               error: worker.error,
               guidance:
-                worker.status === 'uncertain'
-                  ? '结果待核实；请先核查本轮输出和实际产物，不要自动重试。'
-                  : undefined,
+                [
+                  worker.status === 'uncertain' ? '结果待核实；请先核查本轮输出和实际产物，不要自动重试。' : undefined,
+                  isolationGuidance(worker),
+                ]
+                  .filter(Boolean)
+                  .join(' ') || undefined,
             }),
           })),
         }
@@ -1279,12 +1365,13 @@ export class CliWorkerService extends TypertRemoteService {
               if (!exec.agent) throw new Error('A parent Agent is required')
               if (args.worker_id || args.worker_name) {
                 const worker = this.runtime.resolveWorker(exec.agent.id, args.worker_id, args.worker_name)
-                return JSON.stringify({ ...worker, agentName: workerName(worker) })
+                return JSON.stringify({ ...worker, agentName: workerName(worker), guidance: isolationGuidance(worker) })
               }
               return JSON.stringify(
                 this.runtime.snapshot(exec.agent.id).workers.map((worker) => ({
                   ...worker,
                   agentName: workerName(worker),
+                  guidance: isolationGuidance(worker),
                 })),
               )
             },
@@ -1332,6 +1419,92 @@ export class CliWorkerService extends TypertRemoteService {
           }),
         ),
       'cliworker:stop',
+    )
+    this.ctx.effect(
+      () =>
+        this.ctx.tools.register(
+          defineTool({
+            name: 'cliworker_merge',
+            description:
+              '把空闲 CLI 智能体隔离副本中的改动三方合并回当前项目，作为未提交改动写回，不会提交。隔离运行的智能体完成后，由你核查结果再调用本工具。只有一边改过的文件直接写回；两边都改过的文件不是错误，返回 needs_integration 及基线、项目、副本三个版本的文件路径，由你按各任务目标整合，再带 resolutions 调用本工具（use=content 附完整最终内容，或 use=copy / use=project）。只有两边目标相互矛盾时才用 ask_user_question 请用户选择。决定齐全前项目不变、副本保留。不要让 CLI 改到原目录重做。',
+            parameters: {
+              worker_id: { type: 'string' },
+              worker_name: { type: 'string' },
+              resolutions: {
+                type: 'array',
+                description:
+                  'Decisions for files a previous call returned in needs_integration. Each item: path, use (content | copy | project), and content (the complete final file text) when use is content.',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    path: { type: 'string', required: true },
+                    use: { type: 'string', enum: ['content', 'copy', 'project'], required: true },
+                    content: { type: 'string' },
+                  },
+                },
+              },
+            },
+            output,
+            isConcurrencySafe: () => false,
+            execute: async (args, exec) => {
+              if (!exec.agent) throw new Error('A parent Agent is required')
+              const worker = this.runtime.resolveWorker(exec.agent.id, args.worker_id, args.worker_name)
+              const resolutions = readResolutions(args.resolutions)
+              const result = await this.mergeIsolatedWorker(exec.agent, worker.id, exec.signal, resolutions)
+              return JSON.stringify(
+                result.status === 'merged'
+                  ? result
+                  : integrationReport(
+                      workerName(worker),
+                      result,
+                      resolutions && result.conflicts.map((item) => item.path),
+                    ),
+              )
+            },
+          }),
+        ),
+      'cliworker:merge',
+    )
+    this.ctx.effect(
+      () =>
+        this.ctx.tools.register(
+          defineTool({
+            name: 'cliworker_discard',
+            description:
+              '丢弃空闲 CLI 智能体的隔离副本。执行前会向用户确认；确认后副本中的改动永久删除，主目录不变。用户未确认时副本保留。',
+            parameters: { worker_id: { type: 'string' }, worker_name: { type: 'string' } },
+            output,
+            isConcurrencySafe: () => false,
+            execute: async (args, exec) => {
+              if (!exec.agent) throw new Error('A parent Agent is required')
+              const agent = exec.agent
+              const worker = this.runtime.resolveWorker(agent.id, args.worker_id, args.worker_name)
+              const signal = AbortSignal.any([exec.signal, this.disposed.signal])
+              const response = await waitForInput(
+                agent.ctx.get('userQuestions')!.ask({
+                  agent,
+                  signal,
+                  questions: [
+                    {
+                      id: 'cliworker_discard',
+                      header: '丢弃副本',
+                      question: `丢弃 ${workerName(worker)} 的隔离副本？副本中的改动将永久删除，项目主目录不变。`,
+                      options: [{ label: '丢弃' }, { label: '保留' }],
+                    },
+                  ],
+                }),
+                signal,
+              )
+              const answer = response.answers.find((item) => item.id === 'cliworker_discard')
+              if (answer?.custom !== undefined || answer?.selected.length !== 1 || answer.selected[0] !== '丢弃')
+                return JSON.stringify({ status: 'kept', message: '用户未确认，隔离副本已保留' })
+              await this.runtime.discardIsolation(agent.id, worker.id)
+              return JSON.stringify({ status: 'discarded' })
+            },
+          }),
+        ),
+      'cliworker:discard',
     )
   }
   /** @param parentSessionId - Owning Harness session. @param workerId - Selected worker or empty string. @param signal - Stream lifetime. @returns JSON snapshots, initially and after changes. */
@@ -1689,6 +1862,40 @@ export class CliWorkerService extends TypertRemoteService {
       return JSON.stringify(await this.runtime.forkWorker(parent, workerId, atMessageId, this.harnessConversation, signal))
     } catch (error) { throw failure(error) }
   }
+  /** Writes into the parent's project, so the host's plan/read-only boundary applies. */
+  private async mergeIsolatedWorker(
+    agent: Agent,
+    workerId: string,
+    signal: AbortSignal,
+    resolutions?: Record<string, MergeResolution>,
+  ) {
+    const worker = this.runtime.get(agent.id, workerId)
+    this.assertExecution(agent)
+    if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目合并')
+    return this.runtime.mergeIsolation(agent.id, workerId, AbortSignal.any([signal, this.disposed.signal]), resolutions)
+  }
+  /** @param parentSessionId - Owning session. @param signal - Query lifetime. @returns Profile-wide general settings JSON. */
+  @Remote('generalSettings')
+  async generalSettings(parentSessionId: string, signal: AbortSignal): Promise<string> {
+    try {
+      await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      return JSON.stringify(this.runtime.generalSettings())
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning session. @param patch - JSON object of changed fields; `null` restores a default. @param signal - Mutation admission lifetime. @returns Updated general settings JSON. */
+  @Remote('saveGeneralSettings')
+  async saveGeneralSettings(parentSessionId: string, patch: string, signal: AbortSignal): Promise<string> {
+    try {
+      await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      return JSON.stringify(this.runtime.setGeneralSettings(JSON.parse(validate.string().max(4096).parse(patch))))
+    } catch (error) {
+      throw failure(error)
+    }
+  }
   /** @param parentSessionId - Owning session. @param cli - Selected CLI. @param enabled - Allow new CLI operations. @param signal - Mutation admission lifetime. @returns Updated profile-wide CLI enablement JSON. */
   @Remote('setCliEnabled')
   async setCliEnabled(
@@ -1973,11 +2180,13 @@ export class CliWorkerService extends TypertRemoteService {
       if (!expected) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
       this.runtime.assertCliEnabled(cli)
       this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
-      let catalog = this.settingsCatalogs.display(worker.project, cli, expected)
+      // An isolated conversation's account was verified against its copy.
+      const directory = this.runtime.catalogDirectory(worker)
+      let catalog = this.settingsCatalogs.display(directory, cli, expected)
       if (!catalog) {
         const result = await this.settingsCatalogs.get({
           cli,
-          project: worker.project,
+          project: directory,
           signal: control,
           selfVerifiedDiscovery: cli === 'qoder' || cli === 'qodercn',
           binding: async () => {
@@ -1985,14 +2194,14 @@ export class CliWorkerService extends TypertRemoteService {
               cli,
               this.backend,
               this.options,
-              worker.project,
+              directory,
               control,
             )
             if (current !== expected) throw new Error(ACCOUNT_CHANGED)
             return current
           },
           discover: () =>
-            this.queryCatalog(cli, this.backend, this.options, worker.project, control, expected),
+            this.queryCatalog(cli, this.backend, this.options, directory, control, expected),
         })
         catalog = result.catalog
       }
@@ -2087,7 +2296,7 @@ export class CliWorkerService extends TypertRemoteService {
       if (!expected) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
       this.runtime.assertCliEnabled(cliOf(preference))
       this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
-      const catalog = this.settingsCatalogs.display(worker.project, cliOf(preference), expected)
+      const catalog = this.settingsCatalogs.display(this.runtime.catalogDirectory(worker), cliOf(preference), expected)
       if (!catalog) throw new Error('模型目录已失效，请重试读取或在设置中刷新')
       validatePreference(preference, catalog)
       signal.throwIfAborted()
@@ -2606,3 +2815,4 @@ export class CliWorkerService extends TypertRemoteService {
 }
 
 export default CliWorkerService
+

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createNativeIO } from '../src/host/native-transport.mjs'
 import { runNativeKimi } from '../src/host/native-kimi.mjs'
-import { runNativeGrok } from '../src/host/native-grok.mjs'
+import { grokAcpArgv, runNativeGrok } from '../src/host/native-grok.mjs'
 import { runNativeAcp } from '../src/host/native-acp.mjs'
 import { foldNativeFrames } from './fixtures/bridge-timeline.ts'
 
@@ -32,7 +32,7 @@ createInterface({input:process.stdin}).on('line',line=>{
  if(q.method==='initialize')return reply(q,{protocolVersion:1,agentCapabilities:{loadSession:scenario!=='no-restore'}});
  if(q.method==='session/new'||q.method==='session/load'){
   if(q.method==='session/load')update('session-fixture','OLD HISTORY');
-  const value={...state};if(q.method==='session/load'){delete value.sessionId;if(scenario==='wrong-session')value.sessionId='wrong';}
+  const value={...state};if(scenario==='no-modes')delete value.modes;if(q.method==='session/load'){delete value.sessionId;if(scenario==='wrong-session')value.sessionId='wrong';}
   return reply(q,value);
  }
  if(q.method==='session/set_config_option'){
@@ -205,6 +205,28 @@ describe('Native ACP runners (simulated native processes)', () => {
     expect(calls).toEqual(['initialize', 'session/new', 'end'])
     expect(closed).toBe(true)
   })
+  it('runs a read-only Grok turn from its private config, without ignored global flags, when its ACP lists no modes', async () => {
+    const { records, result } = await fixture('grok', 'no-modes')
+    expect(result.status).toBe('SUCCESS')
+    const argv = records.find(record => record.argv).argv
+    expect(argv.slice(-3)).toEqual(['agent', '--no-leader', 'stdio'])
+    expect(argv.filter((arg: string) => ['--permission-mode', '--deny', '--allow'].includes(arg))).toEqual([])
+    expect(records.some(record => record.method === 'session/set_mode')).toBe(false)
+  })
+  it('keeps writable Grok on acceptEdits and replaces any earlier mode', () => {
+    const argv = ['grok', '--cwd', '/synthetic', '--permission-mode', 'default', '--single', 'task']
+    expect(grokAcpArgv({ argv, mode: 'accept-edits' })).toEqual(['grok', '--cwd', '/synthetic',
+      '--permission-mode', 'acceptEdits', 'agent', '--no-leader', 'stdio'])
+    expect(grokAcpArgv({ argv, mode: 'plan' })).toEqual(['grok', '--cwd', '/synthetic', 'agent', '--no-leader', 'stdio'])
+  })
+  it('still requires an ACP that lists modes to confirm plan, and never assumes it for other CLIs', async () => {
+    const listed = await fixture('grok')
+    expect(listed.result.status).toBe('SUCCESS')
+    expect(listed.records.find(record => record.method === 'session/set_mode')?.params.modeId).toBe('plan')
+    const kimi = await fixture('kimi', 'no-modes')
+    expect(kimi.result).toMatchObject({ status: 'ERROR', error: 'ACP does not advertise the selected permission mode' })
+    expect(kimi.records.some(record => record.method === 'session/prompt')).toBe(false)
+  })
   it('sends Grok model and effort as the scalar values accepted by its native decoder', async () => {
     const { records, result } = await fixture('grok')
     expect(result.status).toBe('SUCCESS')
@@ -307,9 +329,10 @@ describe('Native ACP runners (simulated native processes)', () => {
       expect(records.some((record) => record.method === 'session/prompt')).toBe(false)
     },
   )
-  it.each(['kimi', 'grok'] as const)('%s denies permission despite a clean ACP end_turn', async (cli) => {
+  it.each(['kimi', 'grok'] as const)('%s denies permission and reports a clean end_turn as unverified', async (cli) => {
     const { result, records } = await fixture(cli, 'permission')
-    expect(result).toMatchObject({ status: 'ERROR', response: 'HELLO' })
+    expect(result).toMatchObject({ status: 'UNCERTAIN', response: 'HELLO' })
+    expect(result.error).toMatch(/额外权限请求已拒绝.*结果待核实/)
     expect(records.find((record) => record.id === 'permission-fixture')?.result).toEqual({
       outcome: { outcome: 'selected', optionId: 'reject' },
     })

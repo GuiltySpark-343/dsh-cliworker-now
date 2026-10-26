@@ -3,6 +3,8 @@ import { lstat, mkdir, open, realpath, rename, rm, writeFile } from 'node:fs/pro
 import { join, resolve } from 'node:path'
 
 export const OWN_ACCOUNT_BUSY = '账号正被使用，请稍后刷新'
+/** Another run or catalog read holds this account exclusively. */
+export const ownAccountBusy = (error) => error instanceof Error && error.message === OWN_ACCOUNT_BUSY
 const nonceValid = (value) => typeof value === 'string' && /^[a-f0-9-]{36}$/.test(value)
 async function privateRoot(root) {
   const info = await lstat(root)

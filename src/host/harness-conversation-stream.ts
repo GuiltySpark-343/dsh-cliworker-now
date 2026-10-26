@@ -38,6 +38,9 @@ const json = (value: unknown) => JSON.stringify(value) ?? 'null'
 const textOf = (row: TimelineItem) => (row.kind === 'reasoning' ? (row.detail ?? row.text) : row.text)
 
 /** One CLI run consumed once across native steps. It never calls an LLM or executes a tool. */
+/** The CLI finished its turn; an unverified result still needs the user's check, not a retry. */
+const endsNormally = (outcome: { status: string }) => outcome.status === 'completed' || outcome.status === 'uncertain'
+
 export class HarnessConversationStream {
   private readonly history: WorkerEvent[] = []
   private seq = -1
@@ -197,7 +200,9 @@ export class HarnessConversationStream {
     const outcome = this.outcome
     if (!outcome) throw new Error('CLI 运行尚未完成清理')
     if (outcome.runId !== this.run.runId) throw new Error('CLI 运行终态身份不匹配')
-    if (outcome.status === 'completed') return { type: 'finish', reason: { kind: 'stop' } }
+    // An unverified outcome is not a failed request: the plugin's own notice
+    // carries its 结果待核实 wording, so Harness must not add a failure card.
+    if (endsNormally(outcome)) return { type: 'finish', reason: { kind: 'stop' } }
     if (isUserInterrupted(outcome)) {
       // rc.2 treats an aborted model finish as a failed request unless the
       // owning turn was actually cancelled. The Worker outcome is available
@@ -346,7 +351,7 @@ export class HarnessConversationStream {
     }
     if (this.outcome || this.issue) await this.nativeInputs?.settled()
     const rows = this.rows()
-    if (rows[this.row] || !this.outcome || this.outcome.status !== 'completed' || this.issue) {
+    if (rows[this.row] || !this.outcome || !endsNormally(this.outcome) || this.issue) {
       this.continuation(agent)
       yield { type: 'finish', reason: { kind: 'stop' } }
     } else {
@@ -550,7 +555,7 @@ export class HarnessConversationStream {
       while (!this.rows()[this.row] && !this.outcome && !this.issue) await this.changed(signal)
       if (this.outcome || this.issue) await this.nativeInputs?.settled()
       rows = this.rows()
-      if (rows[this.row] || !this.outcome || this.outcome.status !== 'completed' || this.issue) {
+      if (rows[this.row] || !this.outcome || !endsNormally(this.outcome) || this.issue) {
         // Settle the observed public prefix before reporting a terminal error
         // in a separate empty attempt. AgentLoop does not put error-attempt
         // blocks on its durable surface, so combining them would lose text.

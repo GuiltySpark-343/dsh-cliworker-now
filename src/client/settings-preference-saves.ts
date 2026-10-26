@@ -1,5 +1,6 @@
 import type { CliId, Preference } from '../shared/types.ts'
 import { operationMessage } from './operation-error.ts'
+import { t } from './i18n.ts'
 
 export interface PreferenceSaveState {
   status: 'idle' | 'draft' | 'saving' | 'saved' | 'failed'
@@ -93,7 +94,7 @@ export class SettingsPreferenceSaves {
       } catch (error) {
         if (current() && slot.draft === draft)
           this.publish(slot, { status: 'failed', saving: true, preference: draft.preference,
-            error: `${operationMessage(error)}；离开此页或关闭设置时重试` })
+            error: t('{error}；离开此页或关闭设置时重试', { error: operationMessage(error) }) })
       }
     }).finally(() => {
       slot.active = undefined

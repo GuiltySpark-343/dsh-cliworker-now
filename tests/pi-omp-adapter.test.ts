@@ -681,6 +681,24 @@ describe('Pi/OMP bridge with simulated native RPC processes', () => {
       if (process.platform !== 'win32') expect((await stat(outside)).mode & 0o777).toBe(0o644)
     },
   )
+  it('a busy account between catalog phases stays a busy account, not a broken catalog', async () => {
+    const { input } = await fixture('omp')
+    let phases = 0
+    await expect(
+      discoverPiOmp(
+        'omp',
+        input.executable,
+        async (argv, env) => {
+          // The second phase starts after the first released the account.
+          if (++phases === 2) throw new Error('账号正被使用，请稍后刷新')
+          return (await exec(argv[0]!, argv.slice(1), { env: fixtureEnvironment(input.nativeHome, env) })).stdout
+        },
+        input.stateDirectory,
+        { nativeHome: input.nativeHome, accountRoot: input.accountRoot },
+      ),
+    ).rejects.toThrow('账号正被使用，请稍后刷新')
+    expect(phases).toBe(2)
+  })
   it.each(['pi', 'omp'] as const)('%s discovers its exact model without prompting', async (cli) => {
     const { input } = await fixture(cli)
     const models = await discoverPiOmp(

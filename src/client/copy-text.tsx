@@ -6,6 +6,7 @@ import {
   IconCheckOutlineRegular,
   writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useT, type MessageKey } from './i18n.ts'
 
 export function CopyText({
   text,
@@ -16,7 +17,8 @@ export function CopyText({
   label: string
   iconOnly?: boolean
 }) {
-  const [feedback, setFeedback] = useState('')
+  const t = useT()
+  const [feedback, setFeedback] = useState<'' | MessageKey>('')
   const [busy, setBusy] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout>>()
   const current = useRef(text),
@@ -34,7 +36,7 @@ export function CopyText({
   }, [])
   return (
     <span className="cwn-copy">
-      <Tooltip label={feedback || label} side="bottom" portal>
+      <Tooltip label={feedback ? t(feedback) : label} side="bottom" portal>
         <Button
           type="button"
           size="sm"
@@ -71,7 +73,7 @@ export function CopyText({
               <Glyph name="copy" />
             )
           ) : feedback === '已复制' ? (
-            '已复制'
+            t('已复制')
           ) : (
             label
           )}
@@ -79,7 +81,7 @@ export function CopyText({
       </Tooltip>
       {feedback && (
         <span role="status" className={feedback === '已复制' ? 'cwn-sr-only' : 'cwn-copy-feedback'}>
-          {feedback}
+          {t(feedback)}
         </span>
       )}
     </span>

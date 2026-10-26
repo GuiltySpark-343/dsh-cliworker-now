@@ -41,6 +41,7 @@ import { BrandIcon } from './icons.tsx'
 import { installNativeJobOverlay } from './native-job-overlay.ts'
 import { workerManagementStyles } from './management-styles.ts'
 import { renameCopyStyles } from './rename-copy-styles.ts'
+import { installClientLocale, t, useT } from './i18n.ts'
 
 const ID = 'dsh-cliworker-now'
 
@@ -57,6 +58,7 @@ export const inject = [
 ]
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.remote.$mount(remoteContribution), 'cliworker:remote')
+  installClientLocale(ctx)
   ctx.inject(['remote.cliworker'], (scope) => {
     const remote = scope.remote,
       worker = remote.cliworker
@@ -118,6 +120,7 @@ export function apply(ctx: Context): void {
         openNativeSettings?: () => void
       },
     ) {
+      useT()
       const address = props.useSession((session) => session.subagent?.address)
       const parentSessionId = address?.parentSessionId ?? props.sessionId
       return (
@@ -223,7 +226,7 @@ export function apply(ctx: Context): void {
             id: 'cliworker',
             order: 25,
             title: () => 'CLI Worker',
-            description: () => '查看各 CLI 子 Agent 的实时工作',
+            description: () => t('查看各 CLI 子 Agent 的实时工作'),
             icon: () => <BrandIcon />,
           },
         ],
@@ -239,7 +242,7 @@ export function apply(ctx: Context): void {
             inject: () => ({
               api,
               openNativeSettings: () => {
-                if (!nativeSettingsOpen) throw new Error('Harness 原生设置入口暂不可用')
+                if (!nativeSettingsOpen) throw new Error(t('Harness 原生设置入口暂不可用'))
                 nativeSettingsOpen()
               },
             }),
@@ -250,6 +253,7 @@ export function apply(ctx: Context): void {
     )
     scope.effect(() => installHarnessNativeContent(scope))
     function Header({ sessionId, useSession }: PropsRuntime<'conversation.session.header.utilities'>) {
+      useT()
       const workerForks = useSyncExternalStore(subscribeForks, getForks)
       const address = useSession((session) => session.subagent?.address)
       const parentSessionId = address?.parentSessionId ?? sessionId
@@ -288,11 +292,11 @@ export function apply(ctx: Context): void {
         <>
           <HarnessNativeSessionSupports bindings={bindings} conversation={scope.conversation} forks={workerForks} api={api} />
           {workerForks && <HarnessForkNotice forks={workerForks} />}
-          <Tooltip label="打开 CLI Worker" side="bottom" portal>
+          <Tooltip label={t('打开 CLI Worker')} side="bottom" portal>
             <Button
               variant="ghost"
               size="sm"
-              aria-label="打开 CLI Worker"
+              aria-label={t('打开 CLI Worker')}
               className="cwn-entry"
               icon={<BrandIcon size={16} />}
               onClick={open}

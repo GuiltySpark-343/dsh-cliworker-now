@@ -8,7 +8,7 @@ import { ProcessCleanupUnconfirmedError } from './process.ts'
 
 import { snapshotPiOmpNative, safePiOmpAncestors, type PiOmpNativeOptions } from './pi-omp-native.ts'
 import { finishPiOmpRefresh } from './pi-omp-refresh.mjs'
-import { acquireOwnAccountLease } from './own-account-lease.mjs'
+import { acquireOwnAccountLease, ownAccountBusy } from './own-account-lease.mjs'
 import { assertPiOmpRefreshSources, assertPiOmpRefreshCache } from './pi-omp-refresh.mjs'
 import { createPiOmpControl, createNativeStopControl } from './pi-omp-control.mjs'
 import { buildNativeHarnessInjection } from './native-harness-injection.mjs'
@@ -184,6 +184,8 @@ async function confirmedCatalog(
         cleanupUnconfirmed = true
         throw error
       }
+      // Another reader can take the account between the two phases; that is a wait, not a broken catalog.
+      if (ownAccountBusy(error)) throw error
       throw new Error('无法读取 Pi/OMP 原生模型目录，请检查本机配置')
     } finally {
       if (!cleanupUnconfirmed) await launch.cleanup()

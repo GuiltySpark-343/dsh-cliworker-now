@@ -72,6 +72,10 @@ public static class CwnAgyCredential {
       if ($claims.email -is [string] -and $claims.email.Length -le 254 -and $claims.email -match '^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$') { $result.email = $claims.email }
     }
   }
+  # AGY 1.4.x stores only id_token_email; the Host binds that local email when no subject exists.
+  if (-not $result.email -and $account.id_token_email -is [string] -and $account.id_token_email.Trim().Length -le 254 -and $account.id_token_email.Trim() -match '^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$') {
+    $result.email = $account.id_token_email.Trim()
+  }
   $account = $null; $claims = $null
   $result | ConvertTo-Json -Compress
 } catch {

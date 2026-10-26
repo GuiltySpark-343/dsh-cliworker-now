@@ -1,6 +1,7 @@
 import { createElement, forwardRef, useEffect } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, expect, it, vi } from 'vitest'
+import { setLanguagePreference } from '../src/client/i18n.ts'
 import { SettingsDialog } from '../src/client/settings-dialog.tsx'
 import type { API } from '../src/client/workers.ts'
 import type { AccountStatus } from '../src/shared/accounts.ts'
@@ -95,6 +96,7 @@ afterEach(async () => {
   await act(async () => {
     for (const r of mounted.splice(0)) r.unmount()
   })
+  setLanguagePreference('follow')
   vi.clearAllMocks()
 })
 function deferred() {
@@ -2359,7 +2361,8 @@ it('does not flush a new on-page draft when an earlier background write complete
   expect(JSON.parse(configure.mock.calls[1]![1])).toEqual({ cli: 'antigravity', model: 'source/beta', effort: 'medium' })
   await act(async () => latest.resolve(remote({})))
   await t.click('Antigravity 设置')
-  expect(t.text()).toContain('默认设置已保存')
+  expect(t.text()).not.toContain('默认设置已保存')
+  expect(t.text()).not.toContain('正在保存默认设置')
   expect(visibleText(t.button('默认模型')).trim()).toBe('Beta')
 })
 
@@ -2415,7 +2418,8 @@ it.each(['legacy', 'warm'] as const)('serializes %s writes across rapid close/re
   expect(visibleText(t.button('默认思考强度')).trim()).toBe('Low')
   await act(async () => latest.resolve(remote({})))
   expect(visibleText(t.button('默认思考强度')).trim()).toBe('Low')
-  expect(t.text()).toContain('默认设置已保存')
+  expect(t.text()).not.toContain('默认设置已保存')
+  expect(t.text()).not.toContain('正在保存默认设置')
 })
 
 it('does not save on same-page navigation and flushes explicit changes on external unmount', async () => {
@@ -2437,7 +2441,8 @@ it('rechecks missing catalog binding proof without cancelling an already submitt
   expect(t.catalogForCli).toHaveBeenCalledTimes(2)
   expect(visibleText(t.button('默认思考强度')).trim()).toBe('High')
   await act(async () => first.resolve(remote({ cli: 'codex', model: 'codex-fixture', effort: 'high' })))
-  expect(t.text()).toContain('默认设置已保存')
+  expect(t.text()).not.toContain('默认设置已保存')
+  expect(t.text()).not.toContain('正在保存默认设置')
 })
 
 it('keeps a new save receipt when an older settings read arrives late, then accepts a later fresh snapshot', async () => {
@@ -2541,7 +2546,8 @@ it('saves running message choice automatically and does not refresh account or m
     expect.any(AbortSignal),
   )
   expect(visibleText(t.button('运行中发送'))).toContain('插队')
-  expect(t.text()).toContain('发送方式已保存')
+  expect(t.text()).not.toContain('发送方式已保存')
+  expect(t.text()).not.toContain('正在保存发送方式')
   expect(t.text()).toContain('先停止当前轮')
   expect(t.accountStatus).toHaveBeenCalledTimes(reads)
   expect(t.catalogForCli).toHaveBeenCalledTimes(models)
@@ -2568,7 +2574,8 @@ it('retains a failed mode selection with its error and retries the same choice',
   await t.click('运行中发送')
   await t.click('插队')
   expect(saveRunningMessageMode).toHaveBeenCalledTimes(2)
-  expect(t.text()).toContain('发送方式已保存')
+  expect(t.text()).not.toContain('发送方式已保存')
+  expect(t.text()).not.toContain('正在保存发送方式')
 })
 
 it('does not invent a default after a failed mode read and allows retry', async () => {
@@ -2646,4 +2653,79 @@ it('keeps the dispatch question switch disabled while its setting is unreadable'
   const t = await setup({ dispatchAskSettings }, undefined, 'codex')
   expect(t.button('调用前询问模型').props.disabled).toBe(true)
   expect(t.text()).toContain('模拟读取失败')
+})
+
+it('opens CLI Worker settings above agents and saves the shared concurrency limit', async () => {
+  let current = { maxConcurrent: 2, defaultMaxConcurrent: 2, isolatedParallelWrites: false }
+  const generalSettings = vi.fn(async () => remote(current))
+  const saveGeneralSettings = vi.fn(async (_session, raw: string) => {
+    current = { ...current, ...JSON.parse(raw) }
+    return remote(current)
+  })
+  const t = await setup({ generalSettings, saveGeneralSettings })
+  const labels = t.r.root.findAllByType('nav')[0]!.findAllByType('button').map((b) => b.props['aria-label'])
+  expect(labels.indexOf('CLI Worker 设置')).toBeLessThan(labels.indexOf('智能体设置'))
+  expect(generalSettings).not.toHaveBeenCalled()
+  await t.click('CLI Worker 设置')
+  expect(t.button('CLI Worker 设置').props['aria-pressed']).toBe(true)
+  expect(t.text()).toContain('最高同时对话数')
+  await t.click('最高同时对话数')
+  await t.click('4')
+  expect(saveGeneralSettings).toHaveBeenCalledWith('simulation-parent', '{"maxConcurrent":4}', expect.any(AbortSignal))
+  expect(t.text()).not.toContain('同时对话数已保存')
+  expect(t.text()).not.toContain('正在保存同时对话数')
+})
+it('switches the whole dialog to English as soon as the language is saved', async () => {
+  let current: Record<string, unknown> = { maxConcurrent: 2, defaultMaxConcurrent: 2 }
+  const generalSettings = vi.fn(async () => remote(current))
+  const saveGeneralSettings = vi.fn(async (_session, raw: string) => {
+    current = { ...current, ...JSON.parse(raw) }
+    return remote(current)
+  })
+  const t = await setup({ generalSettings, saveGeneralSettings })
+  await t.click('CLI Worker 设置')
+  // An older Host without the field reads as follow; Chinese without a DSH locale.
+  expect(visibleText(t.button('界面语言'))).toContain('跟随 DSH')
+  await t.click('界面语言')
+  await t.click('English')
+  expect(saveGeneralSettings).toHaveBeenCalledWith('simulation-parent', '{"language":"en"}', expect.any(AbortSignal))
+  expect(t.text()).not.toContain('Interface language saved')
+  expect(t.text()).toContain('Maximum concurrent conversations')
+  expect(t.text()).toContain('Parallel writes in the same directory')
+  expect(t.button('Agent settings')).toBeDefined()
+  expect(t.text()).not.toContain('最高同时对话数')
+  expect(t.text()).not.toContain('同目录写任务并行')
+  await t.click('Interface language')
+  await t.click('中文')
+  expect(saveGeneralSettings).toHaveBeenLastCalledWith('simulation-parent', '{"language":"zh"}', expect.any(AbortSignal))
+  expect(t.text()).not.toContain('界面语言已保存')
+  expect(t.text()).not.toContain('正在保存界面语言')
+})
+it('rejects an unknown language from the Host and keeps the current interface', async () => {
+  const generalSettings = vi.fn(async () => remote({ maxConcurrent: 2, defaultMaxConcurrent: 2, language: 'fr' }))
+  const t = await setup({ generalSettings })
+  await t.click('CLI Worker 设置')
+  expect(t.text()).toContain('收到无效的通用设置，请重试')
+  expect(t.button('重试读取通用设置')).toBeDefined()
+})
+it('explains and saves the same-directory isolated-copy switch, off by default', async () => {
+  let current = { maxConcurrent: 2, defaultMaxConcurrent: 2, isolatedParallelWrites: false }
+  const saveGeneralSettings = vi.fn(async (_session, raw: string) => {
+    current = { ...current, ...JSON.parse(raw) }
+    return remote(current)
+  })
+  const t = await setup({ generalSettings: vi.fn(async () => remote(current)), saveGeneralSettings })
+  await t.click('CLI Worker 设置')
+  expect(t.button('同目录写任务并行').props['aria-checked']).toBe(false)
+  expect(t.text()).toContain('在项目副本中同时运行，完成后由主 Agent 合并回项目')
+  await t.click('同目录写任务并行')
+  expect(saveGeneralSettings).toHaveBeenCalledWith(
+    'simulation-parent',
+    '{"isolatedParallelWrites":true}',
+    expect.any(AbortSignal),
+  )
+  expect(t.button('同目录写任务并行').props['aria-checked']).toBe(true)
+  // The switch itself shows the saved state; no extra confirmation line.
+  expect(t.text()).not.toContain('已开启')
+  expect(t.text()).not.toContain('正在保存同目录写任务并行')
 })

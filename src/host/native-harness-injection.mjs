@@ -9,9 +9,14 @@ export const nativeHarnessExecutionReady = cli => ['codex', 'claude', 'opencode'
  * Titles and rawInput are presentation/model-controlled data, never authority.
  * The Host still performs its own real approval for every tool execution.
  */
+/** The run's ready bridge connection for this CLI, or undefined. */
+export function nativeHarnessReadyConnection(config, env = process.env) {
+  const connection = config.harnessTools ?? readNativeHarnessConnection(env)
+  return connection?.executionReady && connection.binding.cli === config.cli ? connection : undefined
+}
 export async function nativeHarnessAcpApproval(config, params, signal) {
-  const connection = config.harnessTools ?? readNativeHarnessConnection()
-  if (!connection?.executionReady || connection.binding.cli !== config.cli) return undefined
+  const connection = nativeHarnessReadyConnection(config)
+  if (!connection) return undefined
   const call = params?.toolCall
   const candidates = [call?.name, call?._meta?.qoder?.toolName, call?._meta?.kimi?.toolName, call?._meta?.['x.ai']?.toolName]
     .filter(value => typeof value === 'string' && value.length)

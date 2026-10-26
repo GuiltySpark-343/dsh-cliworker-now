@@ -8,13 +8,13 @@ import {
   IconChevronDownOutlineRegular,
   IconLinkOutlineRegular,
   IconRefreshOutlineRegular,
+  IconSettingsOutlineRegular,
   IconUserOutlineRegular,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   CLI_IDS,
   CLI_LABELS,
   isRetiredCli,
-  effortLabel,
   type CliId,
   type Preference,
 } from '../shared/types.ts'
@@ -26,6 +26,8 @@ import { BrandIcon, Glyph } from './icons.tsx'
 import { operationMessage } from './operation-error.ts'
 import { value, type API } from './workers.ts'
 import { RolePresetsPane } from './role-presets.tsx'
+import { GeneralSettingsPane } from './general-settings.tsx'
+import { useScrollingMark } from './scrolling-mark.ts'
 import { AccountQueryQueue } from './account-query-queue.ts'
 import { CliExecutableSettings } from './cli-executable-settings.tsx'
 import { NativeChoice } from './native-settings-choice.tsx'
@@ -34,6 +36,8 @@ import { preferenceReadVersion, SettingsPreferenceSaves } from './settings-prefe
 import { settingsCacheMetadata, settingsDisplayPool, type SettingsDisplayCache,
   type SettingsCatalog as Catalog, type SettingsAccountEntry as AccountEntry, type SettingsCatalogEntry,
 } from './settings-display-cache.ts'
+import { effortLabel, t, useT } from './i18n.ts'
+import { hostText } from './operation-error.ts'
 
 interface SettingsDialogProps {
   open: boolean
@@ -47,7 +51,7 @@ type Enabled = Record<CliId, boolean>
 function readEnabled(raw: string): Enabled {
   const parsed = JSON.parse(raw)
   if (!parsed?.enabled || CLI_IDS.some((id) => typeof parsed.enabled[id] !== 'boolean')) {
-    throw new Error('CLI 开关状态不完整，请重新打开设置')
+    throw new Error(t('CLI 开关状态不完整，请重新打开设置'))
   }
   return parsed.enabled
 }
@@ -66,7 +70,7 @@ function providerLoginSummary(account: AccountStatus): { label: string; detail: 
         : ''
     return [
       {
-        label: login.authMethod === 'api' ? `${provider} API 登录` : `${provider}账号登录`,
+        label: login.authMethod === 'api' ? t('{provider} API 登录', { provider }) : t('{provider}账号登录', { provider }),
         authMethod: login.authMethod,
         email,
       },
@@ -84,34 +88,34 @@ function providerLoginSummary(account: AccountStatus): { label: string; detail: 
   }
 }
 function authenticatedLabel(account: AccountStatus): string {
-  return providerLoginSummary(account)?.label ?? (account.authMethod === 'api' ? 'API 登录' : '已登录')
+  return providerLoginSummary(account)?.label ?? (account.authMethod === 'api' ? t('API 登录') : t('已登录'))
 }
 function connectionStatus(enabled: boolean | undefined, account?: AccountEntry, settingsError = '') {
-  if (enabled === false) return { state: 'disabled', label: '已关闭' }
-  if (settingsError) return { state: 'failed', label: 'CLI 开关配置读取失败，请重新打开设置' }
+  if (enabled === false) return { state: 'disabled', label: t('已关闭') }
+  if (settingsError) return { state: 'failed', label: t('CLI 开关配置读取失败，请重新打开设置') }
   if (enabled === undefined || !account || (account.loading && !account.data))
-    return { state: 'pending', label: '正在检查连接' }
+    return { state: 'pending', label: t('正在检查连接') }
   if (!account.error && account.data?.state === 'unconfigured')
     return {
       state: 'unconfigured',
       label: account.data.installed
         ? account.data.cli === 'claude'
-          ? account.data.summary
-          : '未登录'
-        : '未安装',
+          ? hostText(account.data.summary)
+          : t('未登录')
+        : t('未安装'),
     }
   if (account.error || !account.data || ['unavailable', 'unauthenticated'].includes(account.data.state)) {
-    return { state: 'failed', label: account.error || account.data?.summary || '连接失败' }
+    return { state: 'failed', label: hostText(account.error || account.data?.summary) || t('连接失败') }
   }
   if (!['authenticated', 'configured'].includes(account.data.state)) {
     return {
       state: 'unknown',
-      label: account.data.summary || '状态待确认',
+      label: hostText(account.data.summary) || t('状态待确认'),
     }
   }
   if (account.data.state === 'authenticated')
     return { state: 'connected', label: authenticatedLabel(account.data) }
-  return { state: 'unverified', label: '已配置' }
+  return { state: 'unverified', label: t('已配置') }
 }
 
 /** Native modal owns focus, dismissal, theme, elevation and entrance animation. */
@@ -128,8 +132,10 @@ function OpenSettingsDialog({
   openNativeSettings,
   fallbackSaves,
 }: SettingsDialogProps & { fallbackSaves: SettingsPreferenceSaves }) {
+  useT()
+  const scrolling = useScrollingMark()
   const [cli, setCli] = useState<CliId>(isRetiredCli(initialCli) ? 'hermes' : initialCli)
-  const [page, setPage] = useState<'cli' | 'roles'>('cli')
+  const [page, setPage] = useState<'cli' | 'roles' | 'general'>('cli')
   const [cliExpanded, setCliExpanded] = useState(true)
   const cliGroupId = useId()
   const [enabled, setEnabled] = useState<Enabled>()
@@ -164,13 +170,13 @@ function OpenSettingsDialog({
   const readCatalog = useCallback(async (id: CliId, signal: AbortSignal, force = false,
     cache = displayCache.current, version = cache?.version(id)) => {
     try {
-      if (cache && cache.version(id) !== version) throw new Error('设置来源已变化，请刷新状态')
+      if (cache && cache.version(id) !== version) throw new Error(t('设置来源已变化，请刷新状态'))
       const next: Catalog = JSON.parse(value(await (force
         ? api.cliworker.refreshCatalogForCli(sessionId, id, signal)
         : api.cliworker.catalogForCli(sessionId, id, signal))))
-      if (next.cli !== id || !Array.isArray(next.models)) throw new Error('收到不匹配的 CLI 模型目录，请重试')
+      if (next.cli !== id || !Array.isArray(next.models)) throw new Error(t('收到不匹配的 CLI 模型目录，请重试'))
       if (signal.aborted) return
-      if (cache && cache.version(id) !== version) throw new Error('设置来源已变化，请刷新状态')
+      if (cache && cache.version(id) !== version) throw new Error(t('设置来源已变化，请刷新状态'))
       const entry = { data: next, loading: false }
       cache?.catalog(id, entry, version)
       setCatalogEntries(old => ({ ...old, [id]: entry }))
@@ -206,8 +212,8 @@ function OpenSettingsDialog({
             const next: AccountStatus = JSON.parse(
               value(await api.cliworker.accountStatus(sessionId, id, signal)),
             )
-            if (next.cli !== id) throw new Error('收到不匹配的 CLI 账号状态，请重试')
-            if (cache && cache.version(id) !== version) throw new Error('账号来源已变化，请刷新状态')
+            if (next.cli !== id) throw new Error(t('收到不匹配的 CLI 账号状态，请重试'))
+            if (cache && cache.version(id) !== version) throw new Error(t('账号来源已变化，请刷新状态'))
             if (!signal.aborted) {
               const entry = { data: next, loading: false }
               cache?.account(id, entry, version)
@@ -310,33 +316,47 @@ function OpenSettingsDialog({
     <Modal
       open
       onClose={() => void leave(onClose)}
-      title="CLI Worker 设置"
-      closeLabel="关闭设置"
+      title={t('CLI Worker 设置')}
+      closeLabel={t('关闭设置')}
       className="cwn-settings-dialog"
       contentClassName="cwn-settings-content"
     >
-      <div className="cwn-settings-layout">
-        <nav className="cwn-settings-nav" aria-label="CLI 设置导航">
+      <div className="cwn-settings-layout" ref={scrolling}>
+        <nav className="cwn-settings-nav" aria-label={t('CLI 设置导航')}>
           <Button
             type="button"
             variant="ghost"
             size="md"
             className="cwn-settings-nav-primary"
-            aria-label="智能体设置"
-            aria-pressed={page === 'roles'}
-            onClick={() => void leave(() => setPage('roles'))}
+            aria-label={t('CLI Worker 设置')}
+            aria-pressed={page === 'general'}
+            onClick={() => void leave(() => setPage('general'))}
           >
             <span className="cwn-settings-nav-icon" aria-hidden="true">
-              <IconUserOutlineRegular size={20} />
+              <IconSettingsOutlineRegular size={20} />
             </span>
-            <span className="cwn-settings-nav-label">智能体设置</span>
+            <span className="cwn-settings-nav-label">{t('CLI Worker 设置')}</span>
           </Button>
           <Button
             type="button"
             variant="ghost"
             size="md"
             className="cwn-settings-nav-primary"
-            aria-label="CLI 连接"
+            aria-label={t('智能体设置')}
+            aria-pressed={page === 'roles'}
+            onClick={() => void leave(() => setPage('roles'))}
+          >
+            <span className="cwn-settings-nav-icon" aria-hidden="true">
+              <IconUserOutlineRegular size={20} />
+            </span>
+            <span className="cwn-settings-nav-label">{t('智能体设置')}</span>
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="md"
+            className="cwn-settings-nav-primary"
+            aria-label={t('CLI 连接')}
             aria-expanded={cliExpanded}
             aria-controls={cliGroupId}
             onClick={() => setCliExpanded((expanded) => !expanded)}
@@ -344,7 +364,7 @@ function OpenSettingsDialog({
             <span className="cwn-settings-nav-icon" aria-hidden="true">
               <IconLinkOutlineRegular size={20} />
             </span>
-            <span className="cwn-settings-nav-label">CLI 连接</span>
+            <span className="cwn-settings-nav-label">{t('CLI 连接')}</span>
             <IconChevronDownOutlineRegular size={14} className="cwn-settings-nav-chevron" />
           </Button>
           <div
@@ -364,7 +384,7 @@ function OpenSettingsDialog({
                     variant="ghost"
                     size="md"
                     className="cwn-settings-cli-item"
-                    aria-label={`${CLI_LABELS[id]} 设置`}
+                    aria-label={t('{cli} 设置', { cli: CLI_LABELS[id] })}
                     aria-pressed={page === 'cli' && cli === id}
                     tabIndex={cliExpanded ? undefined : -1}
                     data-enabled={enabled?.[id] !== false}
@@ -392,7 +412,9 @@ function OpenSettingsDialog({
             </div>
           </div>
         </nav>
-        {page === 'roles' ? (
+        {page === 'general' ? (
+          <GeneralSettingsPane api={api} sessionId={sessionId} />
+        ) : page === 'roles' ? (
           <RolePresetsPane api={api} sessionId={sessionId} />
         ) : (
           <CliSettings
@@ -464,28 +486,28 @@ function AccountSummary({
   const state = connection.state
   const label =
     enabled === false
-      ? '已关闭'
+      ? t('已关闭')
       : settingsError
-        ? '设置读取失败，请重新打开'
+        ? t('设置读取失败，请重新打开')
         : loading && !data
-          ? '正在读取登录信息…'
+          ? t('正在读取登录信息…')
           : account?.error
-            ? account.error
+            ? hostText(account.error)
             : connection.state === 'failed'
               ? connection.label
               : connection.state === 'pending'
-                ? '正在检查连接…'
+                ? t('正在检查连接…')
                 : authenticated
                   ? authenticatedLabel(data)
                   : data?.state === 'unconfigured'
                     ? data.installed
                       ? data.cli === 'claude'
-                        ? data.summary
-                        : '未登录'
-                      : '未安装'
+                        ? hostText(data.summary)
+                        : t('未登录')
+                      : t('未安装')
                     : data?.state === 'configured'
-                      ? '已配置'
-                      : data?.summary || '状态待确认'
+                      ? t('已配置')
+                      : hostText(data?.summary) || t('状态待确认')
   return (
     <div
       className="cwn-account-summary"
@@ -559,7 +581,6 @@ function CliSettings({
   const [modelLoading, setModelLoading] = useState(true)
   const [writeState, setWriteState] = useState(() => preferenceSaves.snapshot(cli))
   const saving = writeState.saving
-  const saved = writeState.status === 'saved'
   const saveError = writeState.error
   const [modelError, setModelError] = useState('')
   const [modelRevision, refreshModels] = useState(0)
@@ -601,7 +622,7 @@ function CliSettings({
     const applyCatalog = (next: Catalog) => {
       setCatalog(next)
       if (!next.models.length)
-        setModelError(operationMessage(next.notice || '此 CLI 未返回可用模型，请登录或刷新重试'))
+        setModelError(next.notice ? operationMessage(next.notice) : t('此 CLI 未返回可用模型，请登录或刷新重试'))
       const preference = preferenceSaves.snapshot(cli).preference ?? next.preference
       const preferred = preference ? modelName(preference) : ''
       const saved = next.models.find(
@@ -611,7 +632,7 @@ function CliSettings({
       )
       const chosen = preference ? saved : visibleModelChoices(next.models)[0]
       if (preference && !saved && next.models.length)
-        setModelError('原默认模型已不可用，请重新选择模型')
+        setModelError(t('原默认模型已不可用，请重新选择模型'))
       const effort =
         preference && chosen?.efforts?.includes(preference.effort)
           ? preference.effort
@@ -623,7 +644,7 @@ function CliSettings({
     if (warmCatalogs) {
       if (!catalogEntry || catalogEntry.loading) return
       if (catalogEntry.data) applyCatalog(catalogEntry.data)
-      else setModelError(catalogEntry.error || '模型目录不可用，请刷新重试')
+      else setModelError(hostText(catalogEntry.error) || t('模型目录不可用，请刷新重试'))
       setModelLoading(false)
       return
     }
@@ -639,7 +660,7 @@ function CliSettings({
               : api.cliworker.catalogForCli(sessionId, cli, controller.signal)),
           ),
         )
-        if (next.cli !== cli) throw new Error('收到不匹配的 CLI 模型目录，请重试')
+        if (next.cli !== cli) throw new Error(t('收到不匹配的 CLI 模型目录，请重试'))
         if (controller.signal.aborted) return
         applyCatalog(next)
       } catch (error) {
@@ -710,16 +731,16 @@ function CliSettings({
     const label =
       item?.target === 'models'
         ? id === 'login'
-          ? '登录设置'
-          : '打开原生设置'
-        : (item?.label ??
+          ? t('登录设置')
+          : t('打开原生设置')
+        : (hostText(item?.label) ??
           (id === 'logout'
-            ? '退出登录'
+            ? t('退出登录')
             : id === 'manage'
-              ? '账号终端'
+              ? t('账号终端')
               : ['omp', 'pi', 'hermes', 'opencode'].includes(cli)
-                ? '登录设置'
-                : '登录 / 切换账号'))
+                ? t('登录设置')
+                : t('登录 / 切换账号')))
     return (
       <Button
         type="button"
@@ -766,64 +787,64 @@ function CliSettings({
         {id === 'logout' ? (
           <>
             <Glyph name="logout" />
-            退出
+            {t('退出')}
           </>
         ) : item?.target === 'models' ? (
           label
         ) : id === 'manage' ? (
           <>
             <Glyph name="tool" />
-            账号终端
+            {t('账号终端')}
           </>
         ) : item?.label && item.label !== '登录 / 切换账号' ? (
-          item.label
+          hostText(item.label)
         ) : account?.data?.state === 'authenticated' ? (
-          '切换账号'
+          t('切换账号')
         ) : (
-          '登录账号'
+          t('登录账号')
         )}
       </Button>
     )
   }
   return (
-    <div className="cwn-settings-pane" aria-label={`${CLI_LABELS[cli]} 配置`}>
+    <div className="cwn-settings-pane" aria-label={t('{cli} 配置', { cli: CLI_LABELS[cli] })}>
       <div className="cwn-cli-identity" data-enabled={enabled !== false}>
         <div className="cwn-settings-cli-name">
           <BrandIcon cli={cli} size={40} />
           <div>
             <h2>{CLI_LABELS[cli]}</h2>
-            <p className="cwn-cli-subtitle">管理账号与模型偏好</p>
+            <p className="cwn-cli-subtitle">{t('管理账号与模型偏好')}</p>
           </div>
         </div>
         <div className="cwn-cli-toggle">
           <SectionProgress
             loading={settingsPending || toggling}
-            label={toggling ? '正在保存 CLI 开关' : '正在读取 CLI 开关'}
+            label={toggling ? t('正在保存 CLI 开关') : t('正在读取 CLI 开关')}
           />
           <Switch
             checked={enabled ?? false}
             onChange={onToggle}
-            label={`启用 ${CLI_LABELS[cli]}`}
+            label={t('启用 {cli}', { cli: CLI_LABELS[cli] })}
             disabled={enabled === undefined || toggleBusy || saving || !!action || pathChanging}
-            title={action ? '请先关闭账号终端' : undefined}
+            title={action ? t('请先关闭账号终端') : undefined}
           />
         </div>
       </div>
       <div className="cwn-cli-toggle-status" role="status">
-        {settingsError || toggleError || (enabled === false ? '已关闭' : '')}
+        {settingsError || toggleError || (enabled === false ? t('已关闭') : '')}
       </div>
-      <section className="cwn-settings-section" aria-label="账号与登录">
+      <section className="cwn-settings-section" aria-label={t('账号与登录')}>
         <div className="cwn-settings-section-head">
-          <h3>账号与登录</h3>
+          <h3>{t('账号与登录')}</h3>
           <div className="cwn-settings-section-tools">
-            <SectionProgress loading={accountLoading} label={`正在读取 ${CLI_LABELS[cli]} 账号…`} />
-            <Tooltip label="刷新登录状态" side="top" portal>
+            <SectionProgress loading={accountLoading} label={t('正在读取 {cli} 账号…', { cli: CLI_LABELS[cli] })} />
+            <Tooltip label={t('刷新登录状态')} side="top" portal>
               <Button
                 type="button"
                 variant="ghost"
                 size="md"
                 className="cwn-refresh"
-                aria-label="刷新状态"
+                aria-label={t('刷新状态')}
                 disabled={inactive || accountLoading || saving || pathChanging}
                 onClick={() => onRefreshAccount()}
               >
@@ -853,26 +874,26 @@ function CliSettings({
               if (accountClose.current) void accountClose.current()
               else closeAccount()
             }}
-            title={`${CLI_LABELS[cli]} · ${chosenAction?.label ?? '账号终端'}`}
-            closeLabel="关闭账号操作"
+            title={`${CLI_LABELS[cli]} · ${hostText(chosenAction?.label) ?? t('账号终端')}`}
+            closeLabel={t('关闭账号操作')}
             className="cwn-account-dialog"
             contentClassName="cwn-account-dialog-content"
           >
             {choosingLoginProvider ? (
-              <section aria-label="选择 ZCode 授权来源">
-                <p>选择账号所属的服务商</p>
+              <section aria-label={t('选择 ZCode 授权来源')}>
+                <p>{t('选择账号所属的服务商')}</p>
                 <div className="cwn-account-actions">
                   <Button variant="outline" size="md" onClick={() => setLoginProvider('bigmodel')}>
-                    中国智谱 BigModel
+                    {t('中国智谱 BigModel')}
                   </Button>
                   <Button variant="outline" size="md" onClick={() => setLoginProvider('zai')}>
-                    海外 Z.AI
+                    {t('海外 Z.AI')}
                   </Button>
                 </div>
               </section>
             ) : choosingSource ? (
-              <section aria-label="选择退出账号来源">
-                <p>{sources?.length ? '选择要退出的账号来源' : '账号来源不可用，请关闭后刷新状态'}</p>
+              <section aria-label={t('选择退出账号来源')}>
+                <p>{sources?.length ? t('选择要退出的账号来源') : t('账号来源不可用，请关闭后刷新状态')}</p>
                 <div className="cwn-account-actions">
                   {sources?.map((source) => (
                     <Button
@@ -881,7 +902,7 @@ function CliSettings({
                       size="md"
                       onClick={() => setAccountSource(source.id)}
                     >
-                      {source.label}
+                      {hostText(source.label)}
                     </Button>
                   ))}
                 </div>
@@ -902,21 +923,21 @@ function CliSettings({
           </Modal>
         )}
       </section>
-      <section className="cwn-settings-section" aria-label="项目默认设置">
+      <section className="cwn-settings-section" aria-label={t('项目默认设置')}>
         <div className="cwn-settings-section-head">
-          <h3>项目默认设置</h3>
+          <h3>{t('项目默认设置')}</h3>
           <div className="cwn-settings-section-tools">
             <SectionProgress
               loading={!settingsError && enabled !== false && (modelLoading || settingsPending)}
-              label={`正在读取 ${CLI_LABELS[cli]} 模型…`}
+              label={t('正在读取 {cli} 模型…', { cli: CLI_LABELS[cli] })}
             />
-            <Tooltip label="刷新模型列表" side="top" portal>
+            <Tooltip label={t('刷新模型列表')} side="top" portal>
               <Button
                 type="button"
                 variant="ghost"
                 size="md"
                 className="cwn-refresh"
-                aria-label="刷新模型"
+                aria-label={t('刷新模型')}
                 disabled={inactive || modelLoading || saving || pathChanging}
                 onClick={() => {
                   preferenceSaves.invalidate(cli)
@@ -940,11 +961,11 @@ function CliSettings({
         >
           <label className="cwn-setting-row">
             <span className="cwn-setting-row-text">
-              <span>模型</span>
-              <span className="cwn-setting-description">新对话沿用的默认模型</span>
+              <span>{t('模型')}</span>
+              <span className="cwn-setting-description">{t('新对话沿用的默认模型')}</span>
             </span>
             <NativeChoice
-              label="默认模型"
+              label={t('默认模型')}
               selected={model}
               choices={visibleModelChoices(catalog?.models ?? [], model).map((item) => ({
                 id: item.id,
@@ -956,11 +977,11 @@ function CliSettings({
           </label>
           <label className="cwn-setting-row">
             <span className="cwn-setting-row-text">
-              <span>思考强度</span>
-              <span className="cwn-setting-description">仅提供当前模型支持的选项</span>
+              <span>{t('思考强度')}</span>
+              <span className="cwn-setting-description">{t('仅提供当前模型支持的选项')}</span>
             </span>
             <NativeChoice
-              label="默认思考强度"
+              label={t('默认思考强度')}
               selected={effort}
               choices={supportedEfforts.map((id) => ({ id, label: effortLabel(id) }))}
               disabled={choiceDisabled || !supportedEfforts.length}
@@ -969,13 +990,13 @@ function CliSettings({
           </label>
           <DispatchAskRow api={api} sessionId={sessionId} cli={cli} disabled={inactive} />
           <p className="cwn-settings-notice cwn-settings-hint" role="status">
-            {modelError || (cli === 'claude' && catalog?.notice?.includes('路由') ? catalog.notice : '')}
+            {modelError || (cli === 'claude' && catalog?.notice?.includes('路由') ? hostText(catalog.notice) : '')}
           </p>
-          {(saving || saved || saveError) && (
+          {(saving || saveError) && (
             <div className="cwn-settings-save">
               <span className="cwn-settings-feedback-slot" role="status">
                 {saving && <StateDot state="ongoing" size={14} />}
-                {saveError || (saving ? '正在保存默认设置…' : '默认设置已保存')}
+                {saveError || t('正在保存默认设置…')}
               </span>
             </div>
           )}

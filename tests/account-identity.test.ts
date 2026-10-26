@@ -104,6 +104,25 @@ describe('bounded account identity projection', () => {
     }
   })
 
+  it('labels an AGY 1.4.x login that keeps only id_token_email, rejecting unsafe values', async () => {
+    const f = fixture()
+    writeFileSync(f.agyPath, JSON.stringify(agy({ id_token: undefined, id_token_email: ' person@example.com ' })))
+    expect(await f.source('antigravity', f.signal)).toMatchObject({
+      state: 'authenticated',
+      accountLabel: 'person@example.com',
+    })
+    // A full ID token keeps precedence over the separate email field.
+    writeFileSync(f.agyPath, JSON.stringify(agy({ id_token_email: 'other@example.com' })))
+    expect((await f.source('antigravity', f.signal))?.accountLabel).toBe('person@example.com')
+    for (const id_token_email of ['<script>@example.com', 'sk-SECRET@example.com', { value: 'SECRET' }]) {
+      writeFileSync(f.agyPath, JSON.stringify(agy({ id_token: undefined, id_token_email })))
+      const result = await f.source('antigravity', f.signal)
+      expect(result?.state).toBe('authenticated')
+      expect(result?.accountLabel).toBeUndefined()
+      expect(JSON.stringify(result)).not.toContain('SECRET')
+    }
+  })
+
   it('preserves unknown native shapes but reports unsafe linked metadata as a read error', async () => {
     const f = fixture()
     writeFileSync(f.agyPath, JSON.stringify({ auth_method: 'future', secret: 'SECRET' }))

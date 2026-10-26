@@ -1,4 +1,6 @@
 import type { HarnessConversationBinding } from '../shared/types.ts'
+import { t } from './i18n.ts'
+import { hostText } from './operation-error.ts'
 
 // These rc.2 controls have no separate public leaf slot. Match only their exact
 // accessible labels inside a verified CLI child. Input and command ownership stays native.
@@ -73,8 +75,8 @@ export function installHarnessDomGuard(
         })
       const reason =
         capability === 'fork'
-          ? forks ? forks.reason(button) : binding.reasons?.fork || 'CLI 子会话尚未接通原生分支，操作不可用。'
-          : `${binding.reasons?.attachments || '此 CLI 子会话尚未接通文件和图片附件'}。仍可打开此菜单调用可用指令。`
+          ? forks ? forks.reason(button) : hostText(binding.reasons?.fork) || t('CLI 子会话尚未接通原生分支，操作不可用。')
+          : t('{reason}。仍可打开此菜单调用可用指令。', { reason: hostText(binding.reasons?.attachments) || t('此 CLI 子会话尚未接通文件和图片附件') })
       if (capability !== 'attachments') {
         if (button.disabled !== !!reason) button.disabled = !!reason
         if (button.getAttribute('aria-disabled') !== String(!!reason)) button.setAttribute('aria-disabled', String(!!reason))
@@ -87,8 +89,8 @@ export function installHarnessDomGuard(
       const title = saved.get(button)!.title
       if (title === null) button.removeAttribute('title')
       else if (button.getAttribute('title') !== title) button.setAttribute('title', title)
-      if (capability === 'attachments' && button.getAttribute('aria-label') !== '调用指令（附件不可用）')
-        button.setAttribute('aria-label', '调用指令（附件不可用）')
+      if (capability === 'attachments' && button.getAttribute('aria-label') !== t('调用指令（附件不可用）'))
+        button.setAttribute('aria-label', t('调用指令（附件不可用）'))
       // An available fork keeps the native button's own tooltip.
       if (reason) targets.push({ element: button, feature: capability, reason })
     }

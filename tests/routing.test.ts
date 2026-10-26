@@ -110,6 +110,10 @@ describe('explicit requests from this human step', () => {
     ],
     ['请调用 CLI Worker Now 的 cliworker_start，仅使用 Antigravity (agy) CLI 检查代码', 'antigravity'],
     ['使用 Antigravity CLI 检查代码，然后调用 agy cli 完成检查', 'antigravity'],
+    ['请调用 1 次 CLI Worker 派遣工具，使用 Grok，设置 read_only 为 true', 'grok'],
+    ['请调用一次 CLI Worker 派遣工具，使用 Grok', 'grok'],
+    ['调用 2 次 codex cli 检查代码', 'codex'],
+    ['使用两个 agy cli 并行检查代码', 'antigravity'],
   ])('%s routes to %s without choosing a model', (text, cli) => {
     expect(invocationResolution([user(text)])).toMatchObject({ status: 'resolved', cli })
   })
@@ -134,6 +138,9 @@ describe('explicit requests from this human step', () => {
     '调用已有智能体小林继续任务',
     '让小林继续调用 agy cli 帮我检查代码',
     '请调用 CLI Worker 的 cliworker_start',
+    '请调用 1 次 CLI Worker 派遣工具',
+    '请在同一步里同时调用 4 次 CLI Worker 派遣工具',
+    '调用两次 cliworker_start',
     '请调用 cliworker_start，参数 cli 必须为 antigravity',
     '请调用 cliworker_resolve，参数 cli 仅为名称说明',
     '调用 CLI 做一次检查',

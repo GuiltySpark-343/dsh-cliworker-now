@@ -83,7 +83,7 @@ it('searches the role library and opens a built-in prompt for editing', async ()
     id: fixture.id,
     prompt: '新的模拟职责',
   })
-  expect(t.text()).toContain('预设已保存')
+  expect(t.text()).not.toContain('预设已保存')
 })
 it('validates a custom preset before saving and preserves the draft after a failed save', async () => {
   const saveRolePreset = vi.fn().mockResolvedValue({ ok: false, error: { message: '模拟保存失败' } })

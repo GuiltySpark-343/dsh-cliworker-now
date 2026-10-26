@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import { Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   active,
-  effortLabel,
   isUserInterrupted,
   workerName,
   type Worker,
@@ -11,8 +10,9 @@ import {
 import { displayModelName } from '../shared/model-presentation.ts'
 import { Glyph } from './icons.tsx'
 import { NameCopy } from './name-copy.tsx'
+import { effortLabel, t, type MessageKey, useT } from './i18n.ts'
 
-const status: Record<WorkerStatus, string> = {
+const status: Record<WorkerStatus, MessageKey> = {
   queued: '排队中',
   running: '运行中',
   stopping: '正在停止',
@@ -37,6 +37,7 @@ export function WorkerCard({
   onOpen: () => void
   onManage: (action: WorkerManagementAction) => void
 }) {
+  useT()
   const [menu, setMenu] = useState(false)
   const point = useRef<{ x: number; y: number }>()
   const card = useRef<HTMLDivElement>(null)
@@ -51,11 +52,11 @@ export function WorkerCard({
     setMenu(true)
   }
   const entries: MenuEntry[] = [
-    { id: 'open', label: '打开对话', disabled: collapsed },
-    { id: 'title', label: '修改聊天标题', disabled: locked },
-    { id: 'name', label: '修改智能体名称', disabled: locked },
+    { id: 'open', label: t('打开对话'), disabled: collapsed },
+    { id: 'title', label: t('修改聊天标题'), disabled: locked },
+    { id: 'name', label: t('修改智能体名称'), disabled: locked },
     { type: 'separator', id: 'separator' },
-    { id: 'delete', label: '删除', disabled: locked || active(worker.status), danger: true },
+    { id: 'delete', label: t('删除'), disabled: locked || active(worker.status), danger: true },
   ]
   return (
     <div
@@ -119,7 +120,7 @@ export function WorkerCard({
                 <span className="cwn-worker-title">{worker.title}</span>
                 <span className={`cwn-worker-status ${worker.status}`}>
                   <span className={`cwn-dot ${worker.status}`} />
-                  {isUserInterrupted(worker) ? '已停止' : status[worker.status]}
+                  {isUserInterrupted(worker) ? t('已停止') : t(status[worker.status])}
                 </span>
               </span>
             </button>

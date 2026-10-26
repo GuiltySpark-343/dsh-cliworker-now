@@ -394,6 +394,52 @@ it('keeps OAuth rotation stable, but changes on account switch and rejects logou
   await expect(run('antigravity')).rejects.toMatchObject({ code: 'CLI_OWN_ACCOUNT_REQUIRED' })
 })
 
+// AGY 1.4.x keeps only id_token_email (issue #7); field shape is synthetic, values are fake.
+function agyEmailOnly(email: unknown, refresh = 'synthetic-refresh') {
+  write(join(fixture.home, '.gemini/jetski-standalone-oauth-token'), {
+    auth_method: 'consumer',
+    token: { access_token: 'synthetic-opaque-access', refresh_token: refresh, expiry: '2099-01-01T00:00:00Z' },
+    id_token_email: email,
+  })
+}
+
+it('binds an Antigravity login that keeps only id_token_email, stable across case and rotation', async () => {
+  agyEmailOnly('Own@Example.test')
+  const first = await run('antigravity')
+  agyEmailOnly('own@example.test', 'synthetic-rotated-refresh')
+  expect(await run('antigravity')).toBe(first)
+  agyEmailOnly('other@example.test')
+  expect(await run('antigravity')).not.toBe(first)
+  for (const unsafe of [undefined, '', 'not-an-email', '<script>@example.test', `${'a'.repeat(250)}@example.test`]) {
+    agyEmailOnly(unsafe)
+    await expect(run('antigravity')).rejects.toMatchObject({ code: 'CLI_OWN_ACCOUNT_REQUIRED' })
+  }
+})
+
+it('binds a Windows Antigravity credential without id_token by its local email only when logged in', async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { value: 'win32' })
+  try {
+    const email = (accountLabel?: string, state = 'authenticated') => {
+      fixture.windowsAgy = { identity: { state, authMethod: 'oauth', verification: 'local', accountLabel } }
+    }
+    email('Own@Example.test')
+    const first = await run('antigravity')
+    email('own@example.test')
+    expect(await run('antigravity')).toBe(first)
+    email('other@example.test')
+    expect(await run('antigravity')).not.toBe(first)
+    agy()
+    expect(await run('antigravity')).not.toBe(first)
+    email(undefined)
+    await expect(run('antigravity')).rejects.toMatchObject({ code: 'CLI_OWN_ACCOUNT_REQUIRED' })
+    email('own@example.test', 'unauthenticated')
+    await expect(run('antigravity')).rejects.toMatchObject({ code: 'CLI_OWN_ACCOUNT_REQUIRED' })
+  } finally {
+    Object.defineProperty(process, 'platform', platform)
+  }
+})
+
 it('rejects an Antigravity route change even when its old consumer login file remains', async () => {
   agy()
   await run('antigravity')

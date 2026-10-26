@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Button, Menu, IconChevronDownOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import { t } from './i18n.ts'
 
 export function NativeChoice({
   label,
@@ -78,7 +79,7 @@ export function NativeChoice({
             <span>
               {choices.find((choice) => choice.id === selected)?.label ??
                 placeholder ??
-                (label === '默认思考强度' ? '选择强度' : '选择模型')}
+                (label === t('默认思考强度') ? t('选择强度') : t('选择模型'))}
             </span>
             <IconChevronDownOutlineRegular size={14} />
           </Button>

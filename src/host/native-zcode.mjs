@@ -7,6 +7,8 @@ import { nativeHarnessMcpServers } from './native-harness-injection.mjs'
 import { ZcodeResponseTracker, ZcodeToolInputs } from './zcode-response.mjs'
 import { zcodeContextBinding, unknownZcodeContextInspection, readZcodeContextInspections } from './zcode-context-observation.mjs'
 
+const ZCODE_DENIED = 'ZCode 额外权限请求已拒绝，但 CLI 报告本轮已完成；结果待核实，请先核查实际产物，不要自动重试'
+
 export function zcodeAppServerArgv(config) {
   const firstOption = config.argv.findIndex((arg) =>
     ['--cwd', '--mode', '--output-format', '--resume', '--prompt', '--disallowedTools'].includes(arg),
@@ -174,6 +176,7 @@ export async function runNativeZcode(config, io) {
     turnId,
     terminal,
     failed,
+    denied = false,
     response = '',
     thought = '',
     step = 0,
@@ -207,6 +210,8 @@ export async function runNativeZcode(config, io) {
   }
   const seen = new Set(),
     tools = new Map(),
+    // Tool calls whose permission was denied; their failure is the denial itself.
+    deniedTools = new Set(),
     early = []
   const failure = (message) => {
     failed ??= message
@@ -239,7 +244,8 @@ export async function runNativeZcode(config, io) {
       else if (message.method === 'interaction/requestPermission') {
         result = { decision: 'deny', reason: 'CLI Worker 无额外交互授权' }
         if (active && message.params?.sessionId === sessionId) {
-          failure('ZCode 额外权限请求已拒绝')
+          denied = true
+          if (nonempty(message.params.toolCallId)) deniedTools.add(message.params.toolCallId)
           io.event({ kind: 'diagnostic', text: 'ZCode 额外权限请求已拒绝' })
         }
       } else if (message.method === 'interaction/requestUserInput') {
@@ -356,7 +362,18 @@ export async function runNativeZcode(config, io) {
     } else if (event.type === 'tool.updated') {
       finishThought()
       if (payload.kind === 'batch') {
-        if (payload.errorCount > 0) failure('ZCode 工具批次失败')
+        const deniedInBatch = (Array.isArray(payload.toolCallIds) ? payload.toolCallIds : []).filter((id) =>
+          deniedTools.has(id),
+        )
+        if (payload.errorCount > deniedInBatch.length) failure('ZCode 工具批次失败')
+        // A denied call gets no result frame of its own; the batch closes it.
+        for (const id of deniedInBatch) {
+          const value = tools.get(id)
+          if (!value || value.done) continue
+          tools.set(id, { ...value, done: true })
+          responses.tool({ kind: 'tool', step: value.step, text: value.name, state: 'FAILED', detail: JSON.stringify(payload),
+            toolCall: { callId: id, name: value.name, ...(value.input === undefined ? {} : { input: value.input }) } })
+        }
       } else if (nonempty(payload.toolCallId)) {
         assistantSegmentOpen = false
         const previous = tools.get(payload.toolCallId) ?? { step: step++, name: '工具', done: false }
@@ -370,8 +387,8 @@ export async function runNativeZcode(config, io) {
         const value = { ...previous, name: payload.toolName ?? previous.name, done, assistantMessageId, input,
           inputFromStream: explicitInput ? false : cachedInput !== undefined || previous.inputFromStream }
         tools.set(payload.toolCallId, value)
-        if (error) failure('ZCode 工具执行失败')
-        io.event({
+        if (error && !deniedTools.has(payload.toolCallId)) failure('ZCode 工具执行失败')
+        responses.tool({
           kind: 'tool',
           step: value.step,
           text: value.name,
@@ -387,7 +404,9 @@ export async function runNativeZcode(config, io) {
       event.type === 'permission.resolved' &&
       (payload.decision === 'deny' || payload.decision?.decision === 'deny')
     ) {
-      failure('ZCode 权限请求被拒绝')
+      // The CLI may recover from a denial; the turn then ends as unverified, not failed.
+      denied = true
+      if (nonempty(payload.toolCallId)) deniedTools.add(payload.toolCallId)
     } else if (event.type === 'turn.failed') {
       terminal = event
       failure('ZCode 轮次执行失败')
@@ -534,7 +553,9 @@ export async function runNativeZcode(config, io) {
     if (io.signal.aborted) failure('任务已停止')
     const closed = await peer.request('session/close', { sessionId }, { jsonrpc: false })
     if (closed?.closed !== true) throw new Error('ZCode session did not close')
-    io.result(failed ? 'ERROR' : 'SUCCESS', response, failed, 'run')
+    if (failed) io.result('ERROR', response, failed, 'run')
+    else if (denied) io.result('UNCERTAIN', response, ZCODE_DENIED, 'run')
+    else io.result('SUCCESS', response, undefined, 'run')
   } finally {
     io.signal.removeEventListener('abort', cancel)
     active = false

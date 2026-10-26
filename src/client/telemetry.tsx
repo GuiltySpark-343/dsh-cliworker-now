@@ -2,30 +2,32 @@ import { IconDatabaseOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitive
 import { compactTokens, type Telemetry, type TokenUsage } from '../shared/telemetry.ts'
 import type { Worker } from '../shared/types.ts'
 import { StatPopover } from './stat-popover.tsx'
+import { formatLocale, t, useT, type MessageKey } from './i18n.ts'
 
 export function UsageIndicator({ usage, reply = false, providerCredits, creditsBased = false }: {
   usage?: TokenUsage; reply?: boolean; providerCredits?: number; creditsBased?: boolean
 }) {
+  const t = useT()
   const scope = {
-    response: '本次回复',
-    run: '本轮任务',
-    session: 'CLI 会话累计',
-    reported: 'CLI 报告值（不跨轮重复相加）',
+    response: t('本次回复'),
+    run: t('本轮任务'),
+    session: t('CLI 会话累计'),
+    reported: t('CLI 报告值（不跨轮重复相加）'),
   }
   const credits = typeof providerCredits === 'number' && Number.isFinite(providerCredits) && providerCredits >= 0 ? providerCredits : undefined
   const creditUsage = creditsBased || credits !== undefined
   const total = creditUsage
-    ? `${credits === undefined ? '—' : credits > 0 && credits < 0.0001 ? '<0.0001' : credits.toLocaleString('zh-CN', { maximumFractionDigits: 4 })} 积分`
+    ? `${credits === undefined ? '—' : credits > 0 && credits < 0.0001 ? '<0.0001' : credits.toLocaleString(formatLocale(), { maximumFractionDigits: 4 })}${t(' 积分')}`
     : usage ? `${compactTokens(usage.total)} tok` : '— tok'
   return (
     <StatPopover
-      label={reply ? `${creditUsage ? '积分用量' : '用量'} ${total}` : total}
+      label={reply ? `${creditUsage ? t('积分用量') : t('用量')} ${total}` : total}
       className={`cwn-stat cwn-usage${reply ? ' cwn-reply-usage' : ''}`}
       trigger={
         <>
           <IconDatabaseOutlineRegular size={14} />
           <span>
-            {reply ? creditUsage ? '积分用量 ' : '用量 ' : ''}
+            {reply ? creditUsage ? t('积分用量 ') : t('用量 ') : ''}
             {total}
           </span>
         </>
@@ -34,45 +36,45 @@ export function UsageIndicator({ usage, reply = false, providerCredits, creditsB
       <div className="cwn-stat-title">
         <span>
           <IconDatabaseOutlineRegular size={14} />
-          {creditUsage ? '积分用量' : 'Token 用量'}
+          {creditUsage ? t('积分用量') : t('Token 用量')}
         </span>
-        <span>{creditUsage ? credits?.toLocaleString('zh-CN', { maximumFractionDigits: 12 }) ?? '—' : usage ? `${usage.total.toLocaleString('en-US')} tok` : '—'}</span>
+        <span>{creditUsage ? credits?.toLocaleString(formatLocale(), { maximumFractionDigits: 12 }) ?? '—' : usage ? `${usage.total.toLocaleString('en-US')} tok` : '—'}</span>
       </div>
       <div className="cwn-stat-rule" />
-      {credits !== undefined && <dl className="cwn-stat-details"><dt>本轮积分</dt><dd>{credits.toLocaleString('zh-CN', { maximumFractionDigits: 12 })}</dd></dl>}
+      {credits !== undefined && <dl className="cwn-stat-details"><dt>{t('本轮积分')}</dt><dd>{credits.toLocaleString(formatLocale(), { maximumFractionDigits: 12 })}</dd></dl>}
       {creditUsage ? null : usage ? (
         <dl className="cwn-stat-details">
-          <dt>统计范围</dt>
+          <dt>{t('统计范围')}</dt>
           <dd>{scope[usage.scope]}</dd>
           {usage.input !== undefined && (
             <>
-              <dt>输入</dt>
+              <dt>{t('输入')}</dt>
               <dd>{usage.input.toLocaleString('en-US')} tok</dd>
             </>
           )}
           {usage.cacheRead !== undefined && (
             <>
-              <dt>缓存读取</dt>
+              <dt>{t('缓存读取')}</dt>
               <dd>{usage.cacheRead.toLocaleString('en-US')} tok</dd>
             </>
           )}
           {usage.output !== undefined && (
             <>
-              <dt>输出</dt>
+              <dt>{t('输出')}</dt>
               <dd>{usage.output.toLocaleString('en-US')} tok</dd>
             </>
           )}
         </dl>
       ) : (
-        <dl className="cwn-stat-details"><dt>用量</dt><dd>—</dd></dl>
+        <dl className="cwn-stat-details"><dt>{t('用量')}</dt><dd>—</dd></dl>
       )}
     </StatPopover>
   )
 }
 const contextRows = [
-  { key: 'systemTokens', label: '系统提示词', color: 'system' },
-  { key: 'toolTokens', label: '工具定义', color: 'tools' },
-  { key: 'messageTokens', label: '对话消息', color: 'messages' },
+  { key: 'systemTokens', label: '系统提示词' as MessageKey, color: 'system' },
+  { key: 'toolTokens', label: '工具定义' as MessageKey, color: 'tools' },
+  { key: 'messageTokens', label: '对话消息' as MessageKey, color: 'messages' },
 ] as const
 const count = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
@@ -102,6 +104,7 @@ export function contextFigures(telemetry?: Telemetry) {
 }
 /** rc.2 ContextMeter presentation, driven exclusively by this Worker's evidence. */
 export function ContextDetails({ telemetry }: { telemetry?: Telemetry }) {
+  useT()
   const { used, capacity, percent, rows, segments } = contextFigures(telemetry)
   const source = [
     telemetry?.contextSource,
@@ -113,7 +116,7 @@ export function ContextDetails({ telemetry }: { telemetry?: Telemetry }) {
   return (
     <>
       <div className="cwn-context-header" title={source || undefined}>
-        <span className="cwn-context-headline">上下文已用</span>
+        <span className="cwn-context-headline">{t('上下文已用')}</span>
         <span className="cwn-context-percent">{percent === undefined ? '—' : `${percent}%`}</span>
         <strong>
           {used === undefined ? '—' : `${telemetry?.contextEstimated ? '~' : ''}${compactTokens(used)}`} /{' '}
@@ -138,9 +141,9 @@ export function ContextDetails({ telemetry }: { telemetry?: Telemetry }) {
           <div className="cwn-context-row" key={row.key}>
             <dt>
               <span className={`cwn-context-swatch cwn-context-${row.color}`} aria-hidden="true" />
-              {row.label}
+              {t(row.label)}
             </dt>
-            <dd title={row.value === undefined ? 'CLI 未提供该分项' : telemetry?.contextBreakdown?.source}>
+            <dd title={row.value === undefined ? t('CLI 未提供该分项') : telemetry?.contextBreakdown?.source}>
               {row.value === undefined
                 ? '—'
                 : `${telemetry?.contextBreakdown?.estimated ? '~' : ''}${compactTokens(row.value)}`}
@@ -160,8 +163,9 @@ export function ComposerTelemetry({
   telemetry?: Telemetry
   statusLabel: string
 }) {
+  useT()
   const { percent } = contextFigures(telemetry)
-  const label = percent === undefined ? '上下文占用暂不可用' : `上下文已用 ${percent}%`
+  const label = percent === undefined ? t('上下文占用暂不可用') : t('上下文已用 {percent}%', { percent })
   return (
     <div className="cwn-compose-state cwn-telemetry">
       <span className="cwn-stat cwn-run-stat">

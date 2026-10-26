@@ -10,6 +10,7 @@ import {
 } from './harness-telemetry-data.ts'
 import type { WorkerSnapshot } from '../shared/types.ts'
 import { telemetryAvailability } from '../shared/native-request-state.ts'
+import { t } from './i18n.ts'
 
 /** Compatibility type for the explicit local DSH extension, not a fallback renderer. */
 export type HarnessProjectionSources = {
@@ -80,17 +81,17 @@ export function installHarnessNativeTelemetry(
 
   return {
     attach(reference, binding) {
-      if (disposed) throw new Error('CLI 会话统计桥已卸载')
+      if (disposed) throw new Error(t('CLI 会话统计桥已卸载'))
       const generation = reference.binding
       if (reference.sessionId !== binding.sessionId || generation.sessionId !== binding.sessionId ||
         !sameOwner(bindings.get(binding.sessionId), binding))
-        throw new Error('CLI 统计绑定与原生子会话引用不一致')
+        throw new Error(t('CLI 统计绑定与原生子会话引用不一致'))
       let entry = entries.get(generation)
-      if (entry && !sameOwner(entry.owner, binding)) throw new Error('原生会话已有其他 Worker 的统计来源')
+      if (entry && !sameOwner(entry.owner, binding)) throw new Error(t('原生会话已有其他 Worker 的统计来源'))
       if (!entry) {
         const provider = ctx.uiSession as unknown as Partial<UiSessionProjectionProvider>
         if (typeof provider.provideProjections !== 'function')
-          throw new Error('当前宿主缺少原生会话统计数据接口，请更新宿主后重新打开。')
+          throw new Error(t('当前宿主缺少原生会话统计数据接口，请更新宿主后重新打开。'))
         const sources = {
           telemetryAvailability: observable<NativeTelemetryProjections['telemetryAvailability']>(telemetryAvailability(true)),
           externalRequestState: observable(EMPTY.externalRequestState),
@@ -141,7 +142,7 @@ export function installHarnessNativeTelemetry(
           const stream = api.$stream<string>({
             name: `CLI Worker statistics ${binding.parentSessionId}/${binding.workerId}`,
             open: (signal) => api.cliworker.watch(binding.parentSessionId, binding.workerId!, signal),
-            ended: () => new Error('CLI 统计连接已结束'),
+            ended: () => new Error(t('CLI 统计连接已结束')),
           })
           let streamDisposed = false
           stopStream = () => {
@@ -155,10 +156,10 @@ export function installHarnessNativeTelemetry(
               for await (const item of stream) {
                 if (!created.watching || created.closed) break
                 if (!sameOwner(bindings.get(binding.sessionId), created.owner))
-                  throw new Error('CLI 统计归属已变化')
+                  throw new Error(t('CLI 统计归属已变化'))
                 const snapshot = JSON.parse(item.value) as WorkerSnapshot
                 const observed = nativeTelemetryFromSnapshot(created.owner, snapshot)
-                if (!observed) throw new Error('CLI 统计回执与当前 Worker 不一致')
+                if (!observed) throw new Error(t('CLI 统计回执与当前 Worker 不一致'))
                 publish(nativeTelemetryProjections(observed.cli, observed.telemetry, observed.externalTurnUsage, observed.activeRunId, observed.lifecycle))
                 item.accept()
               }

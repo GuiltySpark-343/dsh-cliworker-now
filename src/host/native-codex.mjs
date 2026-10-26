@@ -54,9 +54,11 @@ function publicTool(item) {
 
 export async function runNativeCodex(config, io) {
   const peer = await io.openStdio(nativeCodexArgv(config), { env: config.env, cwd: config.project })
-  let threadId, turnId, response = '', failure, completed = false, started = false
+  let threadId, turnId, response = '', failure, denied = false, completed = false, started = false
   const steps = new Map(), messages = new Map(), summaries = new Map(), finished = new Set(), tools = new Set(), receipts = new Map()
   const steerReceipts = new Map(), toolItems = new Map(), toolOutput = new Map()
+  // Items whose approval was declined; their declined/failed completion is the denial itself.
+  const deniedItems = new Set()
   const runUsage = new CodexRunUsage(config.conversationId)
   const step = (id) => {
     if (!steps.has(id)) steps.set(id, steps.size)
@@ -118,7 +120,7 @@ export async function runNativeCodex(config, io) {
       tools.delete(item.id)
       // Every typed tool except webSearch has an explicit native completion status.
       const failed = (item.type !== 'webSearch' && item.status !== 'completed') || item.success === false || !!item.error || !!item.failure || (typeof item.exitCode === 'number' && item.exitCode !== 0)
-      if (failed) markFailure('原生工具失败或权限被拒绝')
+      if (failed && !deniedItems.has(item.id)) markFailure('原生工具失败或权限被拒绝')
       io.event({ kind: 'tool', step: step(item.id), text: item.command ?? item.tool ?? item.type, state: failed ? 'FAILED' : 'COMPLETED', detail: JSON.stringify(safeItem(item)), toolCall: { ...publicTool(item),
         ...(item.type === 'commandExecution' && item.aggregatedOutput == null && toolOutput.has(item.id) ? { output: toolOutput.get(item.id) } : {}) } })
     }
@@ -135,8 +137,13 @@ export async function runNativeCodex(config, io) {
     const params = object(message.params) ? message.params : {}
     // Server requests are denied even if native configuration would normally approve them.
     if (message.id !== undefined) {
-      markFailure('CLI 请求额外交互授权，插件未批准')
-      io.event({ kind: 'diagnostic', text: 'Codex 原生交互请求已拒绝', state: 'FAILED' })
+      const approval = ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval'].includes(message.method)
+      if (approval) {
+        denied = true
+        if (typeof params.itemId === 'string') deniedItems.add(params.itemId)
+      }
+      else markFailure('CLI 请求额外交互授权，插件未批准')
+      io.event({ kind: 'diagnostic', text: 'Codex 原生交互请求已拒绝', ...(approval ? {} : { state: 'FAILED' }) })
       if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(message.method))
         return peer.send({ id: message.id, result: { decision: 'decline' } })
       else if (message.method === 'item/permissions/requestApproval')
@@ -263,7 +270,9 @@ export async function runNativeCodex(config, io) {
     const outcome = await peer.done
     io.signal?.throwIfAborted()
     if (outcome.exitCode !== 0) markFailure('Codex 原生进程非零退出')
-    io.result(failure ? 'ERROR' : 'SUCCESS', response, failure, 'response')
+    if (failure) io.result('ERROR', response, failure, 'response')
+    else if (denied) io.result('UNCERTAIN', response, 'Codex 额外授权已拒绝，但 CLI 报告本轮已完成；结果待核实，请先核查实际产物，不要自动重试', 'response')
+    else io.result('SUCCESS', response, undefined, 'response')
   } finally {
     releaseSteer?.()
     io.signal?.removeEventListener('abort', abort)

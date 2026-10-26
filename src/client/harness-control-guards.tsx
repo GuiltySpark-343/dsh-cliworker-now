@@ -13,11 +13,13 @@ import { NativeCliModelDirectory } from './native-cli-model-directory.ts'
 import { useWorkers, value, type API } from './workers.ts'
 import { active, type TaskMode, type Worker } from '../shared/types.ts'
 import { workerPermissionOptions, type WorkerPermissionState } from '../shared/worker-permissions.ts'
+import { t, useT, type MessageKey } from './i18n.ts'
+import { hostText } from './operation-error.ts'
 
 const seats = {
-  'conversation.input.model': { feature: 'model', label: '模型与强度' },
-  'conversation.input.permission': { feature: 'permission', label: '权限' },
-  'conversation.input.plan': { feature: 'plan', label: '规划模式' },
+  'conversation.input.model': { feature: 'model', label: '模型与强度' as MessageKey },
+  'conversation.input.permission': { feature: 'permission', label: '权限' as MessageKey },
+  'conversation.input.plan': { feature: 'plan', label: '规划模式' as MessageKey },
 } as const
 
 type Feature = (typeof seats)[keyof typeof seats]['feature']
@@ -74,12 +76,12 @@ function CliControl({
   const nativeQueued = !!(inbox?.['next-turn'].length || inbox?.['next-step'].length)
   const reason =
     connecting || error || !worker
-      ? error || '正在读取当前 CLI 设置'
+      ? error || t('正在读取当前 CLI 设置')
       : nativeBusy || active(worker.status) || snapshot.selectedBusy
-        ? '请等待本轮结束后再修改设置'
+        ? t('请等待本轮结束后再修改设置')
         : nativeQueued || snapshot.queuedFollowups?.length
-          ? '请先发送或移除待发消息（包含已暂停消息），再修改设置'
-          : snapshot.resumeBlockedReason
+          ? t('请先发送或移除待发消息（包含已暂停消息），再修改设置')
+          : hostText(snapshot.resumeBlockedReason)
   const locked = props.locked || !!reason || !!unavailable
   const [directory, setDirectory] = useState<NativeCliModelDirectory>()
   const initialWorker = useRef(worker)
@@ -158,7 +160,7 @@ function CliControl({
       ) as Worker
       if (request.signal.aborted || !mounted.current) return false
       if (saved.id !== worker.id || saved.parentSessionId !== binding.parentSessionId)
-        throw new Error('收到不匹配的 Worker 设置')
+        throw new Error(t('收到不匹配的 Worker 设置'))
       if (version === permissionVersion.current)
         setPermissionState({ authority: parentAuthority, value: { ...permission, currentValue: saved.mode } })
       return true
@@ -218,7 +220,7 @@ function CliControl({
         return mode ? selectPermission(mode) : Promise.resolve(false)
       },
       exitPlanMode: async () =>
-        (await selectPermission('accept-edits')) ? null : '权限设置未保存，请核对当前任务与权限状态',
+        (await selectPermission('accept-edits')) ? null : t('权限设置未保存，请核对当前任务与权限状态'),
     })
   }
   const explanation = unavailable || reason || (feature !== 'model' ? permission?.reason : undefined)
@@ -251,7 +253,7 @@ export function installHarnessControlGuards(
 ): () => void {
   let held = controlGuards.get(ctx.slots)
   if (held && (held.bindings !== bindings || held.api !== api))
-    throw new Error('原生 CLI 控件已由另一组会话权限绑定接管')
+    throw new Error(t('原生 CLI 控件已由另一组会话权限绑定接管'))
   if (!held) {
     held = { bindings, api, owners: 0, release: registerHarnessControlGuards(ctx, bindings, api) }
     controlGuards.set(ctx.slots, held)
@@ -293,6 +295,7 @@ function registerHarnessControlGuards(
         const Native = next.component as NativeControl
         const { feature, label } = seats[name]
         function BoundControl(props: ControlProps) {
+          useT()
           const binding = useHarnessSessionBinding(bindings, props.sessionId)
           if (!binding) return createElement(Native, props)
           const unavailable =
@@ -330,7 +333,7 @@ function registerHarnessControlGuards(
                 api={api}
               />
             )
-          const reason = binding.reasons?.[feature] || `${label}正在等待 CLI 连接信息`
+          const reason = hostText(binding.reasons?.[feature]) || t('{label}正在等待 CLI 连接信息', { label: t(label) })
           return (
             <Tooltip label={reason} side="top" portal>
               <span tabIndex={0} aria-label={reason}>

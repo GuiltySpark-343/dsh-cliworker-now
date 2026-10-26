@@ -2575,3 +2575,144 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 安装包：`scripts/package-release.mjs` 生成公开清单（`private:false`、无 scripts/devDependencies/packageManager、无 store peer），系统 npm `--ignore-scripts` 打包为 `dsh-cliworker-now-0.8.3.tgz`，846 文件，18104242 字节，SHA-256 `074ed63ebc11caa7573561670233cbd3a1cff7ad088bb9ee827a37af454ec176`；扫描无私人路径或局域网地址。独立 HOME/DSH_HOME 用官方 0.2.1-rc.3 的 `dsh plugin --profile web add` 安装前一版 tgz（仅 README 已知限制措辞不同，其余文件逐字节相同）exit 0、版本 0.8.3；回环 Web 中插件启用、6 个组件 Running，CLI Worker NOW 面板正常，pageerror/console error 均为 0，进程与端口已清理。安装器有 peer 警告，不阻止加载。
 - 发布：`main` 与注释 Tag `v0.8.3`（提交 `7e3e9d4`）已推送，[GitHub CI 40080947668](https://github.com/SuperWheel/dsh-cliworker-now/actions/runs/40080947668)（Windows native runtime）成功。[GitHub Release v0.8.3](https://github.com/SuperWheel/dsh-cliworker-now/releases/tag/v0.8.3) 含 tgz、SHA256SUMS.txt 与脱敏 package-verification.json，远端下载后 `shasum -c` 两项 OK。
 - npm：用户本人 `npm login` 并完成网页二次验证后，同一 tgz 发布返回 `+ dsh-cliworker-now@0.8.3`（npm shasum `8b9b815d9a592f994700dfa079263fcdb5aa908d`）。发布后立即回查 registry 仍返回 404、`latest` 仍为 0.8.2（npm 提示包处理中），公开可安装状态待后续回查确认。
+
+
+## 2026-10-25 通用设置页与总并发上限（分支 `feat/general-settings`，未发布）
+
+- 范围：设置导航「智能体设置」上方新增「CLI Worker 设置」页；Host `general-settings.json`（0600）保存所有 CLI 共用的「最高同时对话数」（1–8，缺省沿用部署配置），保存后立即重新调度排队任务。OpenSpec `add-general-settings-page`。界面语言与同目录写任务隔离副本并行在后续分支实现。
+- 实际执行：`vitest run tests/general-settings.test.ts tests/cli-settings.test.ts tests/settings-dialog.test.tsx tests/storage.test.ts` **4 文件 335 项通过**（含新增导航测试）；`node scripts/build-preview.mjs` 通过（Host/Client 类型检查与隔离构建）；`openspec validate add-general-settings-page --strict` 通过。
+- 说明：根目录 `typecheck` 读取的是 Desktop 链接的 `lib/` 生成类型，未正式构建前会报新增 Remote 不存在；本次未运行正式 `build`，未更新 Desktop。
+- 未执行：Desktop 实机界面（明暗主题、窄屏）；真实 CLI 多任务并发；全量 suite。
+
+
+## 2026-10-25 界面中英双语与语言切换（分支 `claude/i18n-english-482e08`，未发布）
+
+- 范围：「CLI Worker 设置」新增「语言」分区（跟随 DSH / 中文 / English，默认跟随），与并发上限同存 `general-settings.json`；Host 快照附带非默认语言，所有已打开面板实时同步。Client 接入 Harness locale（`cliworker` 命名空间，生命周期内注册/订阅、卸载注销），抽取 `src/client` 用户可见中文并提供完整英文（词典 627 条，其中约 90 条为 Host 原文映射）。OpenSpec `add-client-i18n`。版本号未改。
+- 基线（改动前，本工作树）：全量 `vitest run` **10 失败 / 4283 通过 / 13 跳过**；失败为 `tests/build-dependencies.test.ts` 2 项（缺少正式构建生成的 `lib/types/host/index.js`）与 `tests/native-zcode.test.ts` 8 项（模拟账号 header；改动后同文件通过，判定为不稳定）。
+- 实际执行：
+  - 全量 `node node_modules/vitest/vitest.mjs run`：**215 文件通过、1 失败、3 跳过；4312 通过、2 失败、13 跳过**。仅上述 build-dependencies 2 项失败，与基线相同；既有中文断言测试在默认语言下通过。
+  - 收尾修改后复跑 `tests/client-i18n.test.tsx tests/general-settings.test.ts tests/settings-dialog.test.tsx tests/panel.test.tsx tests/client-conversation-features.test.tsx`：**5 文件 362 项通过**。
+  - `node scripts/build-preview.mjs`：通过（Host/Client 类型检查与隔离构建）。
+  - `openspec validate add-client-i18n --strict --no-interactive`：通过。`git diff --check`：通过。
+- 新增测试：语言持久化（0600、重载、`null` 恢复默认）与非法补丁；Runtime 快照字段；词典完整性（英文非空、占位符一致、英文不含中文）；跟随/显式/非法偏好；模拟 locale 服务下随 Harness 语言实时切换与卸载注销；Host 文案映射与未知原文保留；设置窗口保存 English 后整体切换；面板随快照语言切换。locale 服务与 Cordis 上下文均为测试内模拟。
+- 未执行：DSH Desktop 实机英文界面（窄栏换行、明暗主题、Windows）；真实 Harness 语言切换下的 `ctx.locale` 行为；正式 `build`（未更新 Desktop）；真实模型调用。
+- 已知限制（保持中文）：未收录的 Host/CLI 错误、Host 生成的标题与摘要、内置角色预设名称与内容、默认名称 `智能体-xxx`、发给 CLI 的附件说明；给主 Agent 的工具描述与提示词不在范围内。并行会话（同目录写任务隔离副本并行）的新增文案在合并时补入词典。
+
+## 2026-10-25 同目录写任务隔离副本并行（分支 `claude/isolated-parallel-writes-459fae`，未发布）
+
+- 范围：「CLI Worker 设置 → 任务调度」新增「同目录写任务并行」开关（缺省关闭）。开启后，仅在同目录写冲突时为新写任务在插件私有目录创建 APFS 克隆副本，任务结束后由任务卡或 `cliworker_merge` / `cliworker_discard` 三方合并或丢弃；合并有冲突时项目零写入、副本保留，结果为未提交改动。OpenSpec `add-isolated-parallel-writes`；无新增依赖（diff3 自实现）。
+- 实际执行：`vitest run` 隔离相关 8 文件（diff3、isolated-workspace、isolated-runtime、isolation-ui、general-settings、settings-dialog、storage、cli-settings）**373 项通过**；`tests/isolated-runtime.test.ts` 修复复制完成后才收到停止的挂起后连续运行 10 次均 10/10 通过；`node scripts/build-preview.mjs` 通过；`openspec validate add-isolated-parallel-writes --strict` 通过；`git diff --check` 通过。
+- 全量 suite：4329 通过、13 跳过、2 失败；失败均为 `tests/build-dependencies.test.ts` 读取正式构建产物 `lib/typert.remote-client.js`，本工作树未运行正式 `build` 故不存在，与本变更无关。
+- 未执行：真实 CLI 与模型、DSH Desktop 实机界面、Windows 实机（路径分隔符仅单元测试）、Linux reflink；未运行正式 `build`，未更新 Desktop。
+
+## 2026-10-25 合并 i18n 与隔离副本并行到 `feat/general-settings`（未发布）
+
+- 合并：`claude/i18n-english-482e08`（9f9e87a、fb178f8、641b45b）无冲突合入；`claude/isolated-parallel-writes-459fae`（07cfe97、5d20d71）在 10 个文件冲突，均为两边并列新增：`GeneralSettings` 同时含 `language` 与 `isolatedParallelWrites`，存储补丁两字段共用一个合并逻辑；通用设置页以 i18n 版本为底，按其逐字段保存反馈加入并行开关；旧 Host 缺少 `isolatedParallelWrites` 时按关闭读取。
+- 文案：隔离副本的设置开关、任务卡状态与按钮、合并/丢弃弹窗改用 `t()`；Host 的副本状态、排队原因、冲突原因、过程行与错误经 `hostText()` 映射。`hostPatterns` 改为支持多参数，`reason` 捕获再次映射（如「项目文件数超过隔离副本上限（N 个）；已改为排队…」整体译出）；路径与系统错误细节保持原文。冲突列表连接符改为语言无关的 ` — `（词典规则要求键含中文）。给 CLI 的副本提示、主 Agent 工具描述与丢弃确认询问仍为中文。
+- 实际执行：`vitest run tests/isolation-ui.test.tsx tests/client-i18n.test.tsx tests/general-settings.test.ts tests/settings-dialog.test.tsx` **4 文件 225 项通过**（新增英文下的任务卡/弹窗与 Host 副本文案映射测试）；`node scripts/build-preview.mjs` 通过；全量 `vitest run` 第一次 **4350 通过、4 失败、13 跳过**，失败均为 `tests/native-zcode.test.ts` 的模拟账号 header 用例（单独运行 3 次均 24/24 通过，与 i18n 分支基线记录的同类不稳定一致），第二次全量 **220 文件、4354 通过、13 跳过、0 失败**；`openspec validate --all --strict` **26/26**；`git diff --check` 通过。
+- 未执行：正式 `build` 与 Desktop 更新；DSH Desktop 实机（中英界面、并行开关、任务卡合并/丢弃、明暗主题、窄屏、Windows）；真实 CLI 与模型的副本运行与合并。
+
+## 2026-10-25 Desktop 实机验收：通用设置、英文界面与隔离副本（`feat/general-settings` 8cf3154，未发布）
+
+- 准备：CLI Worker 无运行或排队的 Worker（54 完成、9 失败、3 中断），后续消息只有已暂停项，Host 进程无 CLI 子进程。先在 Desktop 运行中正式 `build`（11:12），插件 Host 未热重载（锁 token 不变），新 Remote 需要重启；Desktop 退出时提示「当前正在运行的任务将会中断」，经用户确认后退出（锁随即释放）并重新打开，Host 以新构建启动（新锁），日志无新错误。`profiles/desktop/node_modules/dsh-cliworker-now` 链接本仓库。
+- GUI（Codex gpt-6-astra high，Computer Use）：
+  - 通过：导航「CLI Worker 设置」位于「智能体设置」正上方；页面含「语言」「任务调度」，初始为跟随 DSH、`2（默认）`、并行关闭，说明文字与设计一致。切换 English 后设置窗口立即整体变为英文（导航、标题、并行说明、ZCode/Codex 页），保存反馈正确；并行开关开启/关闭反馈正确；最后恢复为跟随 DSH（回到中文）与并行关闭。
+  - 通过：同项目两个 ZCode 写任务（GLM-5.3-Flash · Low），`zcode-append-b` 显示「Running in an isolated copy」→「Isolated copy ready to merge」与 Merge/Discard；Merge 弹窗文案正确，结果「Wrote back 1 and deleted 0 files…」，列出 b.txt，副本目录已清理。Discard 弹窗文案正确，确认后状态行与按钮消失（无单独成功提示）。
+  - 英文模式仍为中文：已有智能体预设名称与描述（已知限制）；插件设置问题卡标题与选项「ZCode 模型」「选择模型」（Host 生成，待补）；「输入你的答案」「跳过」「提交」及子会话内「处理失败」「已调用工具」「代码块」「允许编辑」为 Harness 原生控件，随 Harness 语言（中文）。未逐页检查全部 CLI 页；未打开并发下拉核对 1–8。
+- 落盘核对（本会话直接检查）：a.txt `alpha/one`、b.txt `beta/two`（合并写回）、c.txt `gamma/three`、d.txt `delta/four`。Worker 状态：a 完成（主目录）、b 完成且隔离 `released`、c `failed`（主目录，`ZCode 额外权限请求已拒绝`：Bash `echo >>` 被拒后改用 Edit 成功，运行仍判失败；该判定为 v0.8.1 起的既有 ZCode 行为）、d 完成且第二个副本 `ready` 残留。
+- **发现缺陷：隔离可被绕过。** d 的副本丢弃后，主 Agent 把「改动在隔离副本中」理解为失败，经 `cliworker_followup` 要求「必须在真实目录、不要在隔离副本中操作」；该轮 cwd 仍为新副本，但 ZCode Edit 直接写入 `/Users/leeyl/AI-Project/cliworker-isolation-test/d.txt` 并成功，副本内 d.txt 仍为 `delta`。隔离只靠给 CLI 的提示词，ZCode 原生权限允许写 cwd 外的绝对路径；并行时主目录可能被同时改写。主 Agent 收到的结果也未说明「改动待用户合并」。
+- 未解决：首次派遣的 ZCode 设置问题卡在 26 秒内被回答（GLM-5.3-Flash · Low），Codex 称未提交，会话记录未见主 Agent 代答，来源未查明。测试目录、测试会话与 d 的残留副本保留待处理。
+
+## 2026-10-25 主 Agent 合并隔离副本、设置说明精简与滚动条自动隐藏（`feat/general-settings`，未发布）
+
+- 用户调整：任务卡不显示隔离副本状态与「合并」「丢弃」；合并只由主 Agent 调用 `cliworker_merge`，不确定的冲突用原生询问交给用户。移除 `IsolationDialog`、Remote `mergeIsolation`/`discardIsolation` 及相关字典条目。
+- 完成通知 `guidance` 与 `cliworker_status` 对待合并副本说明路径、主目录未改动、核查后调用 `cliworker_merge`、不要让 CLI 在原目录重做（针对实测的绕过问题，仅提示，未做强制隔离）。
+- `mergeIsolatedWorkspace` 支持逐文件 `resolutions`；结构性冲突只能保留项目版本。`cliworker_merge` 冲突 ≤6 个逐个询问，更多一次性询问；暂不合并、未作答或自由文本均不写入、保留副本。
+- 设置「同目录写任务并行」说明缩为一行，开关保存成功不再显示确认文字；设置窗口左右两侧滚动条只在滚动时（及指针在滑块上时）显示，900ms 后隐藏。
+- 验证：相关回归 + 新增 `tests/isolated-merge-decisions.test.ts`、`tests/settings-scrollbar.test.tsx`；`build:preview` 隔离类型检查与构建通过；全量 `vitest run` 222 文件通过、3 跳过（4366 通过、13 跳过）；OpenSpec 严格校验 26/26。
+- 未执行：真实主 Agent 合并与冲突询问（需真实模型调用）；暗色主题与窄屏；Windows/Linux。
+
+## 2026-10-25 主 Agent 整合实测与额外授权拒绝后标为待核实（`feat/general-settings`，未发布）
+
+- 整合方案实测（Desktop 重启后新 Host 12:49；Codex gpt-6-astra high 驱动界面；ZCode 沿用 GLM-5.3-Flash·Low，用户授权真实调用）：两个 ZCode 任务各在 merge.txt 末尾加一行，A 在主目录、B 在隔离副本。主 Agent 调用 `cliworker_merge` 两次：首次返回 `needs_integration`（原因“两边改动了相同或相邻的行”，choices project/copy/content），第二次 `use=content` 写入整合内容，返回 merged。落盘核对（本会话直接读文件）：merge.txt 为原 5 行 + `A done` + `B done`；副本状态 `released`。界面未出现“冲突”字样和问题卡，任务卡无副本状态与合并按钮。
+- 同次实测两张任务卡均为「失败」：ZCode 尝试 shell 追加被插件拒绝（`ZCode 额外权限请求已拒绝`）后改用编辑完成。原始帧：requestPermission(toolCallId) → permission.resolved(deny) → batch errorCount 1。按用户决定改为结果待核实（OpenSpec `report-denied-permission-as-unverified`）。Codex/Hermes/HTTP 两个 runner 由 Codex gpt-6.1-sol 子代理并行实施，主会话审阅并补充 Codex 被拒条目豁免。
+- 验证：runner 相关 5 个测试文件 243 通过；`build:preview` 类型检查与构建通过；全量 222 文件通过、3 跳过（4384 通过、13 跳过）；OpenSpec 严格校验 27/27。
+- 未执行：拒绝后标为待核实的真实 CLI 复验（需重启 Desktop）；Hermes/HTTP 系审批不带工具身份，有拒绝时其他工具失败也只到待核实。
+
+## 2026-10-25 拒绝授权后结果待核实的真实复验（`feat/general-settings` 32752a8，未发布）
+
+- 第二次复验（13:09，fa45247）任务被停止：“CLI 新响应先于当前响应的完成边界”。原始帧：ZCode 对只读 Read 先发 scheduled/started，再发该消息 model_complete；被动工具行落在未完成响应之后。修复：`ZcodeResponseTracker.tool()` 在响应未完成时暂存工具事件，完成后按序放出（原生 runner 与旧适配器共用）；新增夹具 `tool-before-complete`，撤掉修复时该测试失败。
+- 验证：conversation/native/harness/zcode 相关 77 个测试文件（1259 通过、4 跳过）；`build:preview` 与正式构建通过。
+- 第三次真实复验（确认无活动任务后重启 Desktop，新 Host 13:19；Codex gpt-6-astra high 驱动界面；ZCode 沿用 GLM-5.3-Flash·Low，用户授权）：任务卡「结果待核实」；本会话读取 Worker 记录为 `uncertain`、结果帧 UNCERTAIN，Bash 步骤失败，Read/Edit 均在响应完成之后；deny.txt 实际为 alpha、beta、gamma。主 Agent 独立读文件后汇报一致。
+- 遗留：任务详情同时显示「处理失败 / 本轮运行失败 / CLI_RUN_FAILED」，与待核实措辞不一致；其他 CLI 的真实拒绝场景未复验。
+- 用户要求待核实轮次不显示「处理失败 / CLI_RUN_FAILED」（b5f50f2）：Harness 只有 stop/tool-calls/max-tokens/aborted/error 五种结束原因，error 固定渲染为处理失败；改为 uncertain 与 completed 同样以 stop 收尾，说明由插件已有警示提示显示。新增流测试（撤掉修改时失败）；相关 80 个测试文件 1341 通过、4 跳过；`build:preview`、正式构建、OpenSpec 严格校验 27/27 通过。
+- Desktop 复验（新 Host 15:05，ZCode 沿用 GLM-5.3-Flash·Low）：任务卡「结果待核实」，详情只有待核实警示，未见处理失败、本轮运行失败或 CLI_RUN_FAILED；Worker `uncertain`，deny.txt 实际为 alpha、beta、gamma。主 Agent 独立读文件后报告为“已完成”，并注明后台状态为待核实。
+
+## 2026-10-25 Hermes 账号终端空白与无法续期（`claude/fix-hermes-account-8d26ac`，未发布）
+
+- 现象：Hermes 登录设置的账号终端空白，提示「无法启动账号终端，请检查 CLI 安装」；此前账号显示过期，点登录后提示无法续期。其他 CLI 正常。
+- 根因（本机只读核查，未打印凭据）：Hermes Agent v0.21.7 安装正常（入口校验、`hermesNativeCommand` 均通过）。插件账号目录 `~/.dsh/cliworker-now/accounts/hermes/auth.json` 的凭据池多了 `copilot` 记录（`source: gh_cli`、`api_key`，只有指纹无令牌），14:59 由原生 Hermes 进程写入（agent.log 同刻记录）。原生 `_seed_copilot_singleton` 在 `gh` 已登录时写入该记录，不受 `adopt_external_logins: false` 约束，未选择 Copilot 时不路由模型。插件 `assertHermesOwnAccounts` 把它当外部账号拒绝：账号终端准备阶段的普通 Error 被统一改写成「检查 CLI 安装」；状态查询的续期快照同样被拒，被改写成「Hermes 登录暂时无法续期，请稍后刷新」。在该目录用复现脚本调用 `prepareHermesAccount` 得到「Hermes 含外部账号来源，请使用自身登录」。
+- 续期链路干跑：用真实插件账号目录运行 `hermes-nous-refresh.py` 的 `_run`，原生刷新函数替换为桩：配置、主体摘要、凭据池与 shared 镜像一致性、原生锁及 API 签名全部通过，到达刷新调用；`auth.json` 修改时间不变。另以错误摘要调用 `--cliworker-nous-refresh` 返回 `changed`、退出码 0。说明除插件守卫外续期无其他阻断。
+- 修复：放行未被选择的环境 Copilot 记录（`auth.active_provider` 或 `config.yaml` 任意位置为 `copilot` 即视为已选择，仍拒绝）；守卫拒绝改为 `HermesAccountSourceError`，账号终端、状态、续期、绑定显示真实原因；Client 启动白名单与英文词典补充固定文案。OpenSpec `fix-hermes-ambient-copilot-source`。
+- 实际执行：`tests/hermes-renewal.test.ts` 新增 5 项（撤掉守卫修复时 5 项全部失败）；Hermes/账号/绑定/i18n 相关 31 个测试文件 **628 通过、1 跳过**；`node scripts/build-preview.mjs` 通过；`build.mjs --typecheck-only` 的 Host 部分通过，Client 部分在本工作树报 9 个错误，均因自引用 `dsh-cliworker-now/remote` 声明需正式构建生成（报错文件均未改动），未在正式构建后复核；OpenSpec 严格校验 28/28。
+- 未执行：正式构建与 DSH Desktop 实机（账号终端出现原生菜单）；真实 Nous 续期（会消耗一次性刷新令牌，需用户在 Desktop 操作；若服务端拒绝，应显示需重新登录并能打开登录终端）。插件账号目录中的 `copilot` 记录保留未动。
+
+## 2026-10-25 Hermes 续期与 Nous 校验：DSH 子进程 NO_PROXY 带 `[::1]`（`feat/general-settings` e923fee，未发布）
+
+- 合并环境 Copilot 修复（0368236）后实机：账号终端显示原生菜单（修复生效），但状态仍为「Hermes 登录暂时无法续期」；用户在终端选 Nous Portal 报 `Could not verify credentials: Invalid port: ':1]'`。
+- 根因：抓取账号终端进程环境，`NO_PROXY`/`no_proxy` 为 `localhost,127.0.0.1,::1,.local,[::1]`（Desktop 主进程只有 `::1`，`[::1]` 由 DSH 发布给子进程的代理环境追加）。Hermes 自带 httpx 0.28.1 遇 `[::1]` 抛 `InvalidURL: Invalid port: ':1]'`，裸 `::1` 正常；插件续期子进程同样继承，异常被归为 unavailable。插件 Nous 账号访问令牌 2026-10-20 过期、刷新令牌仍在；主会话在干净环境运行同一续期操作返回 ready（真实刷新成功并保存，用户已授权验证）。
+- 修复：`hermesAccountEnvironment` 合入 `hermesNoProxyEnvironment`，把带括号/端口/CIDR 的 IPv6 旁路改为裸地址并去重（与 Hermes 自身规则一致），覆盖账号终端、续期与任务运行。OpenSpec `fix-hermes-bracketed-ipv6-no-proxy`。
+- 验证：`tests/hermes-no-proxy.test.ts` 4 项；Hermes/账号/绑定相关 44 个测试文件（957 通过、1 跳过）；`build:preview`、正式构建、OpenSpec 严格校验 29/29。Desktop 重启（新 Host 15:38）：终端进程 NO_PROXY 不再含 `[::1]`；状态「Nous账号登录」；选择 Nous Portal 后出现模型列表，无 Invalid port；未选模型，config.yaml 未变。
+- 未执行：修复后插件自身触发的过期续期（需令牌再次过期）；设置页 Hermes 模型下拉曾持续显示「正在读取 Hermes Agent 模型…」，用户自行检查后确认没有问题。
+
+
+## 2026-10-25 设置页去掉“已保存”提示；同对话并行派遣受选型锁拖慢（`feat/general-settings`，未发布）
+
+- 用户要求删除设置页保存后的小字（「同时对话数已保存」「发送方式已保存」等）：通用设置、发送方式、默认设置与角色预设只在保存中或失败时显示一行反馈，已选值由控件本身显示；删除对应中英词条，`doc/settings-ui-design.md` 同步。设置相关 5 个测试文件 227 通过。
+- 用户反馈「同时对话数」设为 5 后 Antigravity 仍最多 2 个并行。核查（只读本机记录）：`general-settings.json` 为 `maxConcurrent: 5`；07:50 的 5 个任务 `createdAt` 依次相隔约 7–9 秒，运行时并未拒绝第 3 个（排队时立即建立隔离副本）。瓶颈在任务创建前：同对话同 CLI 的选型锁内每次先读目录、再重读一次，`agy models` 实测约 3.7 秒，锁内约 7.4 秒；任务约 15 秒完成，故最多两两重叠。
+- 修复（OpenSpec `fix-parallel-dispatch-admission`）：已有本对话设定的派遣取得顺序位置后立即让出，目录检查在锁外并行；设定失效时重新排队按原规则询问；未询问问题时不在选型内重读目录，`launch` 提交前授权不变。
+- 验证：新增并行与失效设定测试（旧实现下并行测试只会进入 1 次目录检查）；派遣/设置相关 7 个测试文件 443 通过；全量 223 文件 4397 通过、13 跳过；`build:preview` 通过。
+- Desktop 复验（正式构建，新 Host 16:01，用户授权；Codex gpt-6-astra high 驱动界面）：同时对话数 5→4→5，保存后无「已保存」小字，最终为 5。同一对话并行派遣 5 个 Antigravity 问好（沿用 gemini-3.8-flash · Low，无问题卡）：Worker 记录 5 个任务在 0.8 秒内创建（修复前相隔 7–9 秒），11.2–14.9 秒 5 个同时运行，界面显示「5 个后台任务运行中」，全部已完成；1 个主目录、4 个隔离副本。
+- 观察（未改）：agy 回复中的自称不一致（如「我是 agy-1」「dsh_worker_…」），来自模型按示例作答，与派遣名无关。
+
+## 2026-10-25 全部 CLI 并行核查：Grok 同项目启动竞争、OMP 独占账号改排队（`feat/general-settings`，未发布）
+
+- 核查：任务只在运行时 `drain()` 一处按同一 `maxConcurrent` 放行，插队、续聊、隔离退回均经同一队列，没有 CLI 绕过或另设上限。
+- 只读探针（不调用模型）：13 个 CLI 各 5 次并行派遣授权，OMP 4/5 失败「账号正被使用，请稍后刷新」，Kimi 登录过期未测，其余全部成功；Grok 同项目并行准备 100 次 65 次 `EEXIST`（删除后重建登录链接的竞争）；OMP 账号绑定读取不占租约。
+- 修复（OpenSpec `fix-parallel-account-waits`）：Grok 派生配置与登录链接先以临时名创建再原子改名；Pi/OMP 独占账号在进程启动前遇到占用时退回原队列位置、不占名额，同账号持有者结束或每 2 秒重试，停止立即生效；派遣检查遇到占用时用同账号最近已验证目录，否则最长等 30 秒，同账号新鲜目录写入显示目录供并行复用；不提高单个 OAuth 账号的实际并行数。
+- 验证：新增 Grok 并行准备、排队让出名额/释放后运行/等待中停止、派遣目录复用/他账号不用/换号失败/其他错误不吞等测试（撤掉修复时对应用例失败）；激活冲突用例按新行为改为排队后运行；全量 225 文件 4404 通过、13 跳过；`build:preview` 通过。真实只读探针：Grok 修复后 100 次 0 失败；经 Host 包装的 OMP 5 次并行派遣检查：首轮提交后一次探针 5 次中 1 次报「无法读取 Pi/OMP 原生模型目录」——两阶段目录读取之间账号被另一读取取得，忙碌错误被改写；保留该错误后连续 4 轮 20/20 成功（每轮约 5.4 秒，修复前 4/5 失败）。
+- Desktop 复验（正式构建，新 Host 17:00，用户授权；Codex gpt-6-astra high 驱动界面）：同一请求并行派遣 3 个 OMP（glm-5.3-flash）与 3 个 Grok（Grok 4.6·Low），均只读。OMP：两个任务记录「账号正被另一个任务使用，排队等待」，三个依次运行（04:16–04:25、04:51–05:00、05:16–05:25）并全部完成，没有账号占用失败。Grok：3 个只读任务在同一项目目录准备，未出现 `EEXIST`，但均在原生会话建立后失败「ACP does not advertise the selected permission mode」——Grok ACP 不提供只读所需的权限模式，属既有问题，未在本次修改。主 Agent 自行改为默认权限补派 3 个，同时创建、同时运行并完成（2 个在隔离副本中）；项目文件未变化。
+- 未执行：Grok 同项目并行的真实成功运行（只读模式受上述问题阻断）；Kimi 登录过期，未核查其并行；Hermes 运行阶段的安装锁冲突未实测（目录读取 5 并行通过）。
+
+## 2026-10-25 Grok 只读任务报「ACP does not advertise the selected permission mode」（`feat/general-settings`，未发布）
+
+- 根因：Grok 1.0.62 的 ACP `session/new` 不再返回 `modes`（只有 model、reasoning_effort 配置项，会话 kind 为 build），插件只读时要求 ACP 列出并切换 `plan`，于是在发送提示前失败。`grok --help` 的 `--permission-mode` 支持 `plan`；临时 GROK_HOME 下以 `--permission-mode plan agent --no-leader stdio` 只做 initialize/session/new（不发提示）会话正常建立。
+- 修复（OpenSpec `fix-grok-native-plan-mode`）：Grok 原生启动参数按任务模式替换权限模式（只读 `plan`、可写 `acceptEdits`），与可写模式一样由原生参数设定；ACP 完全不列出模式时，仅启动参数已确定该模式的 CLI 可跳过 ACP 切换，列出模式时仍须确认 `plan`，其他 CLI 照旧失败关闭；只读中仍拒绝全部额外权限请求。
+- 验证：`tests/native-acp.test.ts` 新增 2 项（无模式 ACP 下只读 Grok 成功且不切换模式——撤掉修复时失败；列出模式时仍切换、Kimi 无模式仍失败）；全量 225 文件 4407 通过、13 跳过；`build:preview` 通过。
+- Desktop 复验（22:52，用户授权，新 Host 17:21）：同项目并行 2 个只读 Grok（grok-4.6·low），无 `EEXIST`、无模式报错，访问模式「规划（只读）」。问好任务 completed（「你好。」，无工具调用）；写文件任务中 Grok 在 plan 模式下仍请求 write 权限，插件拒绝，Grok 以 cancelled（PermissionRejected）结束，任务 failed；项目文件 shasum 前后一致，探针文件不存在。
+- 已知行为：Grok 1.0.62 plan 模式不自行阻止写工具，只读靠插件拒绝额外权限；拒绝即取消整轮，写入被拒的只读任务显示为失败。未改动。
+
+## 2026-10-26 只读 Grok 权限改由私有 config.toml 设定（`feat/general-settings`，未发布）
+
+- 背景：Grok 1.0.62 官方文档称 `--permission-mode plan` 只是兼容值；`mkdir`/`touch` 在所有模式下免审批。用户决定改为 dontAsk 加 deny 规则。
+- 第二版（ef10d44，全局参数 `--permission-mode dontAsk --deny …`）Desktop 复验 2026-10-25 23:33 未通过：写文件仍询问，`touch`/`mkdir` 实际建出文件与目录（已在用户同意后删除）。`grok agent stdio` 不采用 `agent` 之前的全局权限参数。
+- 第三版（f7b4002，OpenSpec `fix-grok-native-plan-mode` 第 6 节）：只读运行在私有 `GROK_HOME/config.toml` 写入 `[ui] permission_mode = "dontAsk"`、`[permission] deny = ["Bash(mkdir)", "Bash(touch)"]`，工具桥就绪且绑定 Grok 时加 `allow = ["MCPTool(dsh_worker_tools__*)"]`；可写运行写回基础配置；只读启动参数不再含全局权限参数。离线：`grok inspect --json` 读回只读 2 条、带工具桥 3 条、可写 0 条规则；新参数在临时 GROK_HOME 正常建立会话。全量 4410 通过、13 跳过；类型检查、`build:preview`、OpenSpec 严格校验通过。
+- Desktop 复验（2026-10-26 00:09，用户授权，新 Host 00:07:52）：并行 4 个只读 Grok。问好 completed；`touch`/`mkdir` 被 Grok 原生拒绝（`Denied by permission policy: deny rule on bash matching …`），无审批请求，任务显示 failed（工具失败）；写文件仍请求审批，插件拒绝，Grok cancelled，failed。项目目录清单与 shasum 前后一致。
+- 结论与遗留：deny 规则生效，touch/mkdir 缺口已补上；`permission_mode = "dontAsk"` 未生效，其余写入仍靠插件拒绝审批。被拒的只读写入任务均显示失败。只读运行调用 DSH 工具桥未验证。
+- 2026-10-26 00:20 复验（d0ecd63，去掉无效 dontAsk，只读私有配置 deny `Edit`、`Write`、`Bash(mkdir)`、`Bash(touch)`；用户授权 1 个写文件任务）：grok-17 的 `write` 未发审批请求，被 Grok 原生拒绝（`Denied by permission policy: deny rule on edit`），Grok 未取消本轮并如实说明；任务显示 failed（工具失败）。项目目录清单与 shasum 前后一致。
+- 另发现路由缺陷：消息含「调用 1 次 CLI Worker 派遣工具」时，`invocationResolution` 把「1 次」当作 CLI 名，返回 unknown，主 Agent 按提示不派遣。已由 OpenSpec `fix-routing-invocation-count` 修复（见下节）。
+
+## 2026-10-26 路由把「调用 N 次」当作 CLI 名（`feat/general-settings`，未发布）
+
+- 修复（OpenSpec `fix-routing-invocation-count`）：`invocationResolution` 识别明确调用前去掉紧跟调用动词的次数/数量词（排除「一次性」）。
+- 验证：`tests/routing.test.ts` 新增 4 个解析与 3 个无提示用例，撤掉修复时 5 个失败；离线对 Desktop 失败的原消息运行路由，修复前 unknown、修复后无提示，改写消息仍解析为 grok。全量 4417 通过、13 跳过；类型检查、OpenSpec 严格校验通过。
+- 未执行（用户只要求单元测试与离线验证）：正式构建、Desktop 真实复验。名称后紧跟全角括号（「使用 Grok（Grok Build）」）仍不产生提示，未处理。
+
+## 2026-10-26 Antigravity 1.4.x 凭据不含 `id_token`，账号绑定失败（GitHub issue #7，`feat/general-settings`，未发布）
+
+- 现象（issue #7，Windows 11、DSH 0.2.1-rc.3、插件 0.8.2/0.8.3、`agy` 1.4.7）：CLI 自身登录与 `agy models` 正常，CLI Worker 连接 Antigravity 报「Antigravity 无法确认当前自身账号」。
+- 原因：agy 1.4.x 写入 `gemini:antigravity` 的 blob 只有 `token` 与 `id_token_email`。`windows-agy-account.ps1` 只从 `id_token.sub` 计算 `principalHash`，Windows 绑定分支没有 `principalHash` 即为空 `entries` → `CliAccountBindingError`。POSIX 读 `jetski-standalone-oauth-token` 同样只认 `id_token`（访问令牌不透明）。
+- 修复（OpenSpec `fix-agy-email-only-credential`）：ps1 在 `id_token` 未提供邮箱时输出经校验的 `id_token_email`；Windows 无 `principalHash` 时以已登录的安全邮箱（小写）为 `oauth` 邮箱主体；POSIX 绑定与账号标签在 `id_token` 无主体/邮箱时回退到 `accountEmail` 校验后的 `id_token_email`。`id_token` 主体仍优先。未采用 issue 中的 UI 确认方案（两种字段都是本机凭据，`id_token` 原本也只做本地解码，不验签）。
+- 验证：`tests/cli-account-binding.test.ts` 新增 POSIX 与 Windows（模拟 `win32`）仅邮箱绑定用例、`tests/account-identity.test.ts` 新增标签回退用例、`tests/agy-windows-account.test.ts` 新增仅邮箱投影用例；撤掉 TS 修复时 3 个新用例失败。账号相关 6 个测试文件 133 通过；`build.mjs --typecheck-only` 通过；`build-preview.mjs` 通过，隔离包两份 `windows-agy-account.ps1` 均含回退；OpenSpec 严格校验 34 项通过。
+- 兼容性：同一账号由旧格式改写为新格式后，绑定版本从 `subjectHash` 变为邮箱主体，按现有规则需重新选型，旧任务续聊需新建任务。
+- 未执行：ps1 无法在 macOS 运行（无 PowerShell 与凭据管理器），Windows 实机/远程回归未做；macOS 本机 agy 1.4.7 凭据文件仍含 `id_token`，POSIX 新格式只有模拟测试；未正式构建、未更新 Desktop、未调用真实模型；issue 未回复。

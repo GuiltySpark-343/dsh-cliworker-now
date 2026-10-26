@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { QueuedFollowup } from '../shared/types.ts'
+import { useT } from './i18n.ts'
 
 const exitDuration = 220
 // Allow the browser one frame to finish the CSS transition before removing its DOM.
@@ -24,6 +25,7 @@ export function FollowupQueuePresence(props: FollowupQueuePresenceProps) {
 }
 
 function QueuePresence({ items, expanded, bodyId, heading, renderItem }: FollowupQueuePresenceProps) {
+  const t = useT()
   const [rows, setRows] = useState<PresentItem[]>(() =>
     items.map((item, index) => ({ item, index, exiting: false })),
   )
@@ -90,7 +92,7 @@ function QueuePresence({ items, expanded, bodyId, heading, renderItem }: Followu
       <div className="cwn-followup-shell-inner">
         <section
           className="cwn-followup-queue"
-          aria-label="待发送消息"
+          aria-label={t('待发送消息')}
           aria-live="polite"
           aria-hidden={exiting || undefined}
           {...(exiting ? { inert: '' } : {})}

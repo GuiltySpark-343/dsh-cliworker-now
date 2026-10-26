@@ -2,12 +2,13 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ClientSessionContext, InputTriggerCandidate, InputTriggerPick } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { IconPaperclipOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { HarnessBindingRegistry } from './harness-binding-registry.ts'
+import { t, type MessageKey } from './i18n.ts'
 
 const SOURCE = 'cliworker-selected-files'
 const items = [
   // Native Add-section face: the root composer's File row name, label and glyph.
-  { name: 'file', label: '文件', section: 'add', icon: IconPaperclipOutlineRegular, description: '引用桌面端选择的本地文件' },
-  { name: 'image', label: '图片', section: 'add', icon: IconPaperclipOutlineRegular, description: '通过 Harness 上传图片' },
+  { name: 'file', label: '文件' as MessageKey, section: 'add', icon: IconPaperclipOutlineRegular, description: '引用桌面端选择的本地文件' as MessageKey },
+  { name: 'image', label: '图片' as MessageKey, section: 'add', icon: IconPaperclipOutlineRegular, description: '通过 Harness 上传图片' as MessageKey },
 ] as const
 type Services = Pick<Context, 'sessions' | 'conversation' | 'inputTriggers'>
 type HostPaths = { pathFor(file: File): string }
@@ -17,7 +18,7 @@ function pathsOf(ref: string): string[] {
   const paths: unknown = JSON.parse(ref)
   if (!Array.isArray(paths) || !paths.length || paths.length > 20 || paths.some(path =>
     typeof path !== 'string' || path.length > 8192 || /[\0\r\n]/u.test(path) ||
-    !(/^(?:\/|[a-z]:[\\/]|\\\\)/iu.test(path)))) throw new Error('文件引用无效')
+    !(/^(?:\/|[a-z]:[\\/]|\\\\)/iu.test(path)))) throw new Error(t('文件引用无效'))
   return paths as string[]
 }
 
@@ -50,6 +51,7 @@ export function installHarnessNativeAttachments(ctx: Services, bindings: Harness
     candidates(sessionId: ClientSessionContext['sessionId']): readonly (InputTriggerCandidate & { section: 'add' })[] {
       if (!owned(sessionId)) return []
       return items.filter(item => item.name !== 'file' || hostPaths())
+        .map(item => ({ ...item, label: t(item.label), description: t(item.description) }))
     },
     pick(pick: InputTriggerPick): boolean {
       const target = owned(pick.session.sessionId)
@@ -59,7 +61,7 @@ export function installHarnessNativeAttachments(ctx: Services, bindings: Harness
         // Invoke the native File action through its public adjudication contract;
         // it owns the mounted picker, MIME checks, draft bytes and upload retirement.
         void ctx.inputTriggers.sessionOf(target.scope.ctx).adjudicate('/file', lifetime.signal, { attachments: 0 })
-          .then(outcome => { if (outcome === undefined && !lifetime.signal.aborted) input.notify('error', '原生图片上传入口暂不可用，请重新打开子会话') })
+          .then(outcome => { if (outcome === undefined && !lifetime.signal.aborted) input.notify('error', t('原生图片上传入口暂不可用，请重新打开子会话')) })
           .catch(error => input.notify('error', error instanceof Error ? error.message : String(error)))
         return true
       }
@@ -86,10 +88,10 @@ export function installHarnessNativeAttachments(ctx: Services, bindings: Harness
           const end = state.draft.length - state.occurrences.reduce((sum, occurrence) => sum + occurrence.length - 1, 0)
             - (state.claim ? state.claim.token.length - 1 : 0)
           if (!input.insertReference({ source: SOURCE, ref,
-            label: files.length === 1 ? files[0]!.name : `${files[0]!.name} 等 ${files.length} 个文件`,
+            label: files.length === 1 ? files[0]!.name : t('{name} 等 {count} 个文件', { name: files[0]!.name, count: files.length }),
             appearance: 'file', clipboardText: pathsOf(ref).map(path => `@${JSON.stringify(path)}`).join(' '),
           }, { start: end, end, draftRev: state.draftRev }))
-            input.notify('error', '当前输入正在提交，请稍后重新添加文件')
+            input.notify('error', t('当前输入正在提交，请稍后重新添加文件'))
           input.focus()
         } catch (error) {
           input.notify('error', error instanceof Error ? error.message : String(error))

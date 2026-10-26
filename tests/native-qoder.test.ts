@@ -38,7 +38,7 @@ const finish=request=>{
 };
 createInterface({input:process.stdin}).on('line',line=>{
  const request=JSON.parse(line);log(request);
- if(!request.method){if(pending){finish(pending);pending=undefined;}return;}
+ if(!request.method){if(pending){if(scenario.startsWith('permission'))update({sessionUpdate:'tool_call_update',toolCallId:'denied-simulated',status:'failed'});if(scenario==='permission-other-failure')update({sessionUpdate:'tool_call',toolCallId:'other-simulated',title:'Edit synthetic.txt',status:'failed',_meta:{qoder:{toolName:'Edit'}}});finish(pending);pending=undefined;}return;}
  if(request.jsonrpc!=='2.0')process.exit(20);
  if(request.method==='initialize')return reply(request,{protocolVersion:1,agentInfo:{name:process.env.QODER_TEST_AGENT||'qoder-cli'},agentCapabilities:{loadSession:scenario!=='no-restore'}});
  if(request.method==='session/new'||request.method==='session/load'){
@@ -82,8 +82,9 @@ createInterface({input:process.stdin}).on('line',line=>{
    pending=request;return update({sessionUpdate:'config_option_update',configOptions:[{id:scenario==='changed-model'?'model':'mode',currentValue:scenario==='changed-model'?'wrong':'yolo'}]});
   }
   if(scenario==='cancel'){pending=request;return;}
-  if(scenario==='permission'||scenario==='permission-no-reject'){
-   pending=request;return out({jsonrpc:'2.0',id:'permission-simulated',method:'session/request_permission',params:{sessionId,options:[{kind:'allow_once',optionId:'allow'},...(scenario==='permission'?[{kind:'reject_once',optionId:'reject'}]:[])]}});
+  if(scenario==='permission'||scenario==='permission-no-reject'||scenario==='permission-other-failure'){
+   update({sessionUpdate:'tool_call',toolCallId:'denied-simulated',title:'Run synthetic shell',status:'pending',_meta:{qoder:{toolName:'Bash'}}});
+   pending=request;return out({jsonrpc:'2.0',id:'permission-simulated',method:'session/request_permission',params:{sessionId,toolCall:{toolCallId:'denied-simulated'},options:[{kind:'allow_once',optionId:'allow'},...(scenario==='permission'?[{kind:'reject_once',optionId:'reject'}]:[])]}});
   }
   finish(request);
   if(scenario==='nonzero-exit')process.exitCode=23;
@@ -285,16 +286,22 @@ describe('Native Qoder ACP runner (simulated native processes; no real model)', 
   })
 
   it.each(['permission', 'permission-no-reject'])(
-    'denies extra permissions and cannot report success (%s)',
+    'denies extra permissions and reports the finished turn as unverified, never success (%s)',
     async (scenario) => {
       const { records, result } = await fixture(scenario)
-      expect(result).toMatchObject({ status: 'ERROR', response: 'HELLO' })
+      expect(result).toMatchObject({ status: 'UNCERTAIN', response: 'HELLO' })
+      expect(result.error).toMatch(/额外权限请求已拒绝.*结果待核实/)
       expect(records.find((record) => record.id === 'permission-simulated')?.result).toEqual({
         outcome:
           scenario === 'permission' ? { outcome: 'selected', optionId: 'reject' } : { outcome: 'cancelled' },
       })
     },
   )
+
+  it('keeps an error when a tool other than the denied one fails', async () => {
+    const { result } = await fixture('permission-other-failure')
+    expect(result).toMatchObject({ status: 'ERROR', error: 'CLI 工具执行失败' })
+  })
 
   it.each(['tool-failure', 'tool-pending'])(
     'rejects failed or unterminated tools despite end_turn (%s)',
@@ -407,7 +414,7 @@ describe('Native Qoder CN ACP runner (simulated processes; no native login or re
 
   it.each(['permission', 'permission-no-reject'])('denies CN extra permissions (%s)', async scenario => {
     const { records, result, processExited } = await fixture(scenario, { cli: 'qodercn' })
-    expect(result).toMatchObject({ status: 'ERROR', response: 'HELLO' })
+    expect(result).toMatchObject({ status: 'UNCERTAIN', response: 'HELLO' })
     expect(records.find(record => record.id === 'permission-simulated')?.result).toEqual({ outcome:
       scenario === 'permission' ? { outcome: 'selected', optionId: 'reject' } : { outcome: 'cancelled' } })
     expect(processExited).toBe(true)

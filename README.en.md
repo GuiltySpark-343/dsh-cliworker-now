@@ -35,7 +35,8 @@ Once installed, the plugin appears in Harness as **CLI Worker / CLI Worker Now**
 - **Native conversation experience**: child sessions use Harness's own conversation view, composer, model and permission controls, "+" menu and usage indicators, with queueing, stopping and follow-ups.
 - **Native CLI behavior**: each CLI uses its own protocol, login and sessions. Models and reasoning effort come from that CLI's real catalog and current account.
 - **Named agents with roles**: unique names, role presets and custom instructions, so you can call the same agent again.
-- **Predictable scheduling**: nothing starts before you explicitly choose a model (you can turn later questions off per project and use the saved defaults). One turn per session, serialized writes per directory, and no silent fallback to another CLI.
+- **Predictable scheduling**: nothing starts before you explicitly choose a model (you can turn later questions off and use the saved defaults). One turn per session, serialized writes per directory by default, and no silent fallback to another CLI.
+- **Optional parallel writes in one project**: turn on the same-directory parallel writes switch in CLI Worker settings, and a new writer that would wait runs in a plugin-owned copy of the project instead. Merge it back from the task card as uncommitted changes (no Git required, nothing is committed); on conflict the project stays untouched, or discard the copy.
 - **Goal, plan, feedback and fork**: use these Harness features in CLI child sessions; unsupported entries explain why.
 
 ## Screenshots
@@ -164,7 +165,8 @@ flowchart LR
 
 - **Runs what you chose**: a missing or failing CLI is never replaced by another one, and CLIs started outside the plugin are not taken over.
 - **Native permissions**: each CLI uses its own permission modes; no extra OS sandbox is added. Write tasks are refused while Harness is in plan or read-only mode.
-- **Two levels**: main conversation → direct child agents, two concurrent tasks by default, no recursive dispatch.
+- **Two levels**: main conversation → direct child agents, two concurrent tasks by default (adjustable in "CLI Worker settings", shared by all CLIs, up to 8), no recursive dispatch.
+- **Interface language**: "CLI Worker settings → Language" offers Follow DSH (default), 中文 or English. A saved choice switches every open CLI Worker panel at once, without a reload. CLI output, model names, your own content and Host errors that are not in the dictionary stay as they are; the tool descriptions given to the main agent do not change with the interface language.
 - **Local records**: stored in `~/.dsh/cliworker-now` (folders `0700`, files `0600`). Each CLI still sends model requests to its provider according to its own configuration.
 - **Usage with a source**: only data the CLI provides or that can be checked is shown; unknown values show `—` and are never filled with zeros or guesses.
 

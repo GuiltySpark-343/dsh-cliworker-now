@@ -14,7 +14,6 @@ import {
   active,
   cliOf,
   CLI_LABELS,
-  effortLabel,
   type CliId,
   type ModelChoice,
   type Preference,
@@ -24,6 +23,8 @@ import { modelName } from '../shared/models.ts'
 import { displayModelName, visibleModelChoices } from '../shared/model-presentation.ts'
 import { value, type API } from './workers.ts'
 import { operationMessage } from './operation-error.ts'
+import { effortLabel, t, useT } from './i18n.ts'
+import { hostText } from './operation-error.ts'
 
 /** Native menu primitive with the same model / effort drill-in flow as Harness ModelSelect. */
 export function WorkerModelMenu({
@@ -39,6 +40,7 @@ export function WorkerModelMenu({
   disabled: boolean
   disabledReason?: string
 }) {
+  useT()
   const cli = cliOf(worker.preference)
   const [open, setOpen] = useState(false)
   const [pane, setPane] = useState<'root' | 'model' | 'effort'>('root')
@@ -70,9 +72,9 @@ export function WorkerModelMenu({
       .then((result) => {
         if (controller.signal.aborted) return
         const next = JSON.parse(value(result))
-        if (next.cli !== cli) throw new Error('收到不匹配的 CLI 模型目录，请重试')
+        if (next.cli !== cli) throw new Error(t('收到不匹配的 CLI 模型目录，请重试'))
         if (!Array.isArray(next.models) || !next.models.length)
-          throw new Error(next.notice || '此 CLI 未返回可用模型，请登录或刷新重试')
+          throw new Error(hostText(next.notice) || t('此 CLI 未返回可用模型，请登录或刷新重试'))
         setCatalog(next)
       })
       .catch((e) => {
@@ -134,15 +136,15 @@ export function WorkerModelMenu({
   const items: MenuEntry[] =
     pane === 'root'
       ? [
-          { id: 'model', label: cell('模型', name), disabled: choicesLocked },
+          { id: 'model', label: cell(t('模型'), name), disabled: choicesLocked },
           {
             id: 'effort',
-            label: cell('思考强度', effortLabel(selection.effort)),
+            label: cell(t('思考强度'), effortLabel(selection.effort)),
             disabled: choicesLocked || !chosen,
           },
         ]
       : [
-          { id: 'back', label: '‹ 返回', disabled: saving },
+          { id: 'back', label: t('‹ 返回'), disabled: saving },
           ...(pane === 'effort'
             ? (chosen?.efforts ?? []).map((e) => ({ id: e, label: effortLabel(e), disabled: choicesLocked }))
             : []),
@@ -178,14 +180,14 @@ export function WorkerModelMenu({
           size="sm"
           className="cwn-compose-model"
           disabled={locked}
-          aria-label="模型与强度"
+          aria-label={t('模型与强度')}
           aria-haspopup="menu"
           aria-expanded={open}
           onClick={() => (open ? close() : setOpen(true))}
           title={
             disabledReason ||
             (active(worker.status)
-              ? '本轮结束后可以修改模型与强度'
+              ? t('本轮结束后可以修改模型与强度')
               : `${name} · ${effortLabel(selection.effort)}`)
           }
         >
@@ -199,8 +201,8 @@ export function WorkerModelMenu({
         <>
           <Input
             className="cwn-model-search"
-            aria-label="搜索模型"
-            placeholder="搜索模型"
+            aria-label={t('搜索模型')}
+            placeholder={t('搜索模型')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -226,19 +228,19 @@ export function WorkerModelMenu({
       )}
       {loading && (
         <div className="cwn-model-provider" role="status">
-          <StateDot state="ongoing" size={14} /> 正在读取模型目录…
+          <StateDot state="ongoing" size={14} /> {t('正在读取模型目录…')}
         </div>
       )}
       {saving && (
         <div className="cwn-model-provider" role="status">
-          <StateDot state="ongoing" size={14} /> 正在保存模型设置…
+          <StateDot state="ongoing" size={14} /> {t('正在保存模型设置…')}
         </div>
       )}
       {error && (
         <div className="cwn-model-feedback" role="status">
           {error}
           <Button type="button" variant="ghost" size="sm" onClick={() => retry((n) => n + 1)}>
-            重试
+            {t('重试')}
           </Button>
         </div>
       )}

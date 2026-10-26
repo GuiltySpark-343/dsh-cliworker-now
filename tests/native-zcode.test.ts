@@ -25,7 +25,7 @@ const event=(type,payload,extra={})=>out({method:'session/event',params:{session
 const finish=()=>{event('turn.completed',{inputId,resultType:stopped?'cancelled':'success',response:scenario==='tool-boundary'||scenario==='model-usage'?'AFTER':'HELLO',usage:scenario==='model-usage'?{inputTokens:99999,outputTokens:1}:undefined});out({method:'state.updated',params:{sessionId,reason:'prompt_completed'}});};
 createInterface({input:process.stdin}).on('line',line=>{
  const q=JSON.parse(line);log(q);
- if(!q.method){if(q.id==='preferences'){if(q.result?.memoryEnabled!==false)process.exit(23);reply(awaiting,state);awaiting=undefined;}else if(q.id==='permission'||q.id==='headers')finish();return;}
+ if(!q.method){if(q.id==='preferences'){if(q.result?.memoryEnabled!==false)process.exit(23);reply(awaiting,state);awaiting=undefined;}else if(q.id==='permission'){event('permission.resolved',{toolCallId:'denied-tool',decision:q.result?.decision});event('tool.updated',{kind:'batch',toolCallIds:scenario==='permission-other-failure'?['denied-tool','other-tool']:['denied-tool'],successCount:0,errorCount:scenario==='permission-other-failure'?2:1});if(scenario==='permission-failed'){event('turn.failed',{inputId});out({method:'state.updated',params:{sessionId,reason:'prompt_failed'}});}else finish();}else if(q.id==='headers')finish();return;}
  if(q.jsonrpc!==undefined)process.exit(20);
  if(q.method==='runtime/capabilities')return reply(q,{protocol:{name:'zcode',version:1}});
  if(q.method==='provider/updateAccountConfig')return reply(q,{receivedRevision:q.params.revision,providerCount:1,status:'received'});
@@ -51,7 +51,7 @@ createInterface({input:process.stdin}).on('line',line=>{
    if(scenario==='context-next-unknown')event('session.updated',{...base,type:'model_request_started',requestId:'request-context-2'},{traceId:'trace-context'});
   }
   event('model.streaming',{kind:'text_delta',delta:'FOREIGN'},{sessionId:'foreign'});
-  event('model.streaming',{kind:'text_delta',delta:'HELLO',...(scenario==='model-usage'?{assistantMessageId:'message-a'}:{})},{eventId:'delta-one'});
+  event('model.streaming',{kind:'text_delta',delta:'HELLO',...(['model-usage','tool-before-complete'].includes(scenario)?{assistantMessageId:'message-a'}:{})},{eventId:'delta-one'});
   if(scenario==='thought-boundary'){
    event('model.streaming',{kind:'reasoning_delta',delta:'Synthetic public thought'});
    event('model.streaming',{kind:'text_delta',delta:'AFTER'});
@@ -73,6 +73,15 @@ createInterface({input:process.stdin}).on('line',line=>{
    event('session.updated',{querySource:'main_turn',content:'AFTER',stopReason:'stop',toolCallCount:0,usage:{...usage,outputTokens:6,totalTokens:39}});
    finish();return;
   }
+  if(scenario==='tool-before-complete'){
+   // Observed real order: a read-only tool is scheduled and started before its message's model_complete.
+   event('tool.updated',{kind:'scheduled',toolCallId:'early-tool',assistantMessageId:'message-a',toolName:'Read',input:{file_path:'synthetic'}});
+   event('tool.updated',{kind:'started',toolCallId:'early-tool',toolName:'Read'});
+   event('session.updated',{querySource:'main_turn',content:'HELLO',stopReason:'tool-calls',toolCallCount:1});
+   event('tool.updated',{kind:'result',toolCallId:'early-tool',result:{success:true,content:'synthetic result'}});
+   event('tool.updated',{kind:'batch',toolCallIds:['early-tool'],successCount:1,errorCount:0});
+   finish();return;
+  }
   if(scenario==='tool-boundary'){
    event('tool.updated',{kind:'call',toolCallId:'tool-test',toolName:'read',input:{path:'synthetic'}});
    event('tool.updated',{kind:'result',toolCallId:'tool-test',toolName:'read',result:{success:true,text:'safe result'}});
@@ -92,7 +101,7 @@ createInterface({input:process.stdin}).on('line',line=>{
   if(scenario==='changed-model'){event('session.updated',{providerId:'wrong',modelId:'wrong'});return;}
   event('model.streaming',{kind:'text_delta',delta:'HELLO'},{eventId:'delta-one'});
   if(scenario==='cancel')return;
-  if(scenario==='permission')return out({id:'permission',method:'interaction/requestPermission',params:{sessionId}});
+  if(scenario.startsWith('permission')){event('tool.updated',{toolCallId:'denied-tool',toolName:'Bash',kind:'scheduled'});return out({id:'permission',method:'interaction/requestPermission',params:{sessionId,toolCallId:'denied-tool',toolName:'Bash'}});}
   if(scenario==='missing-terminal')return out({method:'state.updated',params:{sessionId,reason:'prompt_completed'}});
   finish();return;
  }
@@ -247,6 +256,17 @@ describe('Native ZCode app-server (simulated native processes)', () => {
     expect(settled[0].event.response.usage.inputTokens).toBe(20)
     expect(foldNativeFrames(frames).filter((row) => row.kind === 'assistant').map((row) => row.text)).toEqual(['HELLO', 'AFTER'])
   })
+  it('holds a tool started before its message completion until after that response boundary', async () => {
+    const { frames, result } = await fixture('tool-before-complete')
+    expect(result.status).toBe('SUCCESS')
+    const events = frames.filter((frame) => frame.event).map((frame) => frame.event)
+    const complete = events.findIndex((event) => event.response?.complete)
+    const tools = events.flatMap((event, index) => (event.kind === 'tool' ? [[index, event.state]] : []))
+    expect(complete).toBeGreaterThanOrEqual(0)
+    expect(tools.map(([, state]) => state)).toEqual(['RUNNING', 'RUNNING', 'COMPLETED'])
+    expect(tools.every(([index]) => index > complete)).toBe(true)
+    expect(events.slice(0, complete).some((event) => event.kind === 'tool')).toBe(false)
+  })
   it('preserves tool-separated text segments instead of merging them into step zero', async () => {
     const { frames, result } = await fixture('tool-boundary')
     expect(result.status).toBe('SUCCESS')
@@ -287,9 +307,21 @@ describe('Native ZCode app-server (simulated native processes)', () => {
     expect(result.status).toBe('ERROR')
     expect(records.some((record) => record.method === 'session/send')).toBe(false)
   })
-  it('denies additional permissions and retains an error despite native success', async () => {
-    const { result, records } = await fixture('permission')
-    expect(result).toMatchObject({ status: 'ERROR', response: 'HELLO' })
+  it('denies additional permissions and reports a natively completed turn as unverified, not success', async () => {
+    const { result, records, frames } = await fixture('permission')
+    expect(result).toMatchObject({ status: 'UNCERTAIN', response: 'HELLO' })
+    expect(result.error).toMatch(/额外权限请求已拒绝.*结果待核实/)
+    expect(records.find((record) => record.id === 'permission').result.decision).toBe('deny')
+    // The denied call is closed by its batch, so it does not stay running in the timeline.
+    expect(frames.filter((frame) => frame.event?.toolCall?.callId === 'denied-tool').at(-1)?.event.state).toBe('FAILED')
+  })
+  it('keeps an error when another tool in the batch fails besides the denied one', async () => {
+    const { result } = await fixture('permission-other-failure')
+    expect(result).toMatchObject({ status: 'ERROR', error: 'ZCode 工具批次失败' })
+  })
+  it('keeps an error when the turn fails after a denied permission', async () => {
+    const { result, records } = await fixture('permission-failed')
+    expect(result.status).toBe('ERROR')
     expect(records.find((record) => record.id === 'permission').result.decision).toBe('deny')
   })
   it('does not interpret send admission/state updates as a missing turn result', async () => {

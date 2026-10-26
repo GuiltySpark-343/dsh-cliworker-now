@@ -176,7 +176,8 @@ it('same conversation reuses its frozen setup even if project default or role li
   expect(await f.choose()).toEqual({ ...f.setup, role })
   expect(await f.choose()).toEqual({ ...f.setup, role })
   expect(f.ask).not.toHaveBeenCalled()
-  expect(f.service.querySelection).toHaveBeenCalledTimes(2)
+  expect(f.service.queryCatalog).toHaveBeenCalledTimes(2)
+  expect(f.service.querySelection).not.toHaveBeenCalled()
 })
 
 it('new conversation asks only reuse and captures the offered default without overwriting newer project defaults', async () => {
@@ -437,7 +438,40 @@ it('reopened Host storage reuses this conversation without any question', async 
   f.service.selectionBindings = new WeakMap()
   expect(await f.choose()).toEqual(f.setup)
   expect(f.ask).not.toHaveBeenCalled()
-  expect(f.service.querySelection).toHaveBeenCalledOnce()
+  expect(f.service.queryCatalog).toHaveBeenCalledOnce()
+  // Nothing was asked, so the fresh catalog is the check; launch authorizes again.
+  expect(f.service.querySelection).not.toHaveBeenCalled()
+})
+
+it('parallel dispatches of a settled conversation check the catalog together instead of in turn', async () => {
+  const f = fixture()
+  f.storage.setConversationSetup('parent', f.project, f.setup)
+  const gate = Promise.withResolvers<void>()
+  const query = f.service.queryCatalog.getMockImplementation()
+  f.service.queryCatalog.mockImplementation(async (...args: any[]) => {
+    await gate.promise
+    return query(...args)
+  })
+  const all = Promise.all([f.choose(), f.choose(), f.choose()])
+  await vi.waitFor(() => expect(f.service.queryCatalog).toHaveBeenCalledTimes(3))
+  gate.resolve()
+  expect(await all).toEqual([f.setup, f.setup, f.setup])
+  expect(f.ask).not.toHaveBeenCalled()
+  await vi.waitFor(() => expect(f.service.dispatchWaits.size).toBe(0))
+  expect(f.service.pending.size).toBe(0)
+})
+
+it('a settled setup the catalog no longer offers asks once in turn, and parallel callers share the new answer', async () => {
+  const f = fixture()
+  f.storage.setConversationSetup('parent', f.project, { ...f.setup, preference: { ...f.setup.preference, model: 'retired' } })
+  const one = f.choose(),
+    two = f.choose()
+  await f.complete()
+  const [first, second] = await Promise.all([one, two])
+  expect(first).toEqual(second)
+  expect(first.preference).toMatchObject({ model: 'fixture-a', effort: 'high' })
+  expect(f.ask).toHaveBeenCalledTimes(2)
+  await vi.waitFor(() => expect(f.service.dispatchWaits.size).toBe(0))
 })
 
 it('replays omitted CLI then explicit Hermes without consuming the previous Antigravity setup', async () => {
@@ -496,17 +530,18 @@ it('missing switch record keeps the reuse question for a new conversation', asyn
   expect(await pending).toEqual(f.setup)
 })
 
-it('asking off starts with a valid saved setup without any question card and still authorizes it live', async () => {
+it('asking off starts with a valid saved setup without any question card and pins its account for launch', async () => {
   const f = fixture()
   const role = roleSnapshot(f.storage.rolePresets()[0]!)
   const saved = { ...f.setup, role }
   f.storage.setDispatchSetup(f.project, saved)
   f.storage.setDispatchAsk(f.project, 'antigravity', false)
-  expect(await f.choose('new')).toEqual(saved)
+  const result = await f.choose('new')
+  expect(result).toEqual(saved)
   expect(f.ask).not.toHaveBeenCalled()
-  expect(f.service.querySelection).toHaveBeenCalledOnce()
-  expect(f.service.querySelection.mock.calls[0][0]).toEqual(saved.preference)
-  expect(f.service.querySelection.mock.calls[0][5]).toBe(saved.binding)
+  // Checked against the fresh catalog here; launch authorizes it live against this binding.
+  expect(f.service.queryCatalog).toHaveBeenCalledOnce()
+  expect(f.service.selectionBindings.get(result.preference)).toBe(saved.binding)
   expect(f.storage.conversationSetup('new', f.project, 'antigravity')).toEqual(saved)
   expect(f.service.pending.size).toBe(0)
 })
@@ -544,12 +579,14 @@ it.each(['account', 'model', 'effort'] as const)(
   },
 )
 
-it('asking off rejects without saving when live authorization fails', async () => {
+it('asking off rejects without saving when execution is refused after the setup is chosen', async () => {
   const f = fixture()
   f.storage.setDispatchSetup(f.project, f.setup)
   f.storage.setDispatchAsk(f.project, 'antigravity', false)
-  f.service.querySelection.mockRejectedValueOnce(new Error('账号已变更'))
-  await expect(f.choose('new')).rejects.toThrow('账号已变更')
+  f.service.assertExecution.mockImplementationOnce(() => {}).mockImplementationOnce(() => {
+    throw new Error('Harness 当前为只读权限')
+  })
+  await expect(f.choose('new')).rejects.toThrow('只读')
   expect(f.ask).not.toHaveBeenCalled()
   expect(f.storage.conversationSetup('new', f.project, 'antigravity')).toBeUndefined()
   expect(f.service.pending.size).toBe(0)

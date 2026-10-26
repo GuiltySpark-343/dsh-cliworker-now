@@ -38,8 +38,10 @@ import { RUNNING_MESSAGE_LABELS } from '../shared/running-message.ts'
 import { useMessageSubmissions } from './message-submissions.ts'
 import { FollowupQueuePresence } from './followup-queue-presence.tsx'
 import { HarnessCapabilityNotes } from './harness-conversation.tsx'
+import { t, type MessageKey, useT } from './i18n.ts'
+import { hostText } from './operation-error.ts'
 
-const status: Record<WorkerStatus, string> = {
+const status: Record<WorkerStatus, MessageKey> = {
   queued: '排队中',
   running: '运行中',
   stopping: '正在停止',
@@ -56,6 +58,7 @@ interface PanelProps {
   activeHarnessSessionId?: string
 }
 export function Panel(props: PanelProps) {
+  useT()
   // In-memory only: project content is never copied into browser localStorage.
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   return (
@@ -87,6 +90,7 @@ function SessionPanel({
   clearSubmitted: (id: string, submitted: string) => void
   restoreDraft: (id: string, text: string) => void
 }) {
+  useT()
   const [selected, select] = useState('')
   const [collapsed, setCollapsed] = useState<Partial<Record<CliId, boolean>>>({})
   const [collapsedFollowups, setCollapsedFollowups] = useState<Record<string, boolean>>({})
@@ -157,7 +161,7 @@ function SessionPanel({
       try {
         openNativeSettings?.()
       } catch {
-        setError('无法打开原生设置。请从 Harness 左侧打开「设置 → 模型」管理 API 登录。')
+        setError(t('无法打开原生设置。请从 Harness 左侧打开「设置 → 模型」管理 API 登录。'))
       }
     }
   }, [settings, openNativeSettings])
@@ -270,9 +274,9 @@ function SessionPanel({
       }
       disabledReason={
         queuedFollowups.length > 0
-          ? '请先发送或取消待发送消息，再修改模型与强度'
+          ? t('请先发送或取消待发送消息，再修改模型与强度')
           : submissions.pending || submissions.uncertain
-            ? '请等待当前消息提交确认，再修改模型与强度'
+            ? t('请等待当前消息提交确认，再修改模型与强度')
             : undefined
       }
     />
@@ -280,20 +284,20 @@ function SessionPanel({
   const runningMessageMode = snapshot.runningMessageMode ?? 'queue'
   const submissionLabel = waitingForTurn
     ? runningMessageMode === 'queue'
-      ? '加入待发送消息'
-      : `${RUNNING_MESSAGE_LABELS[runningMessageMode]}发送`
+      ? t('加入待发送消息')
+      : t('{mode}发送', { mode: hostText(RUNNING_MESSAGE_LABELS[runningMessageMode]) })
     : queueSubmission
-      ? '加入待发送消息'
-      : '继续对话'
+      ? t('加入待发送消息')
+      : t('继续对话')
   const submissionHint = waitingForTurn
     ? runningMessageMode === 'steer'
-      ? '引导当前运行'
+      ? t('引导当前运行')
       : runningMessageMode === 'interrupt'
-        ? '停止当前轮后插队发送'
-        : '本轮结束后发送'
+        ? t('停止当前轮后插队发送')
+        : t('本轮结束后发送')
     : queueSubmission
-      ? '加入待发送消息'
-      : '继续对话'
+      ? t('加入待发送消息')
+      : t('继续对话')
   const canResume =
     (startingNew || ((waitingForTurn || worker?.conversationId || userInterrupted) && !resumeBlocked)) &&
     !retired &&
@@ -314,7 +318,7 @@ function SessionPanel({
       if (submittedDraft.current.get(worker.id) === submittedText) return false
       const occupied = submissions.busyFor(worker.id) || pendingStop.current.has(worker.id)
       if (occupied && selectedMode === 'steer' && !submissions.canSteer(worker.id)) {
-        setError('当前运行尚未准备好接收引导，请保留消息后重试或选择其他发送方式。')
+        setError(t('当前运行尚未准备好接收引导，请保留消息后重试或选择其他发送方式。'))
         return false
       }
       const sent =
@@ -349,7 +353,7 @@ function SessionPanel({
         if (managementAbort.current === controller) managementAbort.current = undefined
       }
       if (!receipt.workerId || receipt.workerId === worker.id)
-        throw new Error('新对话未返回有效的智能体记录')
+        throw new Error(t('新对话未返回有效的智能体记录'))
       clearSubmitted(worker.id, submittedText)
       if (isCurrent()) {
         lastWorker.current = receipt.workerId
@@ -412,7 +416,7 @@ function SessionPanel({
         value(await api.cliworker.history(sessionId, worker.id, anchor, direction)),
       )
       if (!isCurrent()) return
-      if (page.workerId !== worker.id) throw new Error('收到不匹配的历史记录')
+      if (page.workerId !== worker.id) throw new Error(t('收到不匹配的历史记录'))
       if (!page.items.length) {
         jumpToLatest()
         return
@@ -427,14 +431,14 @@ function SessionPanel({
       <header className="cwn-head">
         {selected ? (
           <>
-            <Tooltip label="返回子 Agent 列表" side="bottom" portal>
+            <Tooltip label={t('返回子 Agent 列表')} side="bottom" portal>
               <Button
                 ref={back}
                 type="button"
                 variant="outline"
                 size="sm"
                 className="cwn-back"
-                aria-label="返回子 Agent 列表"
+                aria-label={t('返回子 Agent 列表')}
                 onClick={() => {
                   setSettings(false)
                   select('')
@@ -446,19 +450,19 @@ function SessionPanel({
             <h2 title={worker ? `${workerName(worker)}｜${worker.title}` : undefined}>
               {(() => {
                 const current = worker ?? snapshot.workers.find((w) => w.id === selected)
-                return current ? `${workerName(current)}｜${current.title}` : '正在加载…'
+                return current ? `${workerName(current)}｜${current.title}` : t('正在加载…')
               })()}
             </h2>
             <details className="cwn-actions">
-              <summary aria-label="任务选项" title="任务选项">
+              <summary aria-label={t('任务选项')} title={t('任务选项')}>
                 <Glyph name="more" />
               </summary>
               <div className={`cwn-action-menu${renderHarnessConversation ? ' cwn-native-action-menu' : ''}`}>
                 {worker && (
                   <>
                     <strong>{CLI_LABELS[cliOf(worker.preference)]}</strong>
-                    <p>{worker.mode === 'plan' ? 'CLI 规划模式' : '可编辑任务'}</p>
-                    {worker.role && <p title={worker.role.summary}>角色：{worker.role.name}</p>}
+                    <p>{worker.mode === 'plan' ? t('CLI 规划模式') : t('可编辑任务')}</p>
+                    {worker.role && <p title={worker.role.summary}>{t('角色：{name}', { name: worker.role.name })}</p>}
                     {worker.harnessConversation && (
                       <HarnessCapabilityNotes binding={worker.harnessConversation} />
                     )}
@@ -483,7 +487,7 @@ function SessionPanel({
                       onClick={() => manageWorker(worker, 'name')}
                       disabled={unavailable || busy}
                     >
-                      修改智能体名称
+                      {t('修改智能体名称')}
                     </Button>
                     <Button
                       type="button"
@@ -492,7 +496,7 @@ function SessionPanel({
                       onClick={() => manageWorker(worker, 'title')}
                       disabled={unavailable || busy}
                     >
-                      修改聊天标题
+                      {t('修改聊天标题')}
                     </Button>
                     <Button
                       type="button"
@@ -501,11 +505,11 @@ function SessionPanel({
                       onClick={() => manageWorker(worker, 'delete')}
                       disabled={unavailable || busy || !!running}
                     >
-                      删除
+                      {t('删除')}
                     </Button>
                     {worker.observedModel && worker.observedModel !== worker.preference.model && (
                       <p>
-                        CLI 实际模型：
+                        {t('CLI 实际模型：')}
                         {displayModelName({ ...worker.preference, model: worker.observedModel })}
                       </p>
                     )}
@@ -513,7 +517,7 @@ function SessionPanel({
                       <CopyText
                         key={`${worker.id}:${worker.runId}`}
                         text={worker.lastResult}
-                        label="复制最新结果"
+                        label={t('复制最新结果')}
                       />
                     )}
                   </>
@@ -528,7 +532,7 @@ function SessionPanel({
                   }}
                   disabled={retired}
                 >
-                  默认设置
+                  {t('默认设置')}
                 </Button>
               </div>
             </details>
@@ -542,13 +546,13 @@ function SessionPanel({
                 <small>NOW</small>
               </h2>
             </div>
-            <Tooltip label="默认设置" side="bottom" portal>
+            <Tooltip label={t('默认设置')} side="bottom" portal>
               <Button
                 type="button"
                 variant="ghost"
                 size="md"
                 className="cwn-settings-button"
-                aria-label="默认设置"
+                aria-label={t('默认设置')}
                 onClick={() => setSettings(true)}
               >
                 <Glyph name="settings" />
@@ -558,23 +562,23 @@ function SessionPanel({
         )}
       </header>
       {selected && worker && !retired && !running && (resumeBlocked || startingNew) && (
-        <div className="cwn-resume-banner" role="status" aria-label="对话状态">
+        <div className="cwn-resume-banner" role="status" aria-label={t('对话状态')}>
           <span>
             {startingNew
-              ? '新对话将沿用原设定'
+              ? t('新对话将沿用原设定')
               : resumeBlocked === '此历史任务缺少账号记录，请新建任务'
-                ? '历史账号记录缺失'
-                : resumeBlocked}
+                ? t('历史账号记录缺失')
+                : hostText(resumeBlocked)}
           </span>
           <Button
             type="button"
             size="sm"
             variant="ghost"
-            aria-label={startingNew ? '取消新建' : '新建对话'}
+            aria-label={startingNew ? t('取消新建') : t('新建对话')}
             disabled={busy || (!startingNew && unavailable)}
             onClick={() => setRestartFor(startingNew ? '' : worker.id)}
           >
-            {startingNew ? '取消' : '新建对话'}
+            {startingNew ? t('取消') : t('新建对话')}
           </Button>
         </div>
       )}
@@ -610,19 +614,19 @@ function SessionPanel({
               className="cwn-search"
               icon={<Glyph name="search" />}
               type="search"
-              aria-label="筛选子 Agent"
-              placeholder="搜索智能体、话题或模型…"
+              aria-label={t('筛选子 Agent')}
+              placeholder={t('搜索智能体、话题或模型…')}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
             <div className="cwn-filter-row">
-              <div className="cwn-filters" role="group" aria-label="任务状态筛选">
+              <div className="cwn-filters" role="group" aria-label={t('任务状态筛选')}>
                 {(
                   [
-                    ['all', '全部'],
-                    ['active', '进行中'],
-                    ['completed', '已完成'],
-                    ['attention', '异常'],
+                    ['all', t('全部')],
+                    ['active', t('进行中')],
+                    ['completed', t('已完成')],
+                    ['attention', t('异常')],
                   ] as const
                 ).map(([id, label]) => (
                   <Button
@@ -640,13 +644,13 @@ function SessionPanel({
                   </Button>
                 ))}
               </div>
-              <Tooltip label={showArchived ? '返回列表' : '已删除'} side="bottom" portal>
+              <Tooltip label={showArchived ? t('返回列表') : t('已删除')} side="bottom" portal>
                 <Button
                   type="button"
                   size="md"
                   variant="ghost"
                   className="cwn-archive-toggle"
-                  aria-label={showArchived ? '返回列表' : '已删除'}
+                  aria-label={showArchived ? t('返回列表') : t('已删除')}
                   aria-pressed={showArchived}
                   onClick={() => setShowArchived((shown) => !shown)}
                 >
@@ -663,8 +667,8 @@ function SessionPanel({
             }}
           >
             {showArchived ? (
-              <div className="cwn-archived-list" aria-label="已删除对话">
-                {archivedWorkers.length === 0 && <div className="cwn-empty">没有已删除的对话</div>}
+              <div className="cwn-archived-list" aria-label={t('已删除对话')}>
+                {archivedWorkers.length === 0 && <div className="cwn-empty">{t('没有已删除的对话')}</div>}
                 {archivedWorkers.map((archived) => (
                   <article key={archived.id} className="cwn-archived-row">
                     <div>
@@ -675,7 +679,7 @@ function SessionPanel({
                       type="button"
                       size="sm"
                       variant="outline"
-                      aria-label={`恢复对话 ${archived.title}`}
+                      aria-label={t('恢复对话 {title}', { title: archived.title })}
                       disabled={busy || unavailable}
                       onClick={() => {
                         void perform(async () => {
@@ -691,18 +695,18 @@ function SessionPanel({
                         })
                       }}
                     >
-                      恢复
+                      {t('恢复')}
                     </Button>
                   </article>
                 ))}
               </div>
             ) : (
-              <nav aria-label="子 Agent">
+              <nav aria-label={t('子 Agent')}>
                 {([...CLI_IDS, 'harness'] as const).map((cli) => {
                   const rows = visibleWorkers.filter((w) => cliOf(w.preference) === cli)
                   if (!rows.length) return null
                   return (
-                    <section className="cwn-cli-group" key={cli} aria-label={`${CLI_LABELS[cli]} 子 Agent`}>
+                    <section className="cwn-cli-group" key={cli} aria-label={t('{cli} 子 Agent', { cli: CLI_LABELS[cli] })}>
                       <button
                         className="cwn-cli-heading"
                         type="button"
@@ -712,7 +716,7 @@ function SessionPanel({
                       >
                         <BrandIcon cli={cli} />
                         <strong>{CLI_LABELS[cli]}</strong>
-                        <span>{rows.length} 个 Agent</span>
+                        <span>{t('{count} 个 Agent', { count: rows.length })}</span>
                         <Glyph name="chevron" />
                       </button>
                       <div
@@ -742,7 +746,7 @@ function SessionPanel({
               </nav>
             )}
             {snapshot.configuring && (
-              <div className="cwn-notice">等待确认设定。请在主对话的问题卡片中选择。</div>
+              <div className="cwn-notice">{t('等待确认设定。请在主对话的问题卡片中选择。')}</div>
             )}
             {!connecting &&
               !streamError &&
@@ -752,8 +756,8 @@ function SessionPanel({
               !query &&
               filter === 'all' && (
                 <div className="cwn-empty cwn-start-empty">
-                  <h3>把想做的事，交给合适的伙伴。</h3>
-                  <p>在主对话中发起任务，协作会在这里展开。</p>
+                  <h3>{t('把想做的事，交给合适的伙伴。')}</h3>
+                  <p>{t('在主对话中发起任务，协作会在这里展开。')}</p>
                 </div>
               )}
           </div>
@@ -761,19 +765,19 @@ function SessionPanel({
       )}
       {streamError && (
         <div role="alert" className="cwn-error">
-          <div>实时连接已断开，已收到的记录保留在这里。重新连接不会重新执行任务。</div>
+          <div>{t('实时连接已断开，已收到的记录保留在这里。重新连接不会重新执行任务。')}</div>
           <Button type="button" size="sm" variant="outline" onClick={reconnect}>
-            重新连接
+            {t('重新连接')}
           </Button>
           <details>
-            <summary>连接详情</summary>
+            <summary>{t('连接详情')}</summary>
             {streamError}
           </details>
         </div>
       )}
       {connecting && (
         <div className="cwn-notice" role="status">
-          <StateDot state="ongoing" size={14} /> 正在连接并恢复记录…
+          <StateDot state="ongoing" size={14} /> {t('正在连接并恢复记录…')}
         </div>
       )}
       {error && !settings && (
@@ -783,13 +787,13 @@ function SessionPanel({
       )}
       {worker?.error && !isUserInterrupted(worker) && (
         <div role="status" className={worker.status === 'uncertain' ? 'cwn-notice cwn-warning' : 'cwn-error'}>
-          {worker.error}
+          {hostText(worker.error)}
         </div>
       )}
       {selected && history && !renderHarnessConversation && (
-        <div className="cwn-history-nav" aria-label="历史翻页">
+        <div className="cwn-history-nav" aria-label={t('历史翻页')}>
           <span>
-            历史记录 {history.start + 1}–{history.end} · 读取时共 {history.total} 条
+            {t('历史记录 {start}–{end} · 读取时共 {total} 条', { start: history.start + 1, end: history.end, total: history.total })}
           </span>
           <div>
             <Button
@@ -799,7 +803,7 @@ function SessionPanel({
               disabled={busy || unavailable || !history.hasOlder}
               onClick={() => loadHistory('before')}
             >
-              更早记录
+              {t('更早记录')}
             </Button>
             <Button
               type="button"
@@ -808,13 +812,13 @@ function SessionPanel({
               disabled={busy || unavailable || !history.hasNewer}
               onClick={() => loadHistory('after')}
             >
-              较新记录
+              {t('较新记录')}
             </Button>
             <Button type="button" size="sm" variant="ghost" onClick={jumpToLatest}>
-              返回实时
+              {t('返回实时')}
             </Button>
           </div>
-          <small>历史页保持静止，返回实时可查看最新进展。</small>
+          <small>{t('历史页保持静止，返回实时可查看最新进展。')}</small>
         </div>
       )}
       {selected &&
@@ -833,15 +837,15 @@ function SessionPanel({
               stick.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 25
               setFollowing(stick.current)
             }}
-            aria-label="对话记录"
+            aria-label={t('对话记录')}
             aria-busy={running || false}
           >
             {snapshot.configuring && (
-              <div className="cwn-notice">等待确认设定。请在主对话的问题卡片中选择。</div>
+              <div className="cwn-notice">{t('等待确认设定。请在主对话的问题卡片中选择。')}</div>
             )}
             {!history && snapshot.truncated && (
               <div className="cwn-history-start">
-                <span>当前显示最近 {snapshot.timeline.length} 条记录</span>
+                <span>{t('当前显示最近 {count} 条记录', { count: snapshot.timeline.length })}</span>
                 <Button
                   type="button"
                   size="sm"
@@ -849,7 +853,7 @@ function SessionPanel({
                   disabled={busy || unavailable}
                   onClick={() => loadHistory('before')}
                 >
-                  查看更早记录
+                  {t('查看更早记录')}
                 </Button>
               </div>
             )}
@@ -863,16 +867,16 @@ function SessionPanel({
                   .map((message) => [
                     `local-${message.id}:user`,
                     <span key={message.id} role="status">
-                      {message.uncertain ? message.error : `未发送：${message.error}`}
+                      {message.uncertain ? message.error : t('未发送：{error}', { error: message.error ?? '' })}
                       {(message.uncertain || message.runEnded) && (
                         <Button
                           type="button"
                           size="sm"
                           variant="ghost"
-                          aria-label={`恢复内容 ${message.prompt}`}
+                          aria-label={t('恢复内容 {prompt}', { prompt: message.prompt })}
                           onClick={() => submissions.recover(message)}
                         >
-                          恢复内容
+                          {t('恢复内容')}
                         </Button>
                       )}
                       {message.state === 'failed' && (
@@ -880,7 +884,7 @@ function SessionPanel({
                           type="button"
                           size="sm"
                           variant="ghost"
-                          aria-label={`重试发送 ${message.prompt}`}
+                          aria-label={t('重试发送 {prompt}', { prompt: message.prompt })}
                           disabled={
                             !canResume ||
                             busy ||
@@ -888,7 +892,7 @@ function SessionPanel({
                             message.runEnded ||
                             (message.mode === 'steer' && !submissions.canSteer(message.worker.id))
                           }
-                          title={message.runEnded ? '原轮已结束，请核查记录或恢复内容后自行处理' : undefined}
+                          title={message.runEnded ? t('原轮已结束，请核查记录或恢复内容后自行处理') : undefined}
                           onClick={() => {
                             submissions.submit(
                               message.worker,
@@ -901,7 +905,7 @@ function SessionPanel({
                             submittedDraft.current.delete(message.worker.id)
                           }}
                         >
-                          重试
+                          {t('重试')}
                         </Button>
                       )}
                     </span>,
@@ -914,7 +918,7 @@ function SessionPanel({
               <button
                 className="cwn-jump-button"
                 type="button"
-                aria-label="回到最新消息"
+                aria-label={t('回到最新消息')}
                 onClick={jumpToLatest}
               >
                 <IconChevronDownOutlineRegular />
@@ -928,7 +932,7 @@ function SessionPanel({
           <form
             ref={composerForm}
             className="cwn-compose"
-            aria-label={renderHarnessConversation ? 'CLI Worker 消息输入' : undefined}
+            aria-label={renderHarnessConversation ? t('CLI Worker 消息输入') : undefined}
             onSubmit={(e) => {
               e.preventDefault()
               submitPrompt(prompt)
@@ -936,18 +940,18 @@ function SessionPanel({
           >
             {renderHarnessConversation && (
               <p className="cwn-resume-hint" role="status">
-                原生对话用于显示；请在此发送、排队或引导，停止仍等待 CLI 进程清理完成。
+                {t('原生对话用于显示；请在此发送、排队或引导，停止仍等待 CLI 进程清理完成。')}
               </p>
             )}
             {retired && <p className="cwn-resume-hint">{RETIRED_HARNESS_NOTICE}</p>}
             {snapshot.runningMessageModeReason && (
               <p className="cwn-resume-hint" role="status">
-                {snapshot.runningMessageModeReason}
+                {hostText(snapshot.runningMessageModeReason)}
               </p>
             )}
             {userInterrupted && !worker.conversationId && !resumeBlocked && (
               <p className="cwn-resume-hint" role="status">
-                上次停止前尚未建立 CLI 会话，再次发送将开始新会话；已有记录会保留。
+                {t('上次停止前尚未建立 CLI 会话，再次发送将开始新会话；已有记录会保留。')}
               </p>
             )}
             <FollowupQueuePresence
@@ -957,7 +961,7 @@ function SessionPanel({
               bodyId={followupQueueId}
               heading={(count) => (
                 <>
-                  <span>待发送 · {count}</span>
+                  <span>{t('待发送 · {count}', { count })}</span>
                   <div className="cwn-followup-heading-actions">
                     {snapshot.queuedFollowups?.some((item) => item.state === 'paused') && !running && (
                       <Button
@@ -980,7 +984,7 @@ function SessionPanel({
                           })
                         }
                       >
-                        继续发送
+                        {t('继续发送')}
                       </Button>
                     )}
                     <Button
@@ -988,7 +992,7 @@ function SessionPanel({
                       size="sm"
                       variant="ghost"
                       className="cwn-followup-toggle"
-                      aria-label={followupsExpanded ? '折叠待发送消息' : '展开待发送消息'}
+                      aria-label={followupsExpanded ? t('折叠待发送消息') : t('展开待发送消息')}
                       aria-expanded={followupsExpanded}
                       aria-controls={followupQueueId}
                       onClick={() =>
@@ -1009,7 +1013,7 @@ function SessionPanel({
                       {item.state === 'paused' &&
                         item.pauseReason &&
                         !['已停止发送', '任务已停止，请确认后继续发送'].includes(item.pauseReason) && (
-                          <small>{item.pauseReason}</small>
+                          <small>{hostText(item.pauseReason)}</small>
                         )}
                     </div>
                     <div className="cwn-followup-actions">
@@ -1018,7 +1022,7 @@ function SessionPanel({
                           type="button"
                           size="sm"
                           variant="ghost"
-                          aria-label={`${local.uncertain ? '恢复内容' : '重试发送'} ${local.prompt}`}
+                          aria-label={local.uncertain ? t('恢复内容 {prompt}', { prompt: local.prompt }) : t('重试发送 {prompt}', { prompt: local.prompt })}
                           disabled={!local.uncertain && (!canResume || busy)}
                           onClick={() => {
                             if (local.uncertain) submissions.recover(local)
@@ -1029,15 +1033,15 @@ function SessionPanel({
                             }
                           }}
                         >
-                          {local.uncertain ? '恢复内容' : '重试'}
+                          {local.uncertain ? t('恢复内容') : t('重试')}
                         </Button>
                       )}
                       <Button
                         type="button"
                         size="sm"
                         variant="ghost"
-                        aria-label={`插队待发送消息 ${index + 1}`}
-                        title="停止当前轮后优先发送这条消息"
+                        aria-label={t('插队待发送消息 {index}', { index: index + 1 })}
+                        title={t('停止当前轮后优先发送这条消息')}
                         disabled={
                           unavailable || !!resumeBlocked || (!worker.conversationId && !userInterrupted)
                         }
@@ -1048,13 +1052,13 @@ function SessionPanel({
                           jumpToLatest()
                         }}
                       >
-                        插队
+                        {t('插队')}
                       </Button>
                       <Button
                         type="button"
                         size="sm"
                         variant="ghost"
-                        aria-label={`取消待发送消息 ${index + 1}`}
+                        aria-label={t('取消待发送消息 {index}', { index: index + 1 })}
                         disabled={
                           busy ||
                           unavailable ||
@@ -1069,7 +1073,7 @@ function SessionPanel({
                             })
                         }}
                       >
-                        取消
+                        {t('取消')}
                       </Button>
                     </div>
                   </>
@@ -1079,7 +1083,7 @@ function SessionPanel({
             <div className="cwn-compose-box">
               <textarea
                 ref={composerInput}
-                aria-label={startingNew ? '新建对话内容' : '继续对话'}
+                aria-label={startingNew ? t('新建对话内容') : t('继续对话')}
                 value={prompt}
                 onChange={(e) => {
                   submittedDraft.current.delete(worker.id)
@@ -1092,14 +1096,14 @@ function SessionPanel({
                 maxLength={100000}
                 placeholder={
                   startingNew
-                    ? '输入新对话的任务…'
+                    ? t('输入新对话的任务…')
                     : running
                       ? runningMessageMode === 'steer'
-                        ? '输入引导消息，交给 CLI 在当前运行中处理…'
+                        ? t('输入引导消息，交给 CLI 在当前运行中处理…')
                         : runningMessageMode === 'interrupt'
-                          ? '输入消息，停止当前轮后优先发送…'
-                          : '输入下一步，本轮结束后自动发送…'
-                      : '给这个子 Agent 分配下一步…'
+                          ? t('输入消息，停止当前轮后优先发送…')
+                          : t('输入下一步，本轮结束后自动发送…')
+                      : t('给这个子 Agent 分配下一步…')
                 }
                 rows={1}
               />
@@ -1116,8 +1120,8 @@ function SessionPanel({
                     size="sm"
                     variant="outline"
                     className="cwn-send"
-                    aria-label="停止"
-                    title="停止"
+                    aria-label={t('停止')}
+                    title={t('停止')}
                     disabled={
                       stoppingRequest ||
                       unavailable ||
@@ -1133,8 +1137,8 @@ function SessionPanel({
                   <button
                     type="submit"
                     className="cwn-send"
-                    aria-label={startingNew ? '新建对话并发送' : submissionLabel}
-                    title={startingNew ? '新建对话并发送' : submissionHint}
+                    aria-label={startingNew ? t('新建对话并发送') : submissionLabel}
+                    title={startingNew ? t('新建对话并发送') : submissionHint}
                     disabled={!submitEnabled.current}
                     onMouseDown={(e) => {
                       e.preventDefault()
@@ -1149,7 +1153,7 @@ function SessionPanel({
             <ComposerTelemetry
               worker={worker}
               telemetry={snapshot.telemetry}
-              statusLabel={userInterrupted ? '已停止' : status[worker.status]}
+              statusLabel={userInterrupted ? t('已停止') : t(status[worker.status])}
             />
           </form>
         </>

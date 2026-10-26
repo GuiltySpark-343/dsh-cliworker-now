@@ -13,6 +13,7 @@ import { harnessFeatureReason } from './harness-feature-support.ts'
 import { useHarnessSessionBinding, type HarnessBindingRegistry } from './harness-binding-registry.ts'
 import { shadowHarnessSlot } from './harness-slot-shadow.ts'
 import { value, type API, type Snapshot } from './workers.ts'
+import { t, useT } from './i18n.ts'
 
 export interface WorkerForkTurn {
   turn: number
@@ -30,7 +31,7 @@ export function workerForkCut(
   const selected = turns.find((turn) =>
     target.turn !== undefined ? turn.turn === target.turn : turn.seq === target.seq,
   )
-  if (!selected) return { atMessageId: '', reason: '只能从已完成的助手轮次分支' }
+  if (!selected) return { atMessageId: '', reason: t('只能从已完成的助手轮次分支') }
   return { atMessageId: selected === latest ? '' : selected.messageId }
 }
 
@@ -98,7 +99,7 @@ export class HarnessWorkerFork {
   }
   reason(sessionId: string, cut: WorkerForkCut = { atMessageId: '' }) {
     const binding = this.bindings.get(sessionId)
-    if (!binding?.workerId) return '正在读取当前 CLI 会话'
+    if (!binding?.workerId) return t('正在读取当前 CLI 会话')
     const unsupported = harnessFeatureReason(binding, 'fork')
     if (unsupported) return unsupported
     const snapshot = this.states.get(sessionId)
@@ -115,10 +116,10 @@ export class HarnessWorkerFork {
       snapshot?.configuring ||
       (snapshot?.selected && active(snapshot.selected.status))
     )
-      return '请等待当前运行结束后再分支'
+      return t('请等待当前运行结束后再分支')
     if (snapshot?.queuedFollowups?.length || inbox?.['next-turn']?.length || inbox?.['next-step']?.length)
-      return '请发送或移除待发消息后再分支'
-    if (!snapshot?.selected) return '正在读取当前 CLI 状态'
+      return t('请发送或移除待发消息后再分支')
+    if (!snapshot?.selected) return t('正在读取当前 CLI 状态')
     return cut.reason || (cut.atMessageId ? harnessFeatureReason(binding, 'forkEarlier') : undefined)
   }
   /** Unsupported/busy paths settle without a request or an error notification. */
@@ -130,7 +131,7 @@ export class HarnessWorkerFork {
     this.error = ''
     this.changed()
     try {
-      if (!this.api.cliworker.forkWorker) throw new Error('Host 尚未提供 CLI 会话分支')
+      if (!this.api.cliworker.forkWorker) throw new Error(t('Host 尚未提供 CLI 会话分支'))
       const result = JSON.parse(
         value(
           await this.api.cliworker.forkWorker(
@@ -222,6 +223,7 @@ function WorkerForkMenu({
     selector: (rows: readonly ForkShortcut[]) => ForkShortcut | undefined,
   ) => ForkShortcut | undefined
 }) {
+  useT()
   const menu = useMenuOpenState?.()
   const shortcut = useShortcuts?.((rows) => rows.find((row) => row.id === 'session.fork'))
   const reason = forks.reason(sessionId)
@@ -236,7 +238,7 @@ function WorkerForkMenu({
         void forks.fork(sessionId)
       }}
     >
-      分支
+      {t('分支')}
     </MenuItemButton>
   )
   return reason ? (
