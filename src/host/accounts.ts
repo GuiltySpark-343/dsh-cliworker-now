@@ -8,6 +8,8 @@ import {
   type GuideEvent,
 } from './account-guide/engine.ts'
 import { createAccountGuide } from './account-guide/flows.ts'
+import { isLoginProvider, loginProviders } from './account-guide/providers.ts'
+import { parseAccountLoginId } from '../shared/account-links.ts'
 import {
   readClaudeOwnRoute,
   readClaudeOfficialAccountRoute,
@@ -94,6 +96,12 @@ export const AGY_GUIDE_TIMING = {
 }
 // A guided answer's Enter follows its pasted value after the input box takes it.
 const ANSWER_ENTER_MS = 300
+
+class AccountLoginGoneError extends Error {
+  constructor() {
+    super('该账号已不存在，请刷新后重试')
+  }
+}
 
 const validateCli = (cli: CliId) => {
   if (!(CLI_IDS as readonly string[]).includes(cli)) throw new Error('不支持的 CLI')
@@ -422,12 +430,19 @@ export class AccountManager {
             : cli === 'hermes'
               ? await listHermesAccountSources(this.config, control)
               : undefined
+        const providers = loginProviders(cli, identity.logins)
         return {
           cli,
           installed,
           ...identity,
           actions: actionsFor(cli, this.config)
-            .map((item) => (item.id === 'logout' && sources ? { ...item, sources } : item))
+            .map((item) =>
+              item.id === 'logout' && sources
+                ? { ...item, sources }
+                : item.id === 'login' && providers
+                  ? { ...item, providers }
+                  : item,
+            )
             .filter((item) => item.target === 'models' || this.backend.spawnTerminal),
         }
       }
@@ -622,6 +637,13 @@ export class AccountManager {
     }
   }
 
+  /** The login still exists in the native store: a stale window never signs out something else. */
+  private async assertLogin(cli: CliId, cwd: string, login: string, signal: AbortSignal) {
+    const current = await this.readStatus(cli, cwd, signal)
+    signal.throwIfAborted()
+    if (!current.logins?.some((item) => item.id === login)) throw new AccountLoginGoneError()
+  }
+
   private hasCustomExecutable(cli: CliId): boolean {
     if (cli !== 'harness' && this.config.cliExecutablePaths?.read(cli)?.mode === 'manual') return true
     if (cli === 'antigravity') return this.config.executable !== 'agy'
@@ -637,7 +659,8 @@ export class AccountManager {
     cwd: string,
     signal: AbortSignal,
     source?: AccountSource,
-    provider?: ZCodeLoginProvider,
+    provider?: string,
+    login?: string,
   ): Promise<{ id: string; instruction: string }> {
     validateCli(cli)
     if (!ACTIONS.includes(action)) throw new Error('不支持的账号操作')
@@ -650,12 +673,23 @@ export class AccountManager {
       throw new Error('不支持的账号来源')
     if (
       provider !== undefined &&
-      (cli !== 'zcode' ||
-        action !== 'login' ||
+      (action !== 'login' ||
         source !== undefined ||
-        !['bigmodel', 'zai'].includes(provider))
+        login !== undefined ||
+        !(cli === 'zcode' ? ['bigmodel', 'zai'].includes(provider) : (cli === 'opencode' || cli === 'hermes') && isLoginProvider(cli, provider)))
     )
-      throw new Error('不支持的 ZCode 授权来源')
+      throw new Error(cli === 'zcode' ? '不支持的 ZCode 授权来源' : '不支持的登录服务商')
+    // One login of the account window: an OpenCode provider, or a Hermes pool entry.
+    const target = login === undefined ? undefined : parseAccountLoginId(login)
+    if (
+      login !== undefined &&
+      (action !== 'logout' ||
+        source !== undefined ||
+        !target ||
+        target.cli !== cli ||
+        !(cli === 'opencode' ? target.entry === undefined : cli === 'hermes' && target.entry !== undefined))
+    )
+      throw new Error('不支持单独退出该账号')
     if (!parent || parent.length > 512) throw new Error('无效的父会话')
     this.controller.signal.throwIfAborted()
     signal.throwIfAborted()
@@ -675,7 +709,7 @@ export class AccountManager {
       this.parents.set(parent, scope)
     }
     const operation = this.track(
-      this.startSession(parent, cli, action, directory, signal, scope, source, provider),
+      this.startSession(parent, cli, action, directory, signal, scope, source, provider, login),
     )
     scope.pending.add(operation)
     void operation.finally(() => scope.pending.delete(operation)).catch(() => undefined)
@@ -690,7 +724,8 @@ export class AccountManager {
     signal: AbortSignal,
     scope: ParentScope,
     source?: AccountSource,
-    provider?: ZCodeLoginProvider,
+    provider?: string,
+    login?: string,
   ) {
     const timeout = new AbortController()
     const timer = setTimeout(() => timeout.abort(), STARTUP_TIMEOUT)
@@ -770,7 +805,7 @@ export class AccountManager {
           this.config,
           this.backend,
           startup,
-          { loginProvider: provider },
+          { loginProvider: provider as ZCodeLoginProvider | undefined },
         )
         launch = prepared
         instruction = prepared.instruction
@@ -796,7 +831,8 @@ export class AccountManager {
         release = () => {
           for (const free of releases) free()
         }
-        const prepared = await prepareHermesAccount(action, executable, cwd, this.config, startup, source)
+        if (login) await this.assertLogin(cli, cwd, login, startup)
+        const prepared = await prepareHermesAccount(action, executable, cwd, this.config, startup, source, { provider, login })
         const cleanup = release
         release = async () => {
           await prepared.cleanup()
@@ -807,13 +843,14 @@ export class AccountManager {
         launch = prepared
         instruction = prepared.instruction
       } else if (cli === 'opencode') {
-        const prepared = await prepareOpenCodeAccount(executable, action, this.config, startup)
+        if (login) await this.assertLogin(cli, cwd, login, startup)
+        const prepared = await prepareOpenCodeAccount(executable, action, this.config, startup, { provider, login })
         launch = prepared
         instruction = prepared.instruction
         release = prepared.cleanup
       }
       startup.throwIfAborted()
-      const guide = createAccountGuide(cli, action, { provider })
+      const guide = createAccountGuide(cli, action, { provider, login })
       allocation = spawnAccountTerminal(this.backend, {
         ...launch,
         ...(guide ? guide.size : { rows: 24, cols: 80 }),
@@ -922,6 +959,7 @@ export class AccountManager {
         throw new Error('账号终端尚未确认完全退出，请重启应用')
       if (timeout.signal.aborted) throw new Error('账号终端启动超时，正在回收启动过程；请稍后重试')
       if (error instanceof ZCodeAccountCapabilityError) throw error
+      if (error instanceof AccountLoginGoneError) throw error
       if (error instanceof WindowsAccountTerminalError) throw error
       if (error instanceof WindowsCliInstallationError) throw error
       if (error instanceof HermesExecutableError) throw error

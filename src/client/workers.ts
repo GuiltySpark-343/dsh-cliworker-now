@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
-import type { Worker, WorkerSnapshot } from '../shared/types.ts'
+import type { CliId, Worker, WorkerSnapshot } from '../shared/types.ts'
 import type { TaskMode } from '../shared/types.ts'
 import { setLanguagePreference, t } from './i18n.ts'
 
 export type Snapshot = WorkerSnapshot & { configuring?: boolean }
 export type API = Pick<ClientRemote, '$stream'> & {
-  cliworker: Omit<ClientRemote['cliworker'], 'ensureHarnessConversation' | 'repairHarnessConversation' | 'permissionForWorker' | 'configureWorkerPermission' | 'setWorkerGoal' | 'setWorkerGoalStatus' | 'clearWorkerGoal' | 'forkWorker' | 'accountRespond'> & {
+  cliworker: Omit<ClientRemote['cliworker'], 'ensureHarnessConversation' | 'repairHarnessConversation' | 'permissionForWorker' | 'configureWorkerPermission' | 'setWorkerGoal' | 'setWorkerGoalStatus' | 'clearWorkerGoal' | 'forkWorker' | 'accountRespond' | 'accountStartWith'> & {
     /** Optional until an older Host has upgraded its native-conversation bridge. */
     ensureHarnessConversation?: (parentId: string, workerId: string) => Promise<RemoteResult<string>>
     /** Explicitly repair an unreadable owned display binding; never submits a CLI prompt. */
@@ -20,6 +20,8 @@ export type API = Pick<ClientRemote, '$stream'> & {
     forkWorker?: (parentId: string, workerId: string, atMessageId: string, signal: AbortSignal) => Promise<RemoteResult<string>>
     /** The user's answer to a plugin-drawn login window step (JSON); absent on older Hosts. */
     accountRespond?: (parentId: string, accountId: string, response: string) => Promise<RemoteResult<boolean>>
+    /** A provider picked in the account window, or one login to sign out; absent on older Hosts. */
+    accountStartWith?: (parentId: string, cli: CliId, action: string, options: string, signal?: AbortSignal) => Promise<RemoteResult<string>>
   }
 }
 export const value = <T>(result: RemoteResult<T>): T => {

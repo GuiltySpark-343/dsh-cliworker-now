@@ -98,7 +98,7 @@ function AnswerForm({
     setPasted(false)
   }, [retry])
   const content = value.replace(/[\r\n]/g, '').trim()
-  const label = kind === 'code' ? t('授权码') : t('API Key')
+  const label = kind === 'code' ? t('授权码') : t('API 密钥')
   return (
     <form
       className="cwn-login-code"

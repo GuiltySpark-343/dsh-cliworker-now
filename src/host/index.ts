@@ -2053,13 +2053,42 @@ export class CliWorkerService extends TypertRemoteService {
     }
   }
 
+  /**
+   * @param options - JSON `{ provider?, login? }`: a login provider of the window's picker, or
+   * one login (`AccountLogin.id`) to sign out. Host checks both against the installed CLI.
+   */
+  @Remote('accountStartWith')
+  async accountStartWith(
+    parentSessionId: string,
+    cli: string,
+    action: string,
+    options: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    try {
+      const parsed: unknown = JSON.parse(typeof options === 'string' && options.length <= 1024 ? options : 'null')
+      const value = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined
+      const name = (key: string) => {
+        const item = value?.[key]
+        if (item === undefined) return undefined
+        if (typeof item !== 'string' || !item || item.length > 160) throw new Error('无效的账号操作')
+        return item
+      }
+      if (!value || Object.keys(value).some((key) => key !== 'provider' && key !== 'login')) throw new Error('无效的账号操作')
+      return this.startAccount(parentSessionId, cli, action, signal, undefined, name('provider'), name('login'))
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+
   private async startAccount(
     parentSessionId: string,
     cli: string,
     action: string,
     signal: AbortSignal,
     source?: 'native' | 'plugin',
-    provider?: 'bigmodel' | 'zai',
+    provider?: string,
+    login?: string,
   ): Promise<string> {
     try {
       const id = validate.enum(CLI_IDS).parse(cli)
@@ -2080,7 +2109,7 @@ export class CliWorkerService extends TypertRemoteService {
       }
       this.invalidateSettingsDisplay(id)
       return JSON.stringify(
-        await this.accounts.start(parent.id, id, operation, this.project(parent), signal, source, provider),
+        await this.accounts.start(parent.id, id, operation, this.project(parent), signal, source, provider, login),
       )
     } catch (error) {
       throw failure(error)

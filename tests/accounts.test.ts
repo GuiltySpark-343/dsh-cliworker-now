@@ -1289,25 +1289,46 @@ describe('extended CLI account capabilities (synthetic credentials and PTYs)', (
     },
   )
   it.each([
-    ['codex', 'login', 'bigmodel'],
-    ['zcode', 'logout', 'bigmodel'],
-    ['zcode', 'manage', 'zai'],
-    ['zcode', 'login', 'native'],
-    ['zcode', 'login', 'https://foreign.invalid'],
-    ['zcode', 'login', ''],
+    ['codex', 'login', 'bigmodel', '不支持的登录服务商'],
+    ['zcode', 'logout', 'bigmodel', '不支持的 ZCode 授权来源'],
+    ['zcode', 'manage', 'zai', '不支持的 ZCode 授权来源'],
+    ['zcode', 'login', 'native', '不支持的 ZCode 授权来源'],
+    ['zcode', 'login', 'https://foreign.invalid', '不支持的 ZCode 授权来源'],
+    ['zcode', 'login', '', '不支持的 ZCode 授权来源'],
+    ['opencode', 'login', 'https://foreign.invalid', '不支持的登录服务商'],
+    ['opencode', 'login', 'not-in-the-picker', '不支持的登录服务商'],
+    ['opencode', 'logout', 'deepseek', '不支持的登录服务商'],
+    ['hermes', 'login', 'openai-codex', '不支持的登录服务商'],
+    ['kimi', 'login', 'deepseek', '不支持的登录服务商'],
   ])(
     'rejects invalid provider arguments %s/%s/%s before reserving or resolving a process',
-    (cli, action, provider) => {
+    (cli, action, provider, message) => {
       const f = fixture()
       expect(() =>
         f.manager.start('parent', cli as any, action as any, f.cwd, f.signal, undefined, provider as any),
-      ).toThrow('不支持的 ZCode 授权来源')
+      ).toThrow(message)
       expect(f.manager.isBusy('zcode')).toBe(false)
       expect(f.backend.resolveExecutable).not.toHaveBeenCalled()
       expect(f.backend.spawnTerminal).not.toHaveBeenCalled()
       expect(f.backend.spawn).not.toHaveBeenCalled()
     },
   )
+  it.each([
+    ['opencode', 'login', 'opencode:deepseek'],
+    ['opencode', 'logout', 'hermes:deepseek:a1b2c3'],
+    ['opencode', 'logout', 'opencode:deepseek:a1b2c3'],
+    ['hermes', 'logout', 'hermes:deepseek'],
+    ['hermes', 'logout', 'hermes:deepseek:../../x'],
+    ['pi', 'logout', 'pi:anthropic'],
+    ['zcode', 'logout', 'zcode:all'],
+  ])('rejects a single-login sign-out %s/%s/%s before resolving a process', (cli, action, login) => {
+    const f = fixture()
+    expect(() =>
+      f.manager.start('parent', cli as any, action as any, f.cwd, f.signal, undefined, undefined, login),
+    ).toThrow('不支持单独退出该账号')
+    expect(f.backend.resolveExecutable).not.toHaveBeenCalled()
+    expect(f.backend.spawnTerminal).not.toHaveBeenCalled()
+  })
   it('offers account actions for all six extended CLIs without starting any login process', async () => {
     const f = fixture()
     for (const cli of ['zcode', 'grok', 'omp', 'pi', 'hermes', 'opencode'] as const) {
@@ -1781,6 +1802,142 @@ describe('guided login windows of other CLIs (synthetic screens)', () => {
     await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed' }))
     expect(watched.steps()).toEqual(['notSignedIn'])
     expect(f.terminal.write).not.toHaveBeenCalled()
+  })
+
+  const logins = (...ids: string[]) =>
+    ids.map((id) => ({ providerLabel: id.split(':')[1]!, authMethod: 'api' as const, id }))
+  const holding = (f: ReturnType<typeof fixture>, held: () => string[]) =>
+    vi.spyOn(f.manager as any, 'readStatus').mockImplementation(async () =>
+      held().length
+        ? { state: 'authenticated', verification: 'local', summary: '', logins: logins(...held()), actions: [] }
+        : { state: 'unconfigured', verification: 'local', summary: '', actions: [] },
+    )
+  const tail = (f: ReturnType<typeof fixture>) => {
+    const argv = vi.mocked(f.backend.spawnTerminal!).mock.calls[0]![0].argv
+    return argv.slice(argv.findIndex((item) => item.startsWith('/synthetic/')))
+  }
+
+  it('signs in to the OpenCode provider picked in the window with a key typed only into the CLI', async () => {
+    fast()
+    const f = fixture()
+    let saved = false
+    holding(f, () => (saved ? ['opencode:deepseek'] : []))
+    const { id } = await f.manager.start('p', 'opencode', 'login', f.cwd, f.signal, undefined, 'deepseek')
+    expect(tail(f)).toEqual(['/synthetic/opencode', 'auth', 'login', '-p', 'deepseek'])
+    const watched = frames(f, id)
+    f.output.write('┌ Add credential\r\n│\r\n◆ Enter your API key\r\n│ _\r\n└')
+    await vi.waitFor(() => expect(watched.steps().at(-1)).toBe('key'))
+    expect(watched.seen.at(-1)!.guide).toMatchObject({ template: 'secret' })
+    await f.manager.respond('p', id, { secret: 'simulated-deepseek-key' })
+    expect(vi.mocked(f.terminal.write).mock.calls).toEqual([['simulated-deepseek-key'], ['\r']])
+    saved = true
+    f.result.resolve({ exitCode: 0, signal: null })
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed' }))
+    expect(watched.steps().at(-1)).toBe('signedIn')
+    expect(JSON.stringify(watched.seen)).not.toContain('simulated-deepseek-key')
+  })
+
+  it('signs out exactly one OpenCode provider and confirms only its own removal', async () => {
+    fast()
+    const f = fixture()
+    let removed = false
+    holding(f, () => (removed ? ['opencode:openrouter'] : ['opencode:deepseek', 'opencode:openrouter']))
+    const { id } = await f.manager.start('p', 'opencode', 'logout', f.cwd, f.signal, undefined, undefined, 'opencode:deepseek')
+    expect(tail(f)).toEqual(['/synthetic/opencode', 'auth', 'logout', 'deepseek'])
+    const watched = frames(f, id)
+    f.output.write('┌ Remove credential\r\n│\r\n└ Logout successful\r\n')
+    removed = true
+    f.result.resolve({ exitCode: 0, signal: null })
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed' }))
+    expect(watched.steps().at(-1)).toBe('loggedOut')
+    expect(f.terminal.write).not.toHaveBeenCalled()
+  })
+
+  it('does not report a sign-out while the target login is still stored', async () => {
+    fast()
+    const f = fixture()
+    // Another login going away proves nothing about the target.
+    let other = true
+    holding(f, () => (other ? ['opencode:deepseek', 'opencode:openrouter'] : ['opencode:deepseek']))
+    const { id } = await f.manager.start('p', 'opencode', 'logout', f.cwd, f.signal, undefined, undefined, 'opencode:deepseek')
+    const watched = frames(f, id)
+    other = false
+    f.result.resolve({ exitCode: 0, signal: null })
+    await vi.waitFor(() => expect(watched.seen.at(-1)?.status).toMatch(/closed|failed/))
+    expect(watched.steps()).toContain('logoutUnconfirmed')
+    expect(watched.steps()).not.toContain('loggedOut')
+  })
+
+  it('refuses to sign out a login the native store no longer holds, before any terminal', async () => {
+    fast()
+    const f = fixture()
+    holding(f, () => ['opencode:openrouter'])
+    await expect(
+      f.manager.start('p', 'opencode', 'logout', f.cwd, f.signal, undefined, undefined, 'opencode:deepseek'),
+    ).rejects.toThrow('该账号已不存在，请刷新后重试')
+    expect(f.backend.spawnTerminal).not.toHaveBeenCalled()
+    expect(f.manager.isBusy('opencode')).toBe(false)
+  })
+
+  it('adds a Hermes key as a new pool entry, leaving its label to Hermes', async () => {
+    fast()
+    const f = fixture()
+    let added = false
+    holding(f, () => (added ? ['hermes:deepseek:a1b2c3', 'hermes:deepseek:d4e5f6'] : ['hermes:deepseek:a1b2c3']))
+    const { id } = await f.manager.start('p', 'hermes', 'login', f.cwd, f.signal, undefined, 'deepseek')
+    expect(tail(f).slice(-5)).toEqual(['auth', 'add', 'deepseek', '--type', 'api-key'])
+    const watched = frames(f, id)
+    f.output.write('Label / account name (optional): ')
+    await vi.waitFor(() => expect(f.terminal.write).toHaveBeenCalledWith('\r'))
+    f.output.write('\r\nPaste your API key: ')
+    await vi.waitFor(() => expect(watched.steps().at(-1)).toBe('key'))
+    await f.manager.respond('p', id, { secret: 'simulated-hermes-key' })
+    expect(vi.mocked(f.terminal.write).mock.calls).toEqual([['\r'], ['simulated-hermes-key'], ['\r']])
+    added = true
+    f.result.resolve({ exitCode: 0, signal: null })
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed' }))
+    expect(watched.steps().at(-1)).toBe('signedIn')
+  })
+
+  it('removes one Hermes pool entry by its id', async () => {
+    fast()
+    const f = fixture()
+    let removed = false
+    // Simulated pool: Hermes' sign-out first checks the account source it removes from.
+    mkdirSync(f.config.hermesHome!, { recursive: true, mode: 0o700 })
+    writeFileSync(join(f.config.hermesHome!, 'config.yaml'), 'auth:\n  adopt_external_logins: false\n', { mode: 0o600 })
+    writeFileSync(
+      join(f.config.hermesHome!, 'auth.json'),
+      JSON.stringify({
+        credential_pool: {
+          deepseek: ['a1b2c3', 'd4e5f6'].map((entry) => ({
+            id: entry,
+            auth_type: 'api_key',
+            source: 'manual',
+            access_token: `simulated-deepseek-key-${entry}`,
+          })),
+        },
+      }),
+      { mode: 0o600 },
+    )
+    holding(f, () => (removed ? ['hermes:deepseek:d4e5f6'] : ['hermes:deepseek:a1b2c3', 'hermes:deepseek:d4e5f6']))
+    const { id } = await f.manager.start('p', 'hermes', 'logout', f.cwd, f.signal, undefined, undefined, 'hermes:deepseek:a1b2c3')
+    expect(tail(f).slice(-4)).toEqual(['auth', 'remove', 'deepseek', 'a1b2c3'])
+    const watched = frames(f, id)
+    removed = true
+    f.result.resolve({ exitCode: 0, signal: null })
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed' }))
+    expect(watched.steps().at(-1)).toBe('loggedOut')
+  })
+
+  it('advertises the window providers with the ones already signed in', async () => {
+    const f = fixture()
+    holding(f, () => [])
+    vi.mocked((f.manager as any).readStatus).mockRestore()
+    const status = await f.manager.status('opencode', f.cwd, f.signal)
+    const providers = status.actions.find((item) => item.id === 'login')?.providers
+    expect(providers?.map((item) => item.id)).toContain('deepseek')
+    expect(providers?.some((item) => item.signedIn)).toBe(false)
   })
 
   it('refuses answers for the manage terminal, which stays native', async () => {

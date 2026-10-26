@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import type { AccountAction, AccountSource } from '../shared/accounts.ts'
 import { accountEmail, localTokenExpired, type AccountIdentity } from './account-identity.ts'
 import type { AccountLogin } from '../shared/accounts.ts'
+import { accountLoginId, parseAccountLoginId } from '../shared/account-links.ts'
 import { authenticatedAccountLogins, providerLogin, usableNativeApiKey } from './account-login.ts'
 import { hermesSourceSuppressed, projectHermesUnsuppressedAuth } from './hermes-suppression.ts'
 import { projectHermesNousSource } from './hermes-nous.ts'
@@ -47,6 +48,12 @@ function tokenEmail(value: unknown): string | undefined {
     buffer.fill(0)
   }
 }
+
+/** Hermes credential_pool.py gives every entry a 6-hex `id`, the exact `auth remove` target. */
+const poolEntryLogin = (provider: string, entry: unknown) =>
+  record(entry) && typeof entry.id === 'string' && /^[0-9a-f]{6}$/.test(entry.id)
+    ? accountLoginId('hermes', provider, entry.id)
+    : undefined
 
 /** Native shapes from auth_codex.py/auth_xai.py and NousResearch/hermes-agent@6c80c327 auth_nous.py.
  * Explicit own credentials project local login; provider declarations and unknown schemas do not.
@@ -118,9 +125,12 @@ export function projectHermesIdentity(raw: unknown): AccountIdentity | undefined
       continue
     }
     const email = tokenEmail(state.tokens.id_token)
+    // `hermes auth remove <provider> <id>` removes one pooled entry; an unpooled login stays native.
+    const pooled = Array.isArray(entries) && entries.length === 1 ? poolEntryLogin(id, entries[0]) : undefined
     logins.push({
       ...providerLogin(id === 'xai-oauth' ? 'xai' : id, 'oauth'),
       ...(email ? { accountLabel: email } : {}),
+      ...(pooled ? { id: pooled } : {}),
     })
   }
   const pools = record(raw.credential_pool) ? raw.credential_pool : {}
@@ -139,7 +149,8 @@ export function projectHermesIdentity(raw: unknown): AccountIdentity | undefined
         !usableNativeApiKey(entry.access_token ?? entry.runtime_api_key)
       )
         continue
-      logins.push(providerLogin(provider, 'api', { baseUrl: entry.base_url }))
+      const handle = poolEntryLogin(provider, entry)
+      logins.push({ ...providerLogin(provider, 'api', { baseUrl: entry.base_url }), ...(handle ? { id: handle } : {}) })
     }
   }
   if (logins.length) {
@@ -338,6 +349,7 @@ export async function prepareHermesAccount(
   config: RuntimeConfig,
   signal: AbortSignal,
   source?: AccountSource,
+  target: { provider?: string; login?: string } = {},
 ): Promise<{
   argv: string[]
   cwd: string
@@ -398,7 +410,15 @@ export async function prepareHermesAccount(
   try {
     signal.throwIfAborted()
     const temporary = privateDirectory(join(state, 'tmp'))
-    const command = await hermesNativeCommand(executable, [action === 'login' ? 'model' : 'auth'], signal)
+    // A provider or pool entry chosen in the account window; otherwise Hermes' own menus.
+    const removed = target.login ? parseAccountLoginId(target.login) : undefined
+    const args =
+      action === 'login' && target.provider
+        ? ['auth', 'add', target.provider, '--type', 'api-key']
+        : action === 'logout' && removed?.cli === 'hermes' && removed.entry
+          ? ['auth', 'remove', removed.provider, removed.entry]
+          : [action === 'login' ? 'model' : 'auth']
+    const command = await hermesNativeCommand(executable, args, signal)
     const argv = [
       process.execPath,
       fileURLToPath(new URL('./private-launch.mjs', import.meta.url)),

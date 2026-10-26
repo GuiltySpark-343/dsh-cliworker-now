@@ -18,10 +18,12 @@ import {
   type CliId,
   type Preference,
 } from '../shared/types.ts'
-import type { AccountAction, AccountSource, AccountStatus, ZCodeLoginProvider } from '../shared/accounts.ts'
+import type { AccountAction, AccountSource, AccountStatus } from '../shared/accounts.ts'
 import { modelName } from '../shared/models.ts'
 import { visibleModelChoices } from '../shared/model-presentation.ts'
 import { AccountTerminal, type AccountCloseControl } from './account-terminal.tsx'
+import { AccountsWindow } from './account-login/accounts-window.tsx'
+import { MULTI_ACCOUNT_CLIS } from '../shared/account-links.ts'
 import { BrandIcon, Glyph } from './icons.tsx'
 import { operationMessage } from './operation-error.ts'
 import { value, type API } from './workers.ts'
@@ -587,9 +589,12 @@ function CliSettings({
   const [model, setModel] = useState('')
   const [effort, setEffort] = useState<Preference['effort']>('default')
   const [action, setAction] = useState<AccountAction>()
+  // Several-login CLIs: one 「账号」 window lists, adds and signs out each login.
+  const [accountsOpen, setAccountsOpen] = useState(false)
+  const multiAccount = MULTI_ACCOUNT_CLIS.has(cli)
+  const accountBusy = !!action || accountsOpen
   const [chosenAction, setChosenAction] = useState<AccountStatus['actions'][number]>()
   const [accountSource, setAccountSource] = useState<AccountSource>()
-  const [loginProvider, setLoginProvider] = useState<ZCodeLoginProvider>()
   const [pathChanging, setPathChanging] = useState(false)
   const selection = useRef({ model: '', effort: 'default' as Preference['effort'] })
   useEffect(() => {
@@ -681,7 +686,7 @@ function CliSettings({
   const settingsPending = enabled === undefined && !settingsError
   const accountLoading = !settingsError && enabled !== false && (!account || account.loading)
   const supportedEfforts = catalog?.models.find((item) => item.id === model)?.efforts ?? []
-  const choiceDisabled = inactive || pathChanging || modelLoading || accountLoading || !!action || !catalog
+  const choiceDisabled = inactive || pathChanging || modelLoading || accountLoading || accountBusy || !catalog
   function savePreference(preference: Preference) {
     preferenceSaves.stage(preference, async (next, signal) => {
       const saved = JSON.parse(value(await api.cliworker.configure(sessionId, JSON.stringify(next), signal)))
@@ -713,10 +718,13 @@ function CliSettings({
   const finishedAccountAction = () => {
     onRefreshAccount(true)
   }
+  const closeAccounts = () => {
+    setAccountsOpen(false)
+    onRefreshAccount(true)
+  }
   const closeAccount = () => {
     setAction(undefined)
     setAccountSource(undefined)
-    setLoginProvider(undefined)
     onRefreshAccount(true)
   }
   const sources = chosenAction?.sources?.filter(
@@ -724,7 +732,6 @@ function CliSettings({
       ['native', 'plugin'].includes(source.id) && all.findIndex((item) => item.id === source.id) === index,
   )
   const choosingSource = action === 'logout' && chosenAction?.sources !== undefined && !accountSource
-  const choosingLoginProvider = cli === 'zcode' && action === 'login' && !loginProvider
   const accountAction = (id: AccountAction) => {
     const item = account?.data?.actions.find((candidate) => candidate.id === id)
     const label =
@@ -757,7 +764,7 @@ function CliSettings({
           inactive ||
           accountLoading ||
           !!account?.error ||
-          !!action ||
+          accountBusy ||
           saving ||
           pathChanging ||
           !item ||
@@ -771,8 +778,7 @@ function CliSettings({
             }
             preferenceSaves.invalidate(cli)
             setChosenAction(item)
-            setLoginProvider(undefined)
-            setAccountSource(
+                    setAccountSource(
               id === 'logout' &&
                 item.sources?.length === 1 &&
                 ['native', 'plugin'].includes(item.sources[0]!.id)
@@ -824,8 +830,8 @@ function CliSettings({
             checked={enabled ?? false}
             onChange={onToggle}
             label={t('启用 {cli}', { cli: CLI_LABELS[cli] })}
-            disabled={enabled === undefined || toggleBusy || saving || !!action || pathChanging}
-            title={action ? t('请先关闭账号终端') : undefined}
+            disabled={enabled === undefined || toggleBusy || saving || accountBusy || pathChanging}
+            title={accountBusy ? t('请先关闭账号终端') : undefined}
           />
         </div>
       </div>
@@ -859,13 +865,61 @@ function CliSettings({
             enabled={enabled}
             loading={accountLoading}
             settingsError={settingsError}
-            logout={accountAction('logout')}
+            logout={multiAccount ? undefined : accountAction('logout')}
           />
           <div className="cwn-account-actions">
-            {accountAction('login')}
+            {multiAccount ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="md"
+                className="cwn-account-login-action"
+                disabled={
+                  inactive ||
+                  accountLoading ||
+                  !!account?.error ||
+                  accountBusy ||
+                  saving ||
+                  pathChanging ||
+                  !account?.data?.actions.some((item) => item.id === 'login' && item.target !== 'models')
+                }
+                onClick={() => {
+                  if (inactive) return
+                  preferenceSaves.invalidate(cli)
+                  setAccountsOpen(true)
+                }}
+              >
+                {account?.data?.state === 'authenticated' ? t('账号') : t('登录账号')}
+              </Button>
+            ) : (
+              accountAction('login')
+            )}
             {accountAction('manage')}
           </div>
         </div>
+        {accountsOpen && enabled && (
+          <Modal
+            open
+            onClose={() => {
+              if (accountClose.current) void accountClose.current()
+              else closeAccounts()
+            }}
+            title={`${CLI_LABELS[cli]} · ${t('账号')}`}
+            closeLabel={t('关闭账号操作')}
+            className="cwn-account-dialog"
+            contentClassName="cwn-account-dialog-content"
+          >
+            <AccountsWindow
+              api={api}
+              sessionId={sessionId}
+              cli={cli}
+              status={account?.data}
+              closeControl={accountClose}
+              onRefresh={() => onRefreshAccount(true)}
+              onClose={closeAccounts}
+            />
+          </Modal>
+        )}
         {action && enabled && (
           <Modal
             open
@@ -878,19 +932,7 @@ function CliSettings({
             className="cwn-account-dialog"
             contentClassName="cwn-account-dialog-content"
           >
-            {choosingLoginProvider ? (
-              <section aria-label={t('选择 ZCode 授权来源')}>
-                <p>{t('选择账号所属的服务商')}</p>
-                <div className="cwn-account-actions">
-                  <Button variant="outline" size="md" onClick={() => setLoginProvider('bigmodel')}>
-                    {t('中国智谱 BigModel')}
-                  </Button>
-                  <Button variant="outline" size="md" onClick={() => setLoginProvider('zai')}>
-                    {t('海外 Z.AI')}
-                  </Button>
-                </div>
-              </section>
-            ) : choosingSource ? (
+            {choosingSource ? (
               <section aria-label={t('选择退出账号来源')}>
                 <p>{sources?.length ? t('选择要退出的账号来源') : t('账号来源不可用，请关闭后刷新状态')}</p>
                 <div className="cwn-account-actions">
@@ -914,7 +956,6 @@ function CliSettings({
                 cli={cli}
                 action={action}
                 source={accountSource}
-                provider={loginProvider}
                 signedIn={account?.data?.state === 'authenticated'}
                 onClose={closeAccount}
                 onFinished={finishedAccountAction}
@@ -1005,7 +1046,7 @@ function CliSettings({
         api={api}
         sessionId={sessionId}
         cli={cli}
-        blocked={!!action || saving || toggling}
+        blocked={accountBusy || saving || toggling}
         accountLoading={accountLoading}
         accountRevision={account}
         onApplied={() => {

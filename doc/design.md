@@ -1153,3 +1153,15 @@ OpenSpec 变更 `guide-agy-account-terminal`（用户 2026-10-26 要求：退出
 - agy 改版导致标记失配时，引导停留或不出现，自动退出不触发，退回用户手动操作。
 
 - 修订（同日，用户实测反馈）：Antigravity 登录/退出改为插件自绘的分步窗口，原生终端以 200×60 隐藏运行、可显示作后备；窗口只在用户点击时写入回车或括号粘贴的授权码；登录地址取自 OSC 8 且仅限 `accounts.google.com`；退出前以画面静止加原生账号状态判断已登录，不再只依赖猜测的主界面文字；登录确认后结束原生终端。
+
+## 2026-10-27 可复用登录模板与「账号」窗口（未发布）
+
+OpenSpec 变更 `add-cli-login-templates`（用户 2026-10-26 要求：其他 CLI 的登录界面也按 Antigravity 的方式适配，多来源时加下拉框，做可复用模板；多账号 CLI 合并成「账号」窗口、同服务商由用户选添加或替换、单账号 CLI 提供切换账号）。
+
+- Host `account-guide/engine.ts` 抽出通用引导引擎 `FlowGuide`，每个 CLI 只写一份流程定义（`single-account.ts`、`multi-account.ts`）：按屏幕标记只前进的步骤、白名单登录链接与设备码提取、括号粘贴开关、自动退出命令。`AgyAccountGuide` 实现同一驱动接口。
+- Client 不再拼按键：用户回应经 `accountRespond` 只有 option / code / secret / confirm 四种，Host 校验属于当前步骤后译成该 CLI 自己的按键。授权码和 API Key 不进入事件、日志、引导帧或 Client 持久状态。
+- 登录、退出成功只以原生账号状态确认；多账号时以目标凭据的 `cli:provider[:entry]` 句柄为准（OpenCode 服务商键、Hermes 凭据池 6 位 id），其他条目变化不算数。启动单条退出前 Host 重新读取原生状态，目标已不存在则拒绝。
+- 「登录到」服务商表是固定表，逐项对照已安装版本：OpenCode 1.19.0 的 models.dev 目录 id，Hermes `auth add` 的 Known providers。表外服务商和 OAuth 仍走原生菜单。
+- Hermes「替换」由 Client 串联：先添加并确认新凭据，再按旧句柄单独退出；退出未确认则保留结果页。单账号「切换账号」同样串联：先退出并确认，再登录。
+- 画面静止 8 秒仍未命中任何步骤时显示原生终端后备，此后不再自动写入。OpenCode 首次读取服务商目录约 15 秒，为它单设等待步骤，避免误入后备。
+- 未做：Kimi、Pi、OMP 的「登录到」与逐条退出（Kimi 画面未捕获，Pi/OMP 非空退出菜单未捕获）；Qoder 已登录 TUI 的 `/logout` 画面未实测，依赖静止后的原生状态判断。真实账号验收尚未执行。

@@ -40,3 +40,19 @@ export const SINGLE_ACCOUNT_CLIS: ReadonlySet<CliId> = new Set<CliId>([
   'mimo',
   'grok',
 ])
+/** CLIs that keep several provider logins; one 「账号」 window lists, adds and signs out each. */
+export const MULTI_ACCOUNT_CLIS: ReadonlySet<CliId> = new Set<CliId>(['opencode', 'pi', 'kimi', 'zcode', 'hermes', 'omp'])
+
+/** Provider ids and credential entry ids are plain native names; never a key, URL or path. */
+export const ACCOUNT_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/
+/** `cli:provider[:entry]`, the Host handle of one removable login (`AccountLogin.id`). */
+export function accountLoginId(cli: CliId, provider: string, entry?: string): string | undefined {
+  if (!ACCOUNT_NAME.test(provider) || (entry !== undefined && !ACCOUNT_NAME.test(entry))) return undefined
+  return entry === undefined ? `${cli}:${provider}` : `${cli}:${provider}:${entry}`
+}
+export function parseAccountLoginId(id: string): { cli: string; provider: string; entry?: string } | undefined {
+  const [cli, provider, entry, ...rest] = id.split(':')
+  if (!cli || !provider || rest.length || !ACCOUNT_NAME.test(provider) || (entry !== undefined && !ACCOUNT_NAME.test(entry)))
+    return undefined
+  return { cli, provider, ...(entry === undefined ? {} : { entry }) }
+}

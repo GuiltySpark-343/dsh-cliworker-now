@@ -5,7 +5,7 @@ import type {
   AccountResponse,
   AccountStatus,
 } from '../../shared/accounts.ts'
-import { allowedLink } from '../../shared/account-links.ts'
+import { allowedLink, parseAccountLoginId } from '../../shared/account-links.ts'
 
 /** What a guide asks the account manager to do. Keys only ever answer a user's choice. */
 export type GuideEvent =
@@ -71,6 +71,8 @@ export interface FlowContext {
   action: AccountAction
   provider?: string
   mode?: AccountLoginMode
+  /** The one login (`AccountLogin.id`) this sign-out removes. */
+  login?: string
   bracketedPaste: boolean
 }
 
@@ -116,6 +118,8 @@ export interface FlowDefinition {
     command?: { ready?: readonly string[]; text: string; signedOut?: readonly string[]; menu?: readonly string[] }
   }
   proves?: FlowGuide['proves']
+  /** Logins carry `cli:provider[:entry]` ids: a provider login is proven by that provider's own entry. */
+  targets?: boolean
 }
 
 export const GUIDE_SIZE = { cols: 200, rows: 60 }
@@ -323,6 +327,21 @@ export class FlowGuide implements AccountGuideDriver {
 
   proves(change: AccountChange, before: AccountEvidence | undefined, after: AccountEvidence | undefined, exitCode?: number): boolean {
     if (this.flow.proves) return this.flow.proves(change, before, after, exitCode)
+    const { login, provider } = this.ctx
+    // One of several logins: only the target's own change counts, never the account as a whole.
+    if (change === 'logout' && login)
+      return !!after && after.state !== 'unavailable' && after.state !== 'unknown' && !after.logins?.some((item) => item.id === login)
+    if (change === 'login' && provider && this.flow.targets) {
+      const held = (evidence: AccountEvidence | undefined) =>
+        new Set(
+          (evidence?.logins ?? []).flatMap((item) =>
+            item.id && parseAccountLoginId(item.id)?.provider === provider ? [item.id] : [],
+          ),
+        )
+      const now = held(after),
+        was = held(before)
+      return [...now].some((id) => !was.has(id)) || (now.size > 0 && exitCode === 0)
+    }
     if (change === 'logout') return !!after && after.state !== 'authenticated'
     if (after?.state !== 'authenticated') return false
     return before?.state !== 'authenticated' || exitCode === 0 || signature(before) !== signature(after)

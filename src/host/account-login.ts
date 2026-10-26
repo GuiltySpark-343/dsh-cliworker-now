@@ -116,7 +116,8 @@ export function usableNativeApiKey(value: unknown): value is string {
 export function authenticatedAccountLogins(input: AccountLogin[]): AccountIdentity {
   const seen = new Set<string>()
   const logins = input.filter((login) => {
-    const key = JSON.stringify([login.providerLabel, login.authMethod, login.accountLabel])
+    // Separate removable credentials stay separate rows, even with the same display.
+    const key = JSON.stringify([login.providerLabel, login.authMethod, login.accountLabel, login.id])
     if (seen.has(key)) return false
     seen.add(key)
     return true

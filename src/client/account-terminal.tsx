@@ -61,6 +61,10 @@ function startupMessage(error: unknown): string {
     '当前 ZCode 未声明原生退出登录能力，请检查 CLI 安装',
     'ZCode 配套资源不可用，请检查 CLI 安装或配置 zcodeBuiltinConfig',
     '当前插件 Host 不支持 ZCode 授权来源选择，请更新插件后重试',
+    '当前插件 Host 不支持此账号操作，请更新插件后重试',
+    '不支持的登录服务商',
+    '不支持单独退出该账号',
+    '该账号已不存在，请刷新后重试',
     '不支持的 ZCode 授权来源',
     '授权来源只支持 ZCode 登录时选择智谱 BigModel 或 Z.AI',
     '当前 ZCode CLI 不支持智谱 BigModel 授权，请更新为支持 login bigmodel 的官方完整 CLI 后重试；不会改用 Z.AI 登录。',
@@ -108,7 +112,9 @@ export function AccountTerminal({
   cli,
   action: requested,
   source,
-  provider,
+  provider: requestedProvider,
+  login: requestedLogin,
+  replaces,
   signedIn = false,
   onClose,
   onFinished,
@@ -119,7 +125,12 @@ export function AccountTerminal({
   cli: CliId
   action: AccountAction
   source?: AccountSource
-  provider?: ZCodeLoginProvider
+  /** ZCode BigModel / Z.AI, or a provider of the account window's 「登录到」. */
+  provider?: ZCodeLoginProvider | string
+  /** One login (`AccountLogin.id`) of the account window to sign out. */
+  login?: string
+  /** After this sign-in is confirmed, sign this login out: Hermes 「替换」. */
+  replaces?: string
   /** The CLI already holds an account; a single-account login first offers to switch. */
   signedIn?: boolean
   onClose: () => void
@@ -127,8 +138,16 @@ export function AccountTerminal({
   closeControl?: AccountCloseControl
 }) {
   useT()
-  // Switching accounts runs a sign-out window, then the sign-in window, in this one dialog.
-  const [action, setAction] = useState(requested)
+  // Switching or replacing runs a sign-out and a sign-in window in this one dialog;
+  // the follow-up applies only to the request it was made for.
+  const base = `${cli}|${requested}|${requestedProvider ?? ''}|${requestedLogin ?? ''}`
+  const [followUp, setFollowUp] = useState<{ base: string; action: AccountAction; login?: string }>()
+  const current = followUp?.base === base ? followUp : undefined
+  const action = current?.action ?? requested
+  const provider = current ? undefined : requestedProvider
+  const login = current ? current.login : requestedLogin
+  const setAction = (next: AccountAction, nextLogin?: string) => setFollowUp({ base, action: next, login: nextLogin })
+  const replacing = useRef(false)
   const switching = useRef(false)
   const [holding, setHolding] = useState(
     () => requested === 'login' && signedIn && SINGLE_ACCOUNT_CLIS.has(cli) && GUIDED_ACCOUNT_CLIS.has(cli),
@@ -143,7 +162,8 @@ export function AccountTerminal({
   const send = useRef<(data: string) => void>(() => {})
   const refit = useRef<() => void>(() => {})
   // Guided sign-in/out is drawn by the plugin; the native terminal stays behind it.
-  const guided = GUIDED_ACCOUNT_CLIS.has(cli) && action !== 'manage'
+  // OpenCode/Hermes draw a window only for a provider or login picked in the account window.
+  const guided = action !== 'manage' && (GUIDED_ACCOUNT_CLIS.has(cli) || !!login || (!!provider && cli !== 'zcode'))
   const [rawVisible, setRawVisible] = useState(false)
   const rawShown = useRef(false)
   rawShown.current = !guided || rawVisible
@@ -183,7 +203,7 @@ export function AccountTerminal({
     // Only the current native login prompt may authorize browser navigation.
     // Keep parsed URLs in this terminal's memory, outside persistent UI state.
     const loginLinkParser =
-      cli === 'zcode' && action === 'login' ? createZcodeLoginLinkParser(provider) : undefined
+      cli === 'zcode' && action === 'login' ? createZcodeLoginLinkParser(provider as ZCodeLoginProvider | undefined) : undefined
     let loginUrl: string | undefined
     const openedLoginUrls = new Set<string>()
     const clearLoginLink = () => {
@@ -447,13 +467,24 @@ export function AccountTerminal({
       }, STARTUP_TIMEOUT_MS)
       void (async () => {
         try {
-          if (provider && typeof api.cliworker.accountStartForProvider !== 'function')
+          const startWith = !!login || (!!provider && cli !== 'zcode')
+          if (startWith && typeof api.cliworker.accountStartWith !== 'function')
+            throw new Error('当前插件 Host 不支持此账号操作，请更新插件后重试')
+          if (provider && !startWith && typeof api.cliworker.accountStartForProvider !== 'function')
             // Matched by startupMessage's allowlist, which translates it.
             throw new Error('当前插件 Host 不支持 ZCode 授权来源选择，请更新插件后重试')
           const result = JSON.parse(
             value(
-              await (provider
-                ? api.cliworker.accountStartForProvider(sessionId, cli, action, provider, startup.signal)
+              await (startWith
+                ? api.cliworker.accountStartWith!(
+                    sessionId,
+                    cli,
+                    action,
+                    JSON.stringify(login ? { login } : { provider }),
+                    startup.signal,
+                  )
+                : provider
+                ? api.cliworker.accountStartForProvider(sessionId, cli, action, provider as ZCodeLoginProvider, startup.signal)
                 : source
                   ? api.cliworker.accountStartForSource(sessionId, cli, action, source, startup.signal)
                   : api.cliworker.accountStart(sessionId, cli, action, startup.signal)),
@@ -538,9 +569,9 @@ export function AccountTerminal({
       void stopSession().catch(() => undefined)
       void disposeStream().catch(() => undefined)
     }
-  }, [api, sessionId, cli, action, source, provider, attempt, holding])
+  }, [api, sessionId, cli, action, source, provider, login, attempt, holding])
 
-  const close = (retry = false, next?: AccountAction): Promise<boolean> => {
+  const close = (retry = false, next?: AccountAction, nextLogin?: string): Promise<boolean> => {
     if (closing.current) return closing.current
     const ownGeneration = generation.current
     setPhase('stopping')
@@ -549,9 +580,9 @@ export function AccountTerminal({
         await waitForCleanup(stop.current())
         if (generation.current !== ownGeneration) return false
         // A new action starts its own terminal; bumping the attempt too would start it twice.
-        if (next && next !== action) {
+        if (next && (next !== action || nextLogin !== login)) {
           setGuide(undefined)
-          setAction(next)
+          setAction(next, nextLogin)
         } else if (retry) setAttempt((value) => value + 1)
         else callbacks.current.onClose()
         return true
@@ -579,6 +610,12 @@ export function AccountTerminal({
     if (!switching.current || action !== 'logout' || (guide?.step !== 'loggedOut' && guide?.step !== 'notSignedIn')) return
     switching.current = false
     void close(true, 'login')
+  })
+  // 「替换」: the new credential is confirmed first, only then is the old one removed.
+  useEffect(() => {
+    if (!replaces || replacing.current || action !== 'login' || guide?.step !== 'signedIn') return
+    replacing.current = true
+    void close(true, 'logout', replaces)
   })
   const switchAccount = () => {
     switching.current = true
@@ -618,7 +655,9 @@ export function AccountTerminal({
           guide={
             holding
               ? { step: 'alreadySignedIn', tone: 'info', template: 'result', text: t('当前已登录 {cli}', { cli: CLI_LABELS[cli] }) }
-              : guide
+              : replacing.current && guide?.step === 'loggedOut'
+                ? { ...guide, text: t('已添加新凭据，并移除了原凭据') }
+                : guide
           }
           rawVisible={rawVisible}
           notice={notice}

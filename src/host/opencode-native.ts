@@ -7,6 +7,7 @@ import { safePiOmpAncestors } from './pi-omp-native.ts'
 import type { AccountIdentity } from './account-identity.ts'
 import { authenticatedAccountLogins, providerLogin, usableNativeApiKey } from './account-login.ts'
 import type { AccountLogin } from '../shared/accounts.ts'
+import { accountLoginId } from '../shared/account-links.ts'
 
 const object = (value: unknown): value is Record<string, any> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
@@ -417,12 +418,14 @@ export async function inspectOpenCodeProfile(
       if (oauthShape && !oauth) expired = true
       if (api || oauth) {
         const config = profile.providers[id]
-        logins.push(
-          providerLogin(id, api ? 'api' : 'oauth', {
+        const handle = accountLoginId('opencode', id)
+        logins.push({
+          ...providerLogin(id, api ? 'api' : 'oauth', {
             baseUrl: config?.options?.baseURL,
             name: config?.name,
           }),
-        )
+          ...(handle ? { id: handle } : {}),
+        })
       }
     }
     if (logins.length) return authenticatedAccountLogins(logins)

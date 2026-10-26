@@ -2794,3 +2794,19 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 真实退出复测（`14cf48a`）：用户确认文件夹信任后窗口显示「已退出 Antigravity」；钥匙串查询退出码 44；插件无残留 agy 进程；插件绑定读取返回「尚未登录 Antigravity…」。按用户截图反馈调整：底栏把「账号终端已关闭」与「显示原生终端」放在同一行；粘贴提示改为淡绿色色块，去掉左侧色条和回车键帽。DSH 对话中退出期间的续聊提示仍待复测。
 
 - 新样式下重新登录（`265bbc8`，用户本人操作）：钥匙串条目 2026-10-26 23:02:45 新建，插件绑定读取为已登录，插件无残留 agy 进程。
+
+## 2026-10-27 可复用登录模板与「账号」窗口（OpenSpec `add-cli-login-templates`，`feat/general-settings`，未发布）
+
+- 真实画面探测（2026-10-26 / 27，隔离 HOME / XDG / 配置目录，200×60 PTY，只回复终端查询或按回车 / 方向键，不提交任何授权码、密钥或网址；浏览器调用由替身拦截；原始输出含一次性码，仅留在会话临时目录，不入库）：
+  - Codex：`login` 显示本地回调地址与 `navigate to this URL to authenticate` + auth.openai.com 链接；`logout` 未登录为 `Not logged in`。
+  - Claude Code：OSC 8 链接 claude.com、`Paste code here if prompted >`，未开括号粘贴。
+  - Qoder / Qoder CN：`login` 为 `open the following URL in your browser to sign in` + qoder.com / qoder.cn 设备页；未登录 TUI 先问信任文件夹，再是 `1. Sign in to continue`。
+  - MiMo：`auth login` 为 `Add credential` → `选择服务商`（MiMo 为首项）→ platform.xiaomimimo.com 链接 + `Paste code here if prompted`；`auth logout` 无凭据为 `No credentials found`。
+  - ZCode 0.16.9：`login bigmodel|zai --no-browser` 为 `Open this URL to sign in:`；`logout` 为 `Logged out from Coding Plan accounts.`，两家一起移除。
+  - Grok 1.0.62：设备码 `Confirm this code in your browser:` + accounts.x.ai；`logout` 未登录为 `No cached session to log out of.`。此后不再探测 Grok（`grok --help` 同秒写过 `~/.grok` 的模型缓存与会话索引，`auth.json` 未变）。
+  - OpenCode 1.19.0（模拟凭据 `simulated-*`）：`auth list` 列出两条；`auth logout deepseek` 无交互输出 `Logout successful`，只删 deepseek、保留 openrouter；`auth login -p <服务商>` 约 15 秒读取目录后进入 `Enter your API key`（deepseek / openrouter / anthropic 相同）。下拉框 19 个服务商 id 均与该版本 models.dev 目录核对。
+  - Hermes（源码 `auth_commands.py`）：`auth remove <服务商> <id>` 无交互；`auth add <服务商> --type api-key` 依次问可选标签与 `Paste your API key:`（实测画面见 Pi/OMP/Hermes 报告）。凭据池每条有 6 位十六进制 id。
+  - 未捕获：Kimi 全部画面；Qoder 已登录 TUI 与 `/logout`；Pi / OMP / Kimi 非空退出菜单。
+- 自动检查（合成画面与模拟凭据，均已标注）：`account-guide-flows` 20 项（新文件）；`accounts` 新增 18 项（单账号流程、OpenCode / Hermes 指定服务商与单条退出、目标仍在时不报成功、目标不存在时拒绝）；`account-terminal` 新增 5 项（切换账号先退后登、退出未确认不登录、单条退出参数、Hermes 替换顺序、旧 Host 提示）；`settings-dialog` 改写 18 项并新增 3 项（账号窗口、行内确认、替换警示、添加 / 替换单选）；`cli-settings` 新增 `accountStartWith` 参数测试。修复了切换账号时登录被启动两次的问题（测试发现）。
+- 全量：`vitest run` 230 个文件通过、3 个跳过，4602 项通过、13 项跳过（首轮 3 项失败：词条键须含中文、Gateway 新参数，已修）；类型检查通过（DSH 0.2.1-rc.3）。
+- 未验证：Desktop 中各 CLI 的真实登录 / 退出 / 切换账号；OpenCode / Hermes 真实 API Key 登录与单条退出；Kimi、Pi、OMP 的「登录到」与逐条退出尚未实现。

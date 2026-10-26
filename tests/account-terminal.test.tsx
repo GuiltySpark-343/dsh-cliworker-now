@@ -185,6 +185,7 @@ async function setup(initiallyOpen = true) {
   const accountStart = vi.fn(pendingStart)
   const accountStartForSource = vi.fn(pendingStart)
   const accountStartForProvider = vi.fn(pendingStart)
+  const accountStartWith = vi.fn(pendingStart)
   const accountWrite = vi.fn().mockResolvedValue(ok())
   const accountRespond = vi.fn().mockResolvedValue(ok(true))
   const accountStop = vi.fn().mockResolvedValue(ok())
@@ -200,6 +201,7 @@ async function setup(initiallyOpen = true) {
       accountStart,
       accountStartForSource,
       accountStartForProvider,
+      accountStartWith,
       accountWatch,
       accountWrite,
       accountRespond,
@@ -216,11 +218,14 @@ async function setup(initiallyOpen = true) {
     cli: CliId = 'kimi',
     action: AccountAction = 'login',
     source?: AccountSource,
-    provider?: ZCodeLoginProvider,
+    provider?: ZCodeLoginProvider | string,
     signedIn?: boolean,
+    extra: { login?: string; replaces?: string } = {},
   ) => (
     <AccountTerminal
       signedIn={signedIn}
+      login={extra.login}
+      replaces={extra.replaces}
       api={api}
       sessionId="parent"
       cli={cli}
@@ -243,11 +248,12 @@ async function setup(initiallyOpen = true) {
     cli: CliId = 'kimi',
     action: AccountAction = 'login',
     source?: AccountSource,
-    provider?: ZCodeLoginProvider,
+    provider?: ZCodeLoginProvider | string,
     signedIn?: boolean,
+    extra: { login?: string; replaces?: string } = {},
   ) => {
     await act(async () => {
-      renderer.update(render(cli, action, source, provider, signedIn))
+      renderer.update(render(cli, action, source, provider, signedIn, extra))
     })
   }
   const start = async (id = 'terminal-a', index = 0) => {
@@ -291,6 +297,7 @@ async function setup(initiallyOpen = true) {
     accountStart,
     accountStartForSource,
     accountStartForProvider,
+    accountStartWith,
     api,
     accountWatch,
     accountWrite,
@@ -1327,4 +1334,55 @@ it('does not start a login after a sign-out that was not confirmed', async () =>
   })
   await new Promise((resolve) => setTimeout(resolve, 20))
   expect(f.accountStart).toHaveBeenCalledTimes(1)
+})
+
+it('starts a single-login sign-out through accountStartWith with only the login handle', async () => {
+  const f = await setup(false)
+  await f.update('opencode', 'logout', undefined, undefined, false, { login: 'opencode:deepseek' })
+  expect(f.accountStart).not.toHaveBeenCalled()
+  expect(f.accountStartWith).toHaveBeenCalledExactlyOnceWith(
+    'parent',
+    'opencode',
+    'logout',
+    JSON.stringify({ login: 'opencode:deepseek' }),
+    expect.any(AbortSignal),
+  )
+})
+
+it('replaces a Hermes key only after the new one is confirmed, then signs out the old one', async () => {
+  const f = await setup(false)
+  await f.update('hermes', 'login', undefined, 'deepseek', false, { replaces: 'hermes:deepseek:a1b2c3' })
+  expect(f.accountStartWith).toHaveBeenLastCalledWith('parent', 'hermes', 'login', JSON.stringify({ provider: 'deepseek' }), expect.any(AbortSignal))
+  await f.start()
+  await act(async () => {
+    f.streams[0].push({ seq: 1, guide: { step: 'key', tone: 'action', template: 'secret', text: '模拟密钥步骤' } })
+  })
+  expect(f.accountStartWith).toHaveBeenCalledTimes(1)
+  await act(async () => {
+    f.streams[0].push({ seq: 2, guide: { step: 'signedIn', tone: 'success', template: 'result', text: '已登录 Hermes' } })
+    f.streams[0].push({ seq: 3, status: 'closed', cleanupConfirmed: true })
+  })
+  await vi.waitFor(() =>
+    expect(f.accountStartWith).toHaveBeenLastCalledWith(
+      'parent',
+      'hermes',
+      'logout',
+      JSON.stringify({ login: 'hermes:deepseek:a1b2c3' }),
+      expect.any(AbortSignal),
+    ),
+  )
+  expect(f.accountStartWith).toHaveBeenCalledTimes(2)
+  await f.start('old-entry', 1)
+  await act(async () => {
+    f.streams[1].push({ seq: 1, guide: { step: 'loggedOut', tone: 'success', template: 'result', text: '已退出 Hermes' } })
+  })
+  expect(JSON.stringify(f.renderer.toJSON())).toContain('已添加新凭据，并移除了原凭据')
+})
+
+it('asks for a Host update instead of a provider login on an older Host', async () => {
+  const f = await setup(false)
+  delete (f.api.cliworker as any).accountStartWith
+  await f.update('opencode', 'login', undefined, 'deepseek')
+  await vi.waitFor(() => expect(JSON.stringify(f.renderer.toJSON())).toContain('当前插件 Host 不支持此账号操作'))
+  expect(f.accountStart).not.toHaveBeenCalled()
 })

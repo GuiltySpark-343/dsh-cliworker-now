@@ -1,4 +1,5 @@
 import { lstatSync, rmSync } from 'node:fs'
+import { parseAccountLoginId } from '../shared/account-links.ts'
 import { mkdtemp } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -44,6 +45,7 @@ export async function prepareOpenCodeAccount(
   action: AccountAction,
   config: RuntimeConfig,
   signal: AbortSignal,
+  target: { provider?: string; login?: string } = {},
 ): Promise<{
   argv: string[]
   env: Record<string, string>
@@ -93,7 +95,18 @@ export async function prepareOpenCodeAccount(
       false,
     )
     signal.throwIfAborted()
-    const argv = [executable, ...(action === 'manage' ? [] : ['auth', action])]
+    // A provider or one login chosen in the account window skips OpenCode's own picker.
+    const removed = target.login ? parseAccountLoginId(target.login) : undefined
+    const argv = [
+      executable,
+      ...(action === 'manage'
+        ? []
+        : action === 'login' && target.provider
+          ? ['auth', 'login', '-p', target.provider]
+          : action === 'logout' && removed?.cli === 'opencode'
+            ? ['auth', 'logout', removed.provider]
+            : ['auth', action]),
+    ]
     return {
       argv: [process.execPath, fileURLToPath(new URL('./private-launch.mjs', import.meta.url)), ...argv],
       env: { ...env, ELECTRON_RUN_AS_NODE: '1' },

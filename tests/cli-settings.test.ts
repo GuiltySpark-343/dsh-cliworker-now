@@ -303,12 +303,32 @@ describe('profile-wide CLI enablement', () => {
         f.signal,
         undefined,
         provider,
+        undefined,
       )
       f.storage.setCliEnabled('zcode', false)
       await expect(
         f.service.accountStartForProvider('parent', 'zcode', 'login', provider, f.signal),
       ).rejects.toThrow('已关闭')
       expect(f.accounts.start).toHaveBeenCalledOnce()
+    },
+  )
+  it.each([
+    ['opencode', 'login', { provider: 'deepseek' }, ['deepseek', undefined]],
+    ['hermes', 'logout', { login: 'hermes:deepseek:a1b2c3' }, [undefined, 'hermes:deepseek:a1b2c3']],
+  ] as const)('forwards a %s account-window %s target unchanged to the account manager', async (cli, action, options, target) => {
+    const f = fixture()
+    ;(f.service as any).accountParents.set('parent', () => {})
+    f.accounts.start.mockResolvedValue({ id: 'synthetic-account', instruction: 'Synthetic' })
+    await f.service.accountStartWith('parent', cli, action, JSON.stringify(options), f.signal)
+    expect(f.accounts.start).toHaveBeenCalledExactlyOnceWith('parent', cli, action, f.project, f.signal, undefined, ...target)
+  })
+  it.each(['null', '[]', '{"provider":1}', '{"provider":""}', '{"source":"native"}', '{"login":"x","extra":"y"}', 'not json'])(
+    'rejects malformed account-window options %s before reading the parent',
+    async (options) => {
+      const f = fixture()
+      await expect(f.service.accountStartWith('parent', 'opencode', 'login', options, f.signal)).rejects.toThrow()
+      expect((f.service as any).parent).not.toHaveBeenCalled()
+      expect(f.accounts.start).not.toHaveBeenCalled()
     },
   )
   it.each([

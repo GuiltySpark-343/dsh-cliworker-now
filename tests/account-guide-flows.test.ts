@@ -176,3 +176,64 @@ describe('guided login flows (synthetic screens)', () => {
     expect(guide.proves('logout', signedIn, undefined)).toBe(false)
   })
 })
+
+describe('removable login handles (simulated stores)', () => {
+  it('keeps two Hermes keys of one provider as two rows with their pool ids', async () => {
+    const { projectHermesIdentity } = await import('../src/host/hermes-accounts.ts')
+    const identity = projectHermesIdentity({
+      credential_pool: {
+        deepseek: ['a1b2c3', 'd4e5f6'].map((id) => ({
+          id,
+          auth_type: 'api_key',
+          source: 'manual',
+          access_token: `simulated-deepseek-key-${id}`,
+        })),
+      },
+    })
+    expect(identity?.logins?.map((login) => login.id)).toEqual(['hermes:deepseek:a1b2c3', 'hermes:deepseek:d4e5f6'])
+    expect(JSON.stringify(identity)).not.toContain('simulated-deepseek-key')
+  })
+
+  it('never builds a handle from a malformed provider or entry id', async () => {
+    const { accountLoginId, parseAccountLoginId } = await import('../src/shared/account-links.ts')
+    expect(accountLoginId('hermes', 'deepseek', '../x')).toBeUndefined()
+    expect(accountLoginId('opencode', 'Deep Seek')).toBeUndefined()
+    expect(parseAccountLoginId('opencode:deepseek')).toEqual({ cli: 'opencode', provider: 'deepseek' })
+    expect(parseAccountLoginId('hermes:deepseek:a1b2c3:extra')).toBeUndefined()
+  })
+
+  it('marks a window provider as signed in only from its own handle', async () => {
+    const { loginProviders } = await import('../src/host/account-guide/providers.ts')
+    const providers = loginProviders('opencode', [
+      { providerLabel: 'DeepSeek', authMethod: 'api', id: 'opencode:deepseek' },
+      { providerLabel: 'OpenRouter', authMethod: 'api' },
+    ])
+    expect(providers?.find((item) => item.id === 'deepseek')?.signedIn).toBe(true)
+    expect(providers?.find((item) => item.id === 'openrouter')?.signedIn).toBeUndefined()
+    expect(loginProviders('kimi', [])).toBeUndefined()
+  })
+})
+
+describe('multi-account flows (synthetic screens)', () => {
+  it('waits through the OpenCode catalog load, then asks for a key', async () => {
+    const { OPENCODE_FLOW } = await import('../src/host/account-guide/multi-account.ts')
+    const guide = new FlowGuide(OPENCODE_FLOW, { action: 'login', provider: 'deepseek' })
+    expect(guides(guide.output('┌ Add credential'))[0]).toMatchObject({ step: 'loading', template: 'waiting' })
+    expect(guide.settled()).toEqual([])
+    expect(guides(guide.output('\r\n◆ Enter your API key\r\n│ _'))[0]).toMatchObject({ step: 'key', template: 'secret' })
+    expect(guide.respond({ secret: 'simulated' })[0]).toEqual({ write: 'simulated', enter: true })
+  })
+
+  it('proves a provider login by that provider only, and a removal by the target only', async () => {
+    const { HERMES_FLOW } = await import('../src/host/account-guide/multi-account.ts')
+    const row = (id: string) => ({ providerLabel: id, authMethod: 'api' as const, id })
+    const add = new FlowGuide(HERMES_FLOW, { action: 'login', provider: 'deepseek' })
+    const before = { state: 'authenticated' as const, logins: [row('hermes:deepseek:a1b2c3')] }
+    expect(add.proves('login', before, { ...before, logins: [...before.logins, row('hermes:openrouter:000001')] })).toBe(false)
+    expect(add.proves('login', before, { ...before, logins: [...before.logins, row('hermes:deepseek:d4e5f6')] })).toBe(true)
+    const remove = new FlowGuide(HERMES_FLOW, { action: 'logout', login: 'hermes:deepseek:a1b2c3' })
+    expect(remove.proves('logout', before, before)).toBe(false)
+    expect(remove.proves('logout', before, { state: 'unavailable' })).toBe(false)
+    expect(remove.proves('logout', before, { state: 'unconfigured' })).toBe(true)
+  })
+})

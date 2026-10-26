@@ -6,11 +6,16 @@ import { SettingsDialog } from '../src/client/settings-dialog.tsx'
 import type { API } from '../src/client/workers.ts'
 import type { AccountStatus } from '../src/shared/accounts.ts'
 import { CLI_IDS, CLI_LABELS, type CliId } from '../src/shared/types.ts'
+import { MULTI_ACCOUNT_CLIS } from '../src/shared/account-links.ts'
 
 // Explicit simulation: no CLI, login flow or native portal is started in these tests.
 const terminal = vi.hoisted(() => ({ started: vi.fn(), stopped: vi.fn(), close: vi.fn(async () => true) }))
 vi.mock('../src/client/account-terminal.tsx', () => ({
-  AccountTerminal: ({ cli, action, source, provider, onClose, onFinished, closeControl }: any) => {
+  AccountTerminal: ({ cli, action, source, provider, login, replaces, onClose, onFinished, closeControl }: any) => {
+    const target =
+      provider || login
+        ? { ...(provider ? { provider } : {}), ...(login ? { login } : {}), ...(replaces ? { replaces } : {}) }
+        : undefined
     useEffect(() => {
       closeControl.current = async () => {
         if (!(await terminal.close())) return false
@@ -22,15 +27,15 @@ vi.mock('../src/client/account-terminal.tsx', () => ({
       }
     })
     useEffect(() => {
-      if (provider) terminal.started(cli, action, { provider })
+      if (target) terminal.started(cli, action, target)
       else if (source) terminal.started(cli, action, source)
       else terminal.started(cli, action)
       return () => {
-        if (provider) terminal.stopped(cli, action, { provider })
+        if (target) terminal.stopped(cli, action, target)
         else if (source) terminal.stopped(cli, action, source)
         else terminal.stopped(cli, action)
       }
-    }, [cli, action, source, provider])
+    }, [cli, action, source, provider, login, replaces])
     return createElement(
       'div',
       { 'data-terminal': cli },
@@ -715,45 +720,67 @@ const scopedLogoutActions: AccountStatus['actions'] = [
     ],
   },
 ]
+const zcodeActions: AccountStatus['actions'] = [
+  {
+    id: 'login',
+    label: '登录 / 切换账号',
+    description: '模拟登录能力说明',
+    providers: [
+      { id: 'bigmodel', label: '中国智谱 BigModel' },
+      { id: 'zai', label: '海外 Z.AI' },
+    ],
+  },
+  { id: 'logout', label: '退出登录', description: '模拟退出能力说明' },
+  { id: 'manage', label: '账号终端', description: '模拟管理能力说明' },
+]
 it.each([
   ['bigmodel', '中国智谱 BigModel'],
   ['zai', '海外 Z.AI'],
 ] as const)(
-  'starts ZCode login only after the explicit %s choice and resets it on reopen',
+  'starts ZCode login only after choosing %s in the account window and resets it on reopen',
   async (provider, label) => {
     const t = await setup(
-      { accountStatus: accountFixture({ state: 'authenticated', actions: accountActions }, 'zcode') },
+      { accountStatus: accountFixture({ state: 'authenticated', actions: zcodeActions }, 'zcode') },
       undefined,
       'zcode',
     )
+    expect(t.button('退出登录')).toBeUndefined()
+    await t.click('账号')
+    expect(t.r.root.findByProps({ role: 'dialog', 'aria-label': 'ZCode · 账号' })).toBeDefined()
+    await t.click('添加账号')
+    expect(t.button('其他服务商（在原生终端中选择）')).toBeUndefined()
+    if (provider === 'zai') {
+      await t.click('登录到')
+      await t.click(label)
+    }
     expect(terminal.started).not.toHaveBeenCalled()
-    await t.click('登录 / 切换账号')
-    expect(t.r.root.findByProps({ 'aria-label': '选择 ZCode 授权来源' })).toBeDefined()
-    expect(terminal.started).not.toHaveBeenCalled()
-    await t.click(label)
+    await t.click('继续')
     expect(terminal.started).toHaveBeenCalledExactlyOnceWith('zcode', 'login', { provider })
     expect(t.configure).not.toHaveBeenCalled()
     await t.click('关闭账号操作')
     expect(terminal.stopped).toHaveBeenCalledExactlyOnceWith('zcode', 'login', { provider })
-    await t.click('登录 / 切换账号')
-    expect(t.r.root.findByProps({ 'aria-label': '选择 ZCode 授权来源' })).toBeDefined()
+    await t.click('账号')
+    expect(t.button('添加账号')).toBeDefined()
     expect(terminal.started).toHaveBeenCalledTimes(1)
   },
 )
-it('cancels the ZCode provider chooser without a login process and never selects a provider for manage/logout', async () => {
+it('closes the ZCode account window without a process and signs out both providers only after confirming', async () => {
   const t = await setup(
-    { accountStatus: accountFixture({ state: 'authenticated', actions: accountActions }, 'zcode') },
+    { accountStatus: accountFixture({ state: 'authenticated', actions: zcodeActions }, 'zcode') },
     undefined,
     'zcode',
   )
-  await t.click('登录 / 切换账号')
+  await t.click('账号')
   await t.click('关闭账号操作')
   expect(terminal.started).not.toHaveBeenCalled()
-  expect(terminal.stopped).not.toHaveBeenCalled()
   await t.click('账号终端')
   expect(terminal.started).toHaveBeenCalledExactlyOnceWith('zcode', 'manage')
   await t.click('关闭账号操作')
-  await t.click('退出登录')
+  await t.click('账号')
+  await t.click('退出')
+  expect(t.text()).toContain('BigModel 和 Z.AI 的登录会一起退出。')
+  expect(terminal.started).toHaveBeenCalledTimes(1)
+  await t.click('确认退出')
   expect(terminal.started).toHaveBeenLastCalledWith('zcode', 'logout')
   expect(t.configure).not.toHaveBeenCalled()
 })
@@ -1641,7 +1668,7 @@ it('keeps the current Kimi account identity visibly separate from its legacy log
   expect(summary.findAllByProps({ className: 'cwn-account-logins' })).toHaveLength(0)
 })
 it.each(['omp', 'pi', 'hermes'] as const)(
-  'starts only the advertised %s logout action from the shared logout button after an explicit click',
+  'opens the %s native sign-out from its account window after an explicit click',
   async (cli) => {
     const t = await setup({
       accountStatus: vi.fn(async (_parent, id: CliId) =>
@@ -1653,13 +1680,11 @@ it.each(['omp', 'pi', 'hermes'] as const)(
       ),
     })
     await t.click(`${CLI_LABELS[cli]} 设置`)
-    const logout = t.button('退出登录')
-    expect(logout.props.className).toBe('cwn-account-logout')
-    expect(logout.props.disabled).toBe(false)
-    expect(visibleText(logout)).toContain('退出')
-    expect(logout.findAllByType('svg').length).toBeGreaterThan(0)
+    expect(t.button('退出登录')).toBeUndefined()
+    await t.click('账号')
+    expect(t.text()).toContain('OpenAI账号登录')
     expect(terminal.started).not.toHaveBeenCalled()
-    await t.click('退出登录')
+    await t.click('在原生终端中退出')
     expect(terminal.started).toHaveBeenCalledExactlyOnceWith(cli, 'logout')
     expect(t.configure).not.toHaveBeenCalled()
   },
@@ -1802,12 +1827,13 @@ it.each(CLI_IDS)(
     expect(t.text()).not.toMatch(
       /未进行远程验证|本地凭据不代表|模拟登录能力说明|模拟退出能力说明|模拟管理能力说明/,
     )
-    expect(t.button('登录 / 切换账号').children).toContain('切换账号')
+    if (MULTI_ACCOUNT_CLIS.has(cli)) expect(t.button('账号')).toBeDefined()
+    else expect(t.button('登录 / 切换账号').children).toContain('切换账号')
     expect(terminal.started).not.toHaveBeenCalled()
     expect(t.configure).not.toHaveBeenCalled()
   },
 )
-it('opens the native Kimi account manager with its explicit action label without logging out', async () => {
+it('adds a Kimi account in its native terminal from the account window without logging out', async () => {
   const accountStatus = vi.fn(async (_parent, cli: CliId) =>
     status(cli, {
       state: 'authenticated',
@@ -1822,12 +1848,13 @@ it('opens the native Kimi account manager with its explicit action label without
   )
   const t = await setup({ accountStatus })
   await t.click('Kimi 设置')
-  expect(t.button('管理登录').children).toContain('管理登录')
   expect(visibleText(accountSummary(t.r))).toContain('已登录')
-  await t.click('管理登录')
-  expect(terminal.started).toHaveBeenCalledWith('kimi', 'login')
+  await t.click('账号')
+  expect(t.r.root.findByProps({ role: 'dialog', 'aria-label': 'Kimi · 账号' })).toBeTruthy()
+  expect(t.text()).toContain('在原生终端中选择服务商并登录。')
+  await t.click('添加账号')
+  expect(terminal.started).toHaveBeenCalledExactlyOnceWith('kimi', 'login')
   expect(terminal.started).not.toHaveBeenCalledWith('kimi', 'logout')
-  expect(t.r.root.findByProps({ role: 'dialog', 'aria-label': 'Kimi · 管理登录' })).toBeTruthy()
   expect(t.configure).not.toHaveBeenCalled()
 })
 it.each([
@@ -1936,9 +1963,11 @@ it.each(['pi', 'omp', 'opencode', 'hermes'] as const)(
       openNativeSettings,
     )
     await t.click(`${CLI_LABELS[cli]} 设置`)
-    expect(t.button('登录设置').props.disabled).toBe(false)
+    expect(t.button('登录账号').props.disabled).toBe(false)
     expect(t.text()).not.toContain('在原生设置中选择')
-    await t.click('登录设置')
+    await t.click('登录账号')
+    expect(t.text()).toContain(`尚未登录 ${CLI_LABELS[cli]} 的任何账号。`)
+    await t.click('添加账号')
     expect(terminal.started).toHaveBeenCalledExactlyOnceWith(cli, 'login')
     expect(openNativeSettings).not.toHaveBeenCalled()
   },
@@ -2717,4 +2746,85 @@ it('keeps ask-before-dispatch on and shows a short error when saving fails', asy
   await t.click('调用前询问模型')
   expect(t.button('调用前询问模型').props['aria-checked']).toBe(true)
   expect(t.text()).toContain('模拟保存失败')
+})
+
+// Account window (simulated statuses): ids are Host handles, never credentials.
+const windowActions = (providers: AccountStatus['actions'][number]['providers']): AccountStatus['actions'] => [
+  { id: 'login', label: '登录设置', description: '模拟登录', providers },
+  { id: 'logout', label: '退出登录', description: '模拟退出' },
+  { id: 'manage', label: '账号终端', description: '模拟账号终端' },
+]
+const pickedStatus = (cli: CliId, logins: AccountStatus['logins'], providers: AccountStatus['actions'][number]['providers']) =>
+  vi.fn(async (_parent, id: CliId) =>
+    status(id, id === cli ? { state: 'authenticated', authMethod: 'api', logins, actions: windowActions(providers) } : {}),
+  )
+it('signs out one OpenCode provider only after its own inline confirmation', async () => {
+  const t = await setup({
+    accountStatus: pickedStatus(
+      'opencode',
+      [
+        { providerLabel: 'DeepSeek', authMethod: 'api', id: 'opencode:deepseek' },
+        { providerLabel: 'OpenRouter', authMethod: 'api', id: 'opencode:openrouter' },
+      ],
+      [{ id: 'deepseek', label: 'DeepSeek', signedIn: true }],
+    ),
+  })
+  await t.click('OpenCode 设置')
+  await t.click('账号')
+  expect(t.text()).toContain('DeepSeek API 登录')
+  expect(t.text()).toContain('OpenRouter API 登录')
+  const first = t.r.root.findAllByProps({ className: 'cwn-accounts-row' })[0]!
+  await act(async () => first.findAllByType('button').find((item) => item.children.includes('退出'))!.props.onClick())
+  expect(terminal.started).not.toHaveBeenCalled()
+  await t.click('取消')
+  expect(t.button('确认退出')).toBeUndefined()
+  await act(async () =>
+    t.r.root.findAllByProps({ className: 'cwn-accounts-row' })[0]!.findAllByType('button').find((item) => item.children.includes('退出'))!.props.onClick(),
+  )
+  await t.click('确认退出')
+  expect(terminal.started).toHaveBeenCalledExactlyOnceWith('opencode', 'logout', { login: 'opencode:deepseek' })
+})
+it('warns before replacing a signed-in OpenCode provider and keeps the native picker as an option', async () => {
+  const t = await setup({
+    accountStatus: pickedStatus(
+      'opencode',
+      [{ providerLabel: 'DeepSeek', authMethod: 'api', id: 'opencode:deepseek' }],
+      [
+        { id: 'deepseek', label: 'DeepSeek', signedIn: true },
+        { id: 'openrouter', label: 'OpenRouter' },
+      ],
+    ),
+  })
+  await t.click('OpenCode 设置')
+  await t.click('账号')
+  await t.click('添加账号')
+  expect(t.text()).toContain('DeepSeek 已登录，继续会替换它现有的凭据。')
+  await t.click('登录到')
+  await t.click('其他服务商（在原生终端中选择）')
+  await t.click('继续')
+  expect(terminal.started).toHaveBeenCalledExactlyOnceWith('opencode', 'login')
+})
+it('lets the user add another Hermes key or replace a chosen one', async () => {
+  const providers = [{ id: 'deepseek', label: 'DeepSeek', signedIn: true, multi: true }]
+  const logins = [
+    { providerLabel: 'DeepSeek', authMethod: 'api' as const, id: 'hermes:deepseek:a1b2c3' },
+    { providerLabel: 'DeepSeek', authMethod: 'api' as const, id: 'hermes:deepseek:d4e5f6' },
+  ]
+  const t = await setup({ accountStatus: pickedStatus('hermes', logins, providers) })
+  await t.click('Hermes Agent 设置')
+  await t.click('账号')
+  await t.click('添加账号')
+  expect(t.text()).toContain('添加另一个凭据')
+  await t.click('继续')
+  expect(terminal.started).toHaveBeenLastCalledWith('hermes', 'login', { provider: 'deepseek' })
+  await t.click('关闭模拟账号操作')
+  await t.click('添加账号')
+  const second = t.r.root.findAllByType('input').filter((input) => input.props.type === 'radio')[2]!
+  await act(async () => second.props.onChange())
+  expect(t.text()).toContain('新凭据确认可用后，才会移除原凭据。')
+  await t.click('继续')
+  expect(terminal.started).toHaveBeenLastCalledWith('hermes', 'login', {
+    provider: 'deepseek',
+    replaces: 'hermes:deepseek:d4e5f6',
+  })
 })
