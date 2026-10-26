@@ -13,7 +13,9 @@ import {
   CLI_IDS,
   CLI_LABELS,
   CLI_SHORT_NAMES,
-  LEGACY_ACCOUNT_RECORD_NOTICE,
+  ACCOUNT_REBOUND_NOTICE,
+  CARRYOVER_FAILED_NOTICE,
+  CARRYOVER_UNREACHABLE_NOTICE,
   isRetiredCli,
   isUserInterrupted,
   RETIRED_HARNESS_NOTICE,
@@ -63,6 +65,8 @@ import { WorkerStorage } from './storage.ts'
 import { authorizeSelection, ACCOUNT_CHANGED } from './authorized-catalog.ts'
 import { ownAccountBusy as accountBusy } from './own-account-lease.mjs'
 import { readCliAccountBinding } from './cli-account-binding.ts'
+import { crossAccountResume, nativeSessionReachable } from './cross-account-resume.ts'
+import { carryoverContext } from './carryover-context.ts'
 import { assertFirstPartyConfiguration, firstPartyEnvironment } from './first-party-models.ts'
 import { agyBackgroundEnvironment } from './agy-background-environment.ts'
 import { qoderEnvironment } from './qoder-accounts.ts'
@@ -118,6 +122,29 @@ interface Task {
   accountKey?: string
   /** The account was held exclusively; queued until its holder ends or a retry is due. */
   accountWait?: { retryAt: number }
+  /** Goal frozen at admission; a carried-over prompt is rebuilt with the same goal. */
+  goal?: string
+  /** This existing task's account binding changed for this turn. */
+  rebound?: boolean
+  /** The admitted message already reached a native process (queue item removed). */
+  delivered?: boolean
+  /** The turn continues in a new native session after the original could not be resumed. */
+  carryover?: { previousConversationId: string }
+}
+/** A message for a run whose account has since changed is queued instead of steered. */
+class AccountChangedDuringRunError extends Error {
+  constructor() {
+    super('账号已变更，本轮结束后以当前账号发送')
+  }
+}
+/** Raised before launch when the original session cannot be resumed under the current account. */
+class CarryoverRequiredError extends Error {
+  constructor() {
+    super('原生会话无法在当前账号续接')
+  }
+}
+function withGoal(goal: string | undefined, prompt: string): string {
+  return goal ? `【当前目标】\n${goal}\n【目标结束】\n\n${prompt}` : prompt
 }
 /** Retry for an account held outside this Host's runs, such as a catalog read. */
 const ACCOUNT_RETRY_MS = 2000
@@ -450,7 +477,7 @@ export class WorkerRuntime {
     }
     if (mode === 'queue')
       return this.queueFollowup(parent, id, prompt, expectedRunId, requestId, !!requestedMode)
-    await this.steerMessage(parent, id, prompt, expectedRunId, requestId, signal)
+    return this.steerMessage(parent, id, prompt, expectedRunId, requestId, signal)
   }
   /** Current-run native input only. Queue state and queue generations never admit or order steering. */
   async steerMessage(
@@ -460,7 +487,7 @@ export class WorkerRuntime {
     expectedRunId: string,
     requestId: string,
     signal?: AbortSignal,
-  ): Promise<void> {
+  ): Promise<QueuedFollowup | undefined> {
     const worker = this.get(parent, id)
     this.assertCliEnabled(cliOf(worker.preference))
     z.uuid().parse(requestId)
@@ -481,7 +508,12 @@ export class WorkerRuntime {
         code: 'STEER_UNKNOWN',
       })
     }
-    await this.steerRunningMessage(worker, prompt, requestId, signal)
+    try {
+      await this.steerRunningMessage(worker, prompt, requestId, signal)
+    } catch (error) {
+      if (!(error instanceof AccountChangedDuringRunError)) throw error
+      return this.queueFollowup(parent, id, prompt, expectedRunId, requestId)
+    }
   }
   private async steerRunningMessage(
     worker: Worker,
@@ -510,7 +542,6 @@ export class WorkerRuntime {
     const done = (async () => {
       this.queuedExecutionGuard?.(worker)
       const binding = this.storage.accountBinding(worker.id)
-      if (!binding) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
       const current = await readCliAccountBinding(
         cliOf(worker.preference),
         this.backend,
@@ -519,7 +550,8 @@ export class WorkerRuntime {
         control,
       )
       control.throwIfAborted()
-      if (binding !== current) throw new Error(ACCOUNT_CHANGED)
+      // This run keeps the account it started with; the message waits for the next turn.
+      if (!binding || binding !== current) throw new AccountChangedDuringRunError()
       if (
         this.tasks.get(worker.id) !== task ||
         worker.runId !== snapshot.runId ||
@@ -595,12 +627,6 @@ export class WorkerRuntime {
         state: duplicate.state,
       }
     }
-    if (
-      !this.tasks.has(id) &&
-      !this.storage.accountBinding(id) &&
-      !(!worker.conversationId && isUserInterrupted(worker))
-    )
-      throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
     this.queuedExecutionGuard?.(worker)
     const receipt = this.followups.receipt(id, prompt, requestId)
     if (receipt?.delivery === 'steer' || (receipt && !receipt.item))
@@ -773,7 +799,6 @@ export class WorkerRuntime {
         state: 'sending',
       }
     }
-    if (!this.tasks.has(id) && !this.storage.accountBinding(id)) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
     if (!workerBound && worker.runId !== expectedRunId) throw new Error('本轮状态已变化，请刷新后重新发送')
     const receipt = this.followups.receipt(id, prompt, requestId)
     if (receipt) {
@@ -1246,9 +1271,8 @@ export class WorkerRuntime {
       if (notes.length) throw new Error(notes.map((frame) => frame.record.note).join('；'))
       return createdId
     }
-    const binding = this.storage.accountBinding(worker.id)
-    if (!binding || binding !== await readCliAccountBinding(cli, this.backend, this.config, worker.project, signal))
-      throw new Error(ACCOUNT_CHANGED)
+    // Any signed-in own account may branch; the branch's first turn rebinds to it.
+    await readCliAccountBinding(cli, this.backend, this.config, worker.project, signal)
     const conversationId = (await operation(sourceId, 'fork', signal))!
     return { conversationId, rollback: async () => {
       try { await operation(conversationId, 'delete', AbortSignal.timeout(30000)) }
@@ -1350,10 +1374,6 @@ export class WorkerRuntime {
         this.storage.runningMessageSettings(worker.project, cliOf(worker.preference)).mode === 'steer' &&
         !supportsWorkerNativeSteering(worker)
           ? '此历史会话使用的通信通路不支持原生引导，当前使用排队；不会更换原生会话协议'
-          : undefined,
-      resumeBlockedReason:
-        worker?.conversationId && !this.storage.accountBinding(worker.id)
-          ? LEGACY_ACCOUNT_RECORD_NOTICE
           : undefined,
       timeline: timeline.slice(-this.config.maxTimelineItems),
       revision: this.revision,
@@ -1548,8 +1568,6 @@ export class WorkerRuntime {
     const freshAfterStop = previous && !previous.conversationId && isUserInterrupted(previous)
     if (previous && !previous.conversationId && !readWorkerForkState(this.storage.directory, previous.id)?.sourceConversationId && !freshAfterStop)
       throw new Error('No CLI conversation_id was received; start a new worker')
-    if (previous && !this.storage.accountBinding(previous.id) && !freshAfterStop)
-      throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
     if (previous && previous.project !== canonical)
       throw new Error('Cannot resume a worker in another workspace')
     const nativeAdmission = previous
@@ -1664,12 +1682,12 @@ export class WorkerRuntime {
     // or execution affect only later turns. Every CLI shares this prompt.
     const forkSource = readWorkerForkState(this.storage.directory, worker.id)?.sourceConversationId
     const cliPrompt = promptForWorker(forkSource ? { ...worker, conversationId: forkSource } : worker, prompt)
+    const goal = worker.goal?.status === 'active' ? worker.goal.objective : undefined
     const task: Task = {
       worker,
       ...(attachments?.length ? { attachments: structuredClone(attachments) } : {}),
-      prompt: worker.goal?.status === 'active'
-        ? `【当前目标】\n${worker.goal.objective}\n【目标结束】\n\n${cliPrompt}`
-        : cliPrompt,
+      prompt: withGoal(goal, cliPrompt),
+      goal,
       userPrompt: prompt,
       controller,
       done,
@@ -2102,9 +2120,12 @@ export class WorkerRuntime {
           limit: number,
         ) => new BridgeProtocol(emit, identify, limit)
       : protocolFor
+    // Any reply, reasoning or tool event means the resumed turn already started.
+    let observed = false
     const protocol = createProtocol(
       cliOf(worker.preference),
       (event) => {
+        if (event.kind === 'assistant' || event.kind === 'reasoning' || event.kind === 'tool') observed = true
         if (event.observedModel) {
           worker.observedModel = event.observedModel
           this.storage.save(worker)
@@ -2116,6 +2137,9 @@ export class WorkerRuntime {
         if (expectedConversation && id !== expectedConversation)
           throw new Error('Resume conversation_id does not match the requested conversation')
         if (pendingFork?.sourceConversationId === id) throw new Error('原生分支没有创建新的会话 ID')
+        const left = task.carryover?.previousConversationId
+        if (left && left !== id && !worker.conversationId && !worker.previousConversationIds?.includes(left))
+          worker.previousConversationIds = [...(worker.previousConversationIds ?? []), left].slice(-64)
         worker.conversationId = id
         this.storage.save(worker)
         if (pendingFork?.sourceConversationId) {
@@ -2134,23 +2158,55 @@ export class WorkerRuntime {
     let quiescent = false
     let metadataReady = false
     let busyAccount = false
+    let rebound = false
     try {
-      const admitted = await task.admission
+      let admitted = await task.admission
       task.accountKey = JSON.stringify([cliOf(worker.preference), admitted])
       controller.signal.throwIfAborted()
       const previousBinding = this.storage.accountBinding(worker.id)
-      if (previousBinding && previousBinding !== admitted) throw new Error(ACCOUNT_CHANGED)
-      const { binding, preference: authorizedPreference } = await authorizeSelection(
-        worker.preference,
-        this.backend,
-        this.config,
-        directory,
-        controller.signal,
-        admitted,
-      )
+      // An existing task follows the own account signed in now; a new task keeps
+      // the account its selection was made under (continue-tasks-across-account-changes).
+      const continuing = !!previousBinding || !!resumeConversation
+      const authorize = () =>
+        authorizeSelection(worker.preference, this.backend, this.config, directory, controller.signal, admitted)
+      let authorized: Awaited<ReturnType<typeof authorize>>
+      try {
+        authorized = await authorize()
+      } catch (error) {
+        // A queued continuation admitted under the previous account re-reads the current one once.
+        if (!continuing || !(error instanceof Error) || error.message !== ACCOUNT_CHANGED) throw error
+        admitted = await readCliAccountBinding(
+          cliOf(worker.preference),
+          this.backend,
+          this.config,
+          directory,
+          controller.signal,
+        )
+        task.accountKey = JSON.stringify([cliOf(worker.preference), admitted])
+        authorized = await authorize()
+      }
+      const { binding, preference: authorizedPreference } = authorized
       if (authorizedPreference.model !== worker.preference.model)
         throw new Error('模型与思考强度不匹配，请重新选择')
       controller.signal.throwIfAborted()
+      rebound = continuing && previousBinding !== binding
+      if (rebound) task.rebound = true
+      if (
+        task.rebound &&
+        !task.carryover &&
+        expectedConversation &&
+        !pendingFork?.sourceConversationId &&
+        (crossAccountResume(cliOf(worker.preference)) === 'carryover' ||
+          nativeSessionReachable({
+            cli: cliOf(worker.preference),
+            transport: worker.transport,
+            hermesHome:
+              cliOf(worker.preference) === 'hermes'
+                ? effectiveHermesHome({ ...this.config, stateDirectory: this.storage.directory })
+                : undefined,
+          }) === false)
+      )
+        throw new CarryoverRequiredError()
       this.assertCliEnabled(cliOf(worker.preference))
       const executable = await resolveCliExecutable(
         cliOf(worker.preference),
@@ -2292,8 +2348,9 @@ export class WorkerRuntime {
       if ('activate' in execution && typeof execution.activate === 'function') await execution.activate()
       controller.signal.throwIfAborted()
       if (task.queuedFollowupId) this.queuedExecutionGuard?.(worker)
+      if (rebound) this.storage.append(worker, { kind: 'diagnostic', text: ACCOUNT_REBOUND_NOTICE })
       this.storage.bindAccount(worker.id, binding)
-      if (task.queuedFollowupId && !task.priority) {
+      if (task.queuedFollowupId && !task.priority && !task.delivered) {
         if (
           this.tasks.get(worker.id) !== task ||
           this.followups.list(worker.id).find((item) => item.id === task.queuedFollowupId)?.state !==
@@ -2301,7 +2358,7 @@ export class WorkerRuntime {
         )
           throw new UserStoppedError()
       }
-      if (task.priority) {
+      if (task.priority && !task.delivered) {
         const message = this.latestPriority.get(worker.id)
         if (!message || message.id !== task.queuedFollowupId || message.controller.signal.aborted)
           throw new UserStoppedError()
@@ -2317,7 +2374,7 @@ export class WorkerRuntime {
         graceMs: this.config.graceMs,
         signal: controller.signal,
       })
-      if (task.queuedFollowupId && !task.priority) {
+      if (task.queuedFollowupId && !task.priority && !task.delivered) {
         this.storage.append(worker, {
           kind: 'user',
           text: task.userPrompt,
@@ -2327,10 +2384,11 @@ export class WorkerRuntime {
         this.followups.remove(worker.id, task.queuedFollowupId)
         this.changed()
       }
-      if (task.priority) {
+      if (task.priority && !task.delivered) {
         const message = this.priorityHistory.get(worker.id)!.get(task.queuedFollowupId!)!
         this.updatePriority(worker, message, 'running')
       }
+      task.delivered = true
       // Observe spawn rejection immediately even while draining protocol streams.
       void handle.done.catch(() => undefined)
       controller.signal.throwIfAborted()
@@ -2471,7 +2529,53 @@ export class WorkerRuntime {
     }
     if (busyAccount && failureBeforeStop && !task.admissionFailure && !releaseFailed && !this.blocked && !this.disposed)
       return this.waitForAccount(task)
+    const unreachable = failure instanceof CarryoverRequiredError
+    if (
+      !task.carryover &&
+      !this.blocked &&
+      !this.disposed &&
+      !releaseFailed &&
+      failureBeforeStop &&
+      !task.admissionFailure &&
+      !controller.signal.aborted &&
+      !task.nativeStopRequested &&
+      (unreachable ||
+        // Only a resume rejected before any reply or tool event is safe to redo in a new session.
+        (task.rebound &&
+          !!expectedConversation &&
+          !pendingFork?.sourceConversationId &&
+          task.spawnAttempted &&
+          quiescent &&
+          !observed &&
+          !(failure instanceof ProcessCleanupUnconfirmedError)))
+    )
+      return this.carryOver(task, directory, unreachable)
+    if (task.carryover && !worker.conversationId) {
+      // The new session never started; keep the original for a later attempt.
+      worker.conversationId = task.carryover.previousConversationId
+      this.storage.save(worker)
+    }
     this.finish(task, status, error, interruptionReason)
+  }
+  /** Continue this turn in a new native session with the task's own earlier record. */
+  private async carryOver(task: Task, directory: string, unreachable: boolean): Promise<void> {
+    const { worker } = task
+    const context = carryoverContext(this.storage.history(worker.id), worker.runId)
+    task.carryover = { previousConversationId: worker.conversationId! }
+    worker.conversationId = undefined
+    this.storage.save(worker)
+    this.storage.append(worker, {
+      kind: 'diagnostic',
+      text: unreachable ? CARRYOVER_UNREACHABLE_NOTICE : CARRYOVER_FAILED_NOTICE,
+      detail: context.omitted
+        ? `已附带此前 ${context.included} 条记录，省略 ${context.omitted} 条`
+        : `已附带此前 ${context.included} 条记录`,
+    })
+    // A new session receives the role prompt again, then the history, then this message.
+    task.prompt = withGoal(task.goal, promptForWorker(worker, context.text + task.userPrompt))
+    task.steeringController = new AbortController()
+    this.changed()
+    return this.execute(task, directory)
   }
   /**
    * A Pi/OMP OAuth account serves one run at a time. Its process never started,

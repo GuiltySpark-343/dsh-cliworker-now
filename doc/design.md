@@ -1128,3 +1128,14 @@ OpenSpec 变更 `fix-hermes-ambient-copilot-source`。
 
 - 原生 Hermes 在 `gh` 已登录时，会把无令牌的 `copilot`/`gh_cli`/`api_key` 记录写进任何 HERMES_HOME（不受 `auth.adopt_external_logins` 约束），未选择 Copilot 时不路由模型。插件守卫此前把它当成外部账号，导致账号终端误报「检查 CLI 安装」、Nous 续期误报「稍后刷新」。
 - 现在只放行该形态且未被 `auth.active_provider` 或 `config.yaml` 任何位置选择的记录；选择 Copilot 后仍拒绝。守卫拒绝改为固定文案的 `HermesAccountSourceError`，在账号终端、状态、续期与绑定中显示真实原因。
+
+## 2026-10-26 换号后旧任务自动续接（未发布）
+
+OpenSpec 变更 `continue-tasks-across-account-changes`（用户 2026-10-26 决定：不打扰用户）。
+
+- 改绑点在轮次准备阶段（`runtime.ts` `execute`）：已有任务（有绑定或原生会话 ID）以当前账号授权原模型与强度，通过后更新绑定并在启动前记一条诊断说明；排队续聊以旧账号受理而授权报账号已变更时，重读一次当前账号。新任务仍按选型时的账号核对。Host `launch` 续聊不再传入旧绑定；子对话目录与改选在保存目录未命中时读取当前账号，查看不写绑定。旧记录、`queueFollowup`、插队与分支的缺绑定拦截移除，快照不再给出旧记录拦截原因。
+- 运行中换号：引导请求在核对时发现绑定变化，改由 `queueFollowup` 排队，Host 回执带 `queued`，Client 移除引导气泡，以排队消息显示。
+- 续接方式表 `cross-account-resume.ts` 目前全部为 `try`；本地预检只在 Hermes oneshot 的 `HERMES_HOME/state.db` 不存在时判定原会话不可达，直接改接。
+- 改接：改绑的续接轮次已启动进程、未产生任何回复/思考/工具事件即非成功结束，且非用户停止或清理失败时，最多改接一次：清空会话 ID、以 `carryover-context.ts` 的确定性摘录（首轮需求 + 最近完整轮次，24k 字符预算，单条 4000 字符，不含工具输出，中和起止标记）加角色提示和本次消息在新原生会话发送；新会话 ID 到达时原 ID 记入 `previousConversationIds`，改接也失败则恢复原 ID。排队消息在首次启动时已投递，改接不重复写入或校验。
+- 未做：分支的原生分支操作失败不改接；上下文用量统计未随改接单独重置；第 0 节真实账号实验未执行。
+

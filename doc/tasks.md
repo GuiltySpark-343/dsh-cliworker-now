@@ -2707,3 +2707,11 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 验证：`tests/cli-account-binding.test.ts` 新增 POSIX 与 Windows（模拟 `win32`）仅邮箱绑定用例、`tests/account-identity.test.ts` 新增标签回退用例、`tests/agy-windows-account.test.ts` 新增仅邮箱投影用例；撤掉 TS 修复时 3 个新用例失败。账号相关 6 个测试文件 133 通过；`build.mjs --typecheck-only` 通过；`build-preview.mjs` 通过，隔离包两份 `windows-agy-account.ps1` 均含回退；OpenSpec 严格校验 34 项通过。
 - 兼容性：同一账号由旧格式改写为新格式后，绑定版本从 `subjectHash` 变为邮箱主体，按现有规则需重新选型，旧任务续聊需新建任务。
 - 未执行：ps1 无法在 macOS 运行（无 PowerShell 与凭据管理器），Windows 实机/远程回归未做；macOS 本机 agy 1.4.7 凭据文件仍含 `id_token`，POSIX 新格式只有模拟测试；未正式构建、未更新 Desktop、未调用真实模型；issue 未回复。
+
+## 2026-10-26 换号后旧任务自动续接（OpenSpec `continue-tasks-across-account-changes` 第 1–4 节，`feat/general-settings`，未发布）
+
+- 实现：已有任务续聊、排队续聊、分支、子对话改选及旧记录遇到换号时，以当前账号授权原模型与强度后改绑继续，过程区记「账号已变更，已改用当前账号继续」；无账号、新账号下模型/强度不可用、同次启动 A→B→A 竞态仍拒绝；新任务选型/排队期间换号仍拒绝。运行中换号后的引导转为排队。续接方式表全部为 `try`；改绑的续接在无任何回复/思考/工具事件前失败时，以插件历史摘录在新原生会话中改接一次，原 ID 记入 `previousConversationIds`，改接失败恢复原 ID；Hermes oneshot 当前 `HERMES_HOME` 无 `state.db` 时直接改接。
+- 测试：新增 `tests/cross-account-continuation.test.ts`（16）与 `tests/carryover-context.test.ts`（7），由 Codex 子 agent（gpt-6-astra high）编写，本会话复核用例内容并重新运行；更新 `runtime-account-isolation`、`followup-queue`、`cli-settings`、`worker-management` 中原「换号即拒绝」断言为新行为；`panel.test.tsx` 新增排队回执用例（撤掉 Client 修复时失败）。
+- 验收：全量 227 个文件 4445 通过、13 跳过（同日首次全量曾有 `native-zcode`、`native-harness-tools` 共 6 个失败，单独运行与再次全量均通过，判断为负载下的偶发超时）；`build.mjs --typecheck-only`、`build-preview.mjs`、OpenSpec 严格校验（35 项）通过。
+- 未执行或未做：第 0 节真实账号跨账号续接实验（需授权）；Desktop 实测；正式构建；Codex rollout / Claude 会话文件预检；改接后上下文用量统计重置；分支原生操作失败的改接；分支改绑无单独用例。
+- 并行冲突提示：改动了 `src/host/index.ts`（`launch`、`catalogForWorker`、`configureWorker`、`steerMessage`）与 `src/client/i18n-messages.ts` 末尾，合并 `no-ask-dispatch`、`cliworker-i18n` 等分支时需留意。

@@ -374,7 +374,7 @@ function ProcessItem({ item, rows, worker }: { item: TimelineItem; rows: Timelin
     >
       {open && item.detail && (
         <div className="cwn-reasoning-body">
-          <MarkdownText text={item.detail} labels={markdownLabels()} variant="compact" />
+          <MarkdownText text={hostText(item.detail)} labels={markdownLabels()} variant="compact" />
         </div>
       )}
     </DisclosureRow>

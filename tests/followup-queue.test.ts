@@ -417,11 +417,10 @@ it('keeps the original queued item when execution-time authorization fails after
   resumed.finish()
 })
 
-it('rejects idle legacy history without account binding before persisting a queue', () => {
+it('accepts a queue item for idle legacy history without account binding; its turn binds the current account', () => {
   const f = fixture()
   rmSync(join(f.directory, `${f.worker.id}.account-binding.json`))
-  expect(() => f.queue('must not bypass account binding')).toThrow('账号')
-  expect(f.items()).toEqual([])
+  expect(f.queue('legacy continuation').prompt).toBe('legacy continuation')
 })
 
 it.each(['hardlink', 'symlink'] as const)(
@@ -575,10 +574,12 @@ it('rechecks account, parent ownership, run identity and execution permission be
   await expect(
     f.runtime.sendRunningMessage('parent', f.worker.id, 'stale', randomUUID(), randomUUID()),
   ).rejects.toThrow('状态已变化')
+  // A run keeps its starting account; after a switch the message is queued for the next turn.
   vi.mocked(readCliAccountBinding).mockResolvedValueOnce('another-account')
-  await expect(
-    f.runtime.sendRunningMessage('parent', f.worker.id, 'account', f.worker.runId, randomUUID()),
-  ).rejects.toThrow('account changed')
+  expect(
+    await f.runtime.sendRunningMessage('parent', f.worker.id, 'account', f.worker.runId, randomUUID()),
+  ).toMatchObject({ prompt: 'account', state: 'pending' })
+  expect(f.items().map((item) => item.prompt)).toEqual(['account'])
   const gate = deferred<string>()
   vi.mocked(readCliAccountBinding).mockReturnValueOnce(gate.promise)
   let planning = false

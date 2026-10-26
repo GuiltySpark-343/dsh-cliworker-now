@@ -2969,6 +2969,38 @@ const nativeSteerReceipt = (call: unknown[]) => ({
   value: JSON.stringify({ accepted: true, runId: call[3], requestId: call[4], revision: 3 }),
 })
 
+it('shows a steer the Host queued after an account switch as a queued message, not a sent steer', async () => {
+  // Synthetic receipt: the run's account changed, so the Host queued the message for the next turn.
+  const steerMessage = vi.fn().mockImplementation(async (...call) => ({
+    ok: true,
+    value: JSON.stringify({
+      accepted: true,
+      runId: call[3],
+      requestId: call[4],
+      queued: { id: call[4], prompt: call[2], createdAt: '', state: 'pending' },
+      revision: 3,
+    }),
+  }))
+  const t = await setup(true, undefined, workers, { steerMessage })
+  await act(async () =>
+    t.streams.at(-1)!.push({ ...t.snapshot('a', 2, { status: 'running' }), runningMessageMode: 'steer' }),
+  )
+  await t.edit('synthetic steer after account switch')
+  await t.submit()
+  expect(steerMessage).toHaveBeenCalledOnce()
+  const id = steerMessage.mock.calls[0]![4] as string
+  expect(t.text()).not.toContain('发送结果待确认')
+  expect(t.r.root.findAllByProps({ className: 'cwn-message user' })).toHaveLength(0)
+  await act(async () =>
+    t.streams.at(-1)!.push({
+      ...t.snapshot('a', 3, { status: 'running' }),
+      runningMessageMode: 'steer',
+      queuedFollowups: [{ id, prompt: 'synthetic steer after account switch', createdAt: '', state: 'pending' }],
+    }),
+  )
+  expect(t.r.root.findAllByProps({ 'data-queue-id': id })).toHaveLength(1)
+})
+
 it('dispatches B steer before A native ACK and settles each independently without outbox RPCs', async () => {
   const first = deferred(),
     second = deferred()

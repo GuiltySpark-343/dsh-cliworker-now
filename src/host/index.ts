@@ -51,8 +51,6 @@ import {
   cliOf,
   workerName,
   effortLabel,
-  isUserInterrupted,
-  LEGACY_ACCOUNT_RECORD_NOTICE,
   EFFORTS,
   type CliId,
   type Preference,
@@ -1050,13 +1048,9 @@ export class CliWorkerService extends TypertRemoteService {
     const project = this.project(agent)
     const selectedProject = this.selectionProjects?.get(preference)
     if (!workerId && selectedProject && selectedProject !== project) throw new Error('项目已变更，请重新选择')
-    const expected = workerId
-      ? this.runtime.storage.accountBinding(workerId)
-      : this.selectionBindings?.get(preference)
-    if (workerId && !expected) {
-      const worker = this.runtime.get(agent.id, workerId)
-      if (worker.conversationId || !isUserInterrupted(worker)) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
-    }
+    // An existing task continues under the own account signed in now; only a new
+    // task must keep the account its selection was made under.
+    const expected = workerId ? undefined : this.selectionBindings?.get(preference)
     const { binding, preference: authorizedPreference } = await this.querySelection(
       preference,
       this.backend,
@@ -2142,13 +2136,17 @@ export class CliWorkerService extends TypertRemoteService {
       const worker = this.runtime.get(agent.id, workerId)
       const cli = cliOf(worker.preference)
       queriedCli = cli
-      const expected = this.runtime.storage.accountBinding(workerId)
-      if (!expected) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
       this.runtime.assertCliEnabled(cli)
       this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
       // An isolated conversation's account was verified against its copy.
       const directory = this.runtime.catalogDirectory(worker)
-      let catalog = this.settingsCatalogs.display(directory, cli, expected)
+      const saved = this.runtime.storage.accountBinding(workerId)
+      let catalog = saved ? this.settingsCatalogs.display(directory, cli, saved) : undefined
+      // After an account change the choices come from the account signed in now.
+      const expected = catalog
+        ? saved!
+        : await readCliAccountBinding(cli, this.backend, this.options, directory, control)
+      catalog ??= this.settingsCatalogs.display(directory, cli, expected)
       if (!catalog) {
         const result = await this.settingsCatalogs.get({
           cli,
@@ -2258,11 +2256,17 @@ export class CliWorkerService extends TypertRemoteService {
       const worker = this.runtime.get(agent.id, workerId)
       const preference = preferenceSchema.parse(JSON.parse(selection))
       if (cliOf(preference) !== cliOf(worker.preference)) throw new Error('已有会话不能切换 CLI')
-      const expected = this.runtime.storage.accountBinding(workerId)
-      if (!expected) throw new Error(LEGACY_ACCOUNT_RECORD_NOTICE)
       this.runtime.assertCliEnabled(cliOf(preference))
       this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
-      const catalog = this.settingsCatalogs.display(this.runtime.catalogDirectory(worker), cliOf(preference), expected)
+      const directory = this.runtime.catalogDirectory(worker)
+      const saved = this.runtime.storage.accountBinding(workerId)
+      const catalog =
+        (saved && this.settingsCatalogs.display(directory, cliOf(preference), saved)) ||
+        this.settingsCatalogs.display(
+          directory,
+          cliOf(preference),
+          await readCliAccountBinding(cliOf(preference), this.backend, this.options, directory, signal),
+        )
       if (!catalog) throw new Error('模型目录已失效，请重试读取或在设置中刷新')
       validatePreference(preference, catalog)
       signal.throwIfAborted()
@@ -2589,11 +2593,13 @@ export class CliWorkerService extends TypertRemoteService {
       const worker = this.runtime.get(agent.id, workerId)
       if (this.project(agent) !== worker.project) throw new Error('项目已变更，请在原项目继续')
       if (this.accounts.isBusy(cliOf(worker.preference))) throw new Error('请先关闭账号终端')
-      await this.runtime.steerMessage(agent.id, workerId, prompt, expectedRunId, requestId, control)
+      // After an account switch the message is queued for the next turn instead.
+      const queued = await this.runtime.steerMessage(agent.id, workerId, prompt, expectedRunId, requestId, control)
       return JSON.stringify({
         accepted: true,
         requestId,
         runId: expectedRunId,
+        ...(queued ? { queued } : {}),
         revision: this.runtime.revision,
       })
     } catch (error) {

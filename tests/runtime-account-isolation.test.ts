@@ -204,18 +204,19 @@ it('rechecks the account after native launch preparation and sends no prompt if 
   expect(backend.spawn).not.toHaveBeenCalled()
 })
 
-it('requires a new task for legacy history whose original account was never recorded', async () => {
+it('continues legacy history whose original account was never recorded under the current account', async () => {
   const { backend, storage, finishes, submit } = setup()
   const first = submit()
   await vi.waitFor(() => expect(backend.spawn).toHaveBeenCalledTimes(1))
   finishes[0]!()
   const completed = await first.done
   rmSync(join(storage.directory, `${completed.id}.account-binding.json`))
-  const history = storage.history(completed.id)
   account = 'synthetic-replacement-account'
-  expect(() => submit(preference, completed.id)).toThrow('此历史任务缺少账号记录')
-  expect(storage.history(completed.id)).toEqual(history)
-  expect(backend.spawn).toHaveBeenCalledTimes(1)
+  const continued = submit(preference, completed.id)
+  await vi.waitFor(() => expect(backend.spawn).toHaveBeenCalledTimes(2))
+  finishes[1]!()
+  expect((await continued.done).status).toBe('completed')
+  expect(storage.accountBinding(completed.id)).toBe('synthetic-replacement-account')
 })
 
 it('rejects a raw model variant paired with another variant effort instead of substituting it', async () => {
@@ -239,7 +240,7 @@ it('rejects a raw model variant paired with another variant effort instead of su
   expect(backend.spawn).not.toHaveBeenCalled()
 })
 
-it('binds history privately, permits the same account and refuses a replacement account on continuation', async () => {
+it('binds history privately, permits the same account and rebinds a replacement account on continuation', async () => {
   const { backend, storage, runtime, finishes, submit } = setup()
   const first = submit()
   await vi.waitFor(() => expect(backend.spawn).toHaveBeenCalledTimes(1))
@@ -260,11 +261,16 @@ it('binds history privately, permits the same account and refuses a replacement 
   expect((await same.done).status).toBe('completed')
   account = 'synthetic-account-b'
   const different = submit(preference, first.worker.id)
-  expect(await different.done).toMatchObject({
-    status: 'failed',
-    error: expect.stringContaining('账号已变更'),
-  })
-  expect(backend.spawn).toHaveBeenCalledTimes(2)
+  await vi.waitFor(() => expect(backend.spawn).toHaveBeenCalledTimes(3))
+  finishes[2]!()
+  expect((await different.done).status).toBe('completed')
+  expect(storage.accountBinding(first.worker.id)).toBe('synthetic-account-b')
+  expect(
+    storage.history(first.worker.id).filter((event) => event.text === '账号已变更，已改用当前账号继续'),
+  ).toHaveLength(1)
+  expect(JSON.stringify(runtime.snapshot('synthetic-parent', first.worker.id))).not.toContain(
+    'synthetic-account-b',
+  )
 })
 
 it('cancels during model discovery without spawning a task', async () => {

@@ -535,6 +535,7 @@ export function useMessageSubmissions(
           accepted: boolean
           requestId: string
           runId: string
+          queued?: { id: string }
           revision?: number
         }
         if (
@@ -543,6 +544,14 @@ export function useMessageSubmissions(
           receipt.runId !== message.originalRunId
         )
           throw new Error(t('引导回执无法核对，请停止后确认消息状态'))
+        if (receipt.queued?.id === message.id) {
+          // The account changed during this run: the Host queued it for the next turn,
+          // where it appears with the other queued messages instead of as a steer.
+          discard(message)
+          const current = snapshots.current.get(worker.id)
+          if (current) reconcile(current)
+          return
+        }
         message.acceptedRunId = receipt.runId
         if (Number.isSafeInteger(receipt.revision)) message.receiptRevision = receipt.revision
         message.state = 'accepted'

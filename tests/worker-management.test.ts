@@ -246,11 +246,12 @@ describe('short default names and exact legacy references', () => {
 })
 
 describe('private account admission and reversible management', () => {
-  it('projects a safe selected-history reason and never invents a binding', () => {
+  it('does not block legacy history in the snapshot and never invents a binding', () => {
     const f = fixture(),
       worker = storedWorker(f.project)
     f.storage.save(worker)
-    expect(f.runtime.snapshot('parent', worker.id).resumeBlockedReason).toContain('缺少账号记录')
+    // Legacy history continues under the current account at its next turn.
+    expect(f.runtime.snapshot('parent', worker.id).resumeBlockedReason).toBeUndefined()
     expect(f.storage.accountBinding(worker.id)).toBeUndefined()
     f.storage.bindAccount(worker.id, 'synthetic-account-a')
     expect(f.runtime.snapshot('parent', worker.id).resumeBlockedReason).toBeUndefined()
@@ -392,14 +393,14 @@ describe('private account admission and reversible management', () => {
     expect(readFileSync(join(f.directory, `${worker.id}.worker.json`), 'utf8')).toBe(original)
   })
 
-  it('does not configure a legacy conversation using the currently displayed account', async () => {
+  it('configures a legacy conversation only from a directory of the current account, not the displayed one', async () => {
     const f = fixture(),
       worker = storedWorker(f.project)
     f.storage.save(worker)
     f.service.displayedBindings = new Map([['["parent","antigravity"]', 'synthetic-account-a']])
     await expect(
       f.service.configureWorker('parent', worker.id, JSON.stringify(worker.preference), f.signal),
-    ).rejects.toThrow('缺少账号记录')
+    ).rejects.toThrow('模型目录已失效')
     expect(f.service.querySelection).not.toHaveBeenCalled()
     expect(f.storage.accountBinding(worker.id)).toBeUndefined()
     expect(f.runtime.get('parent', worker.id).preference).toEqual(worker.preference)

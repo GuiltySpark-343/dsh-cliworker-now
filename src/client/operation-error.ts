@@ -13,6 +13,8 @@ const hostPatterns: [RegExp, MessageKey, ...string[]][] = [
   [/^项目文件总大小超过隔离副本上限（(\d+) MiB）$/u, '项目文件总大小超过隔离副本上限（{limit} MiB）', 'limit'],
   [/^无法创建隔离副本：(.+)$/su, '无法创建隔离副本：{detail}', 'detail'],
   [/^合并失败：(.+)$/su, '合并失败：{reason}', 'reason'],
+  [/^已附带此前 (\d+) 条记录，省略 (\d+) 条$/u, '已附带此前 {count} 条记录，省略 {omitted} 条', 'count', 'omitted'],
+  [/^已附带此前 (\d+) 条记录$/u, '已附带此前 {count} 条记录', 'count'],
   [/^已合并隔离副本：写回 (\d+) 个、删除 (\d+) 个文件（未提交）$/u, '已合并隔离副本：写回 {written} 个、删除 {deleted} 个文件（未提交）', 'written', 'deleted'],
   [/^(\d+) 个文件两边都改过，等待主 Agent 整合，主目录未改动$/u, '{count} 个文件两边都改过，等待主 Agent 整合，主目录未改动', 'count'],
   [/^主目录中的 (.+) 不是目录，已停止合并$/u, '主目录中的 {path} 不是目录，已停止合并', 'path'],

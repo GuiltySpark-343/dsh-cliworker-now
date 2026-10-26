@@ -69,6 +69,10 @@ export const cliOf = (preference: Preference): CliId => preference.cli ?? 'antig
 export const effortLabel = (effort: string) =>
   effort === 'default' ? '默认' : effort.charAt(0).toUpperCase() + effort.slice(1)
 export const LEGACY_ACCOUNT_RECORD_NOTICE = '此历史任务缺少账号记录，请新建任务'
+/** Timeline notes for continuing an existing task after its account changed. */
+export const ACCOUNT_REBOUND_NOTICE = '账号已变更，已改用当前账号继续'
+export const CARRYOVER_FAILED_NOTICE = '原会话无法在当前账号续接，已在新会话中继续'
+export const CARRYOVER_UNREACHABLE_NOTICE = '原会话不在当前账号的会话记录中，已在新会话中继续'
 export type Effort = (typeof EFFORTS)[number]
 export type WorkerStatus =
   | 'queued'
@@ -126,6 +130,8 @@ export interface Worker {
   preference: Preference
   mode: TaskMode
   conversationId?: string
+  /** Native sessions this task left when it continued in a new session under another account. */
+  previousConversationIds?: string[]
   /** A session receipt is replaced, never added to another invocation's cumulative receipt. */
   conversationTelemetry?: ConversationTelemetryCheckpoint
   /** Last full run receipt, kept independently from session cumulative accounting. */

@@ -517,17 +517,14 @@ describe('profile-wide CLI enablement', () => {
 
 // Explicit synthetic account-supported catalog. No credential or model request.
 describe('account-supported model selection', () => {
-  it('rejects unbound legacy followup before querying models or creating a background job', async () => {
-    const { service, storage, worker, signal, jobs, backend } = fixture()
+  it('authorizes an unbound legacy followup under the current account instead of refusing it', async () => {
+    const { service, storage, worker, signal, jobs } = fixture()
     rmSync(join(storage.directory, `${worker.id}.account-binding.json`))
-    const history = storage.history(worker.id)
-    await expect(
-      service.followup('parent', worker.id, 'Synthetic legacy continuation', signal),
-    ).rejects.toThrow('此历史任务缺少账号记录')
-    expect(catalogFor).not.toHaveBeenCalled()
-    expect(jobs.start).not.toHaveBeenCalled()
-    expect(backend.spawn).not.toHaveBeenCalled()
-    expect(storage.history(worker.id)).toEqual(history)
+    await service.followup('parent', worker.id, 'Synthetic legacy continuation', signal).catch(() => undefined)
+    // The current own account is read and its directory authorizes the saved model.
+    expect(readCliAccountBinding).toHaveBeenCalled()
+    expect(catalogFor).toHaveBeenCalled()
+    expect(jobs.start).toHaveBeenCalledOnce()
   })
 
   const supported: Catalog = {
@@ -654,7 +651,8 @@ describe('saved Worker model directory', () => {
       f.service.configureWorker('parent', f.worker.id, JSON.stringify(preference), f.signal),
     ).rejects.toThrow('模型目录已失效')
     expect(catalogFor).not.toHaveBeenCalled()
-    expect(readCliAccountBinding).not.toHaveBeenCalled()
+    // A missing saved directory is looked up under the current account only.
+    expect(readCliAccountBinding).toHaveBeenCalledOnce()
     await f.service.catalogForWorker('parent', f.worker.id, f.signal)
     await expect(
       f.service.configureWorker(
@@ -666,9 +664,13 @@ describe('saved Worker model directory', () => {
     ).rejects.toThrow('不可用')
     ;(f.service as any).settingsCatalogs.invalidate('antigravity')
     vi.mocked(catalogFor).mockClear()
-    vi.mocked(readCliAccountBinding).mockResolvedValueOnce('synthetic-other-account')
-    await expect(f.service.catalogForWorker('parent', f.worker.id, f.signal)).rejects.toThrow('账号已变更')
-    expect(catalogFor).not.toHaveBeenCalled()
+    // After an account change the Worker's choices come from the current account,
+    // and viewing them does not rebind the Worker.
+    vi.mocked(readCliAccountBinding).mockResolvedValue('synthetic-other-account')
+    expect(JSON.parse(await f.service.catalogForWorker('parent', f.worker.id, f.signal))).toEqual(catalog)
+    expect(catalogFor).toHaveBeenCalledOnce()
+    expect(f.storage.accountBinding(f.worker.id)).toBe('synthetic-settings-account')
+    vi.mocked(readCliAccountBinding).mockResolvedValue('synthetic-settings-account')
     ;(f.service as any).parent.mockResolvedValueOnce({ id: 'other-parent' })
     vi.mocked(readCliAccountBinding).mockClear()
     await expect(f.service.catalogForWorker('parent', f.worker.id, f.signal)).rejects.toThrow()
