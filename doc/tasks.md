@@ -2738,3 +2738,17 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 修复：新增 `src/host/agy-macos-account.ts`，以参数数组调用 `/usr/bin/security find-generic-password -s gemini -a antigravity -w`，Host 内解码 go-keyring 前缀；条目不存在（44）即未登录、不回退文件，其他失败报无法读取且不带输出。`account-identity.ts` 抽出 `agyIdentityFromCredential` 供文件与钥匙串共用；`nativeAgyAccountIdentity` 与绑定在 `darwin` 上改读钥匙串，主体计算与 `~/.gemini` 来源标识不变。Linux、Windows 不变。
 - 测试：新增 `tests/agy-macos-account.test.ts`（11）；`authorized-catalog-windows-agy` macOS 用例改为合成 `/usr/bin/security` 进程（3 种编码、旧文件属另一账号时以钥匙串为准、缺条目即拒绝且不查模型），`cli-account-binding` mock 钥匙串读取。换回旧接入代码时 6 个新用例失败。全量 228 文件 4493 通过、13 跳过；类型检查、OpenSpec 严格校验 37 项、`build-preview.mjs` 通过。
 - 未执行：重新登录后真实钥匙串读取（是否弹出访问提示、编码形式）与 `agy-11` 原生续接（任务 3.1、3.2）。
+
+## 2026-10-26 账号终端关闭被僵尸辅助进程阻止（OpenSpec `fix-account-terminal-zombie-close`，`feat/general-settings`，未发布）
+
+- 起因：用户在 Antigravity 账号终端 `/login` 成功后关闭终端，界面报「账号终端清理失败，请重试关闭」，CLI 保持占用，续聊被「请先关闭账号终端」阻止。本机核对：agy（pid 13692）未回收登录时的浏览器打开辅助进程，留下僵尸子进程 13708；宿主 `dsh-subprocess-local` macOS 清理先清后代、有幸存者即抛 `terminal cleanup failed; surviving pids`，从不向 agy 发信号。合成探针复现同样失败，先 SIGTERM 顶层后清理即成功。
+- 修复：`AccountManager.finish()` 在非 Windows、CLI 未退出时先 `signalForeground('SIGTERM')`，最多等待 `graceMs` 后再 `terminate()`；CLI 已退出不发信号。宿主核心未改。
+- 测试：`tests/accounts.test.ts` 夹具在 SIGTERM 时模拟 CLI 退出；新增 3 项（僵尸幸存者、忽略 SIGTERM、已退出不发信号），去掉新调用时僵尸用例失败。全量 228 文件 4496 通过、13 跳过；类型检查、OpenSpec 严格校验 38 项、`build-preview.mjs`、正式 `build.mjs` 通过；本地提交 `6c367bc`。Desktop 重启后残留 agy 随旧 Host 退出。
+- 未执行：真实 `/login` 后关闭终端（任务 3.1），需用户再次登录时验证。
+
+## 2026-10-26 Desktop 实测：Antigravity 原账号退出重登后续聊（`continue-tasks-across-account-changes` 5.2、`fix-agy-macos-keychain-account` 3.2）
+
+- 过程：用户在账号终端 `/logout` 后 `/login` 原账号；正式构建 `6c367bc` 后重启 Desktop，由 Codex Computer Use（gpt-6-astra high）在「让5个智能体同时打招呼」读取设置页并发送续聊。
+- 结果（磁盘核对 `2fd9686d….events.jsonl`、`worker.json`）：钥匙串条目存在（`security` 退出 0），界面未出现钥匙串访问提示或模型选择卡；设置页显示已登录；run `708b2505…` 原生续接同一会话 `98bda1e4-e006-4248-87cc-7dceb4526a0a`，回复 `blue-lantern-42`，状态 `completed`，结果 `SUCCESS`。
+- 不符合预期：过程区出现「账号已变更，已改用当前账号继续」，绑定由第一轮的 `…bce29b01` 变为 `…57063469`。原因（只比较结构与哈希，未输出凭据）：遗留文件含 `id_token`，主体为 `sub`+`iss`；钥匙串条目无 `id_token`、只有 `id_token_email`，主体退化为邮箱。两者邮箱哈希一致，是同一账号。第一轮在修复前按文件计算，因此这次是格式迁移导致的一次性改绑，不是重登本身。`fix-agy-macos-keychain-account` 中“同一账号从文件切换到钥匙串绑定不变”的假设与单测夹具（两边用同一 JSON）不成立，待用户决定兼容方案后修正。
+- 未执行：钥匙串→钥匙串的同账号重登（稳态，无格式迁移）；退出期间续聊提示登录（3.1）。
