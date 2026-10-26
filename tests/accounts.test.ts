@@ -1455,7 +1455,7 @@ describe('Antigravity account terminal guide (synthetic agy screens)', () => {
   const timing = { ...AGY_GUIDE_TIMING }
   afterEach(() => Object.assign(AGY_GUIDE_TIMING, timing))
   const fast = () =>
-    Object.assign(AGY_GUIDE_TIMING, { commandDelayMs: 1, pollMs: 5, loginConfirmMs: 150, logoutConfirmMs: 150 })
+    Object.assign(AGY_GUIDE_TIMING, { commandDelayMs: 1, pollMs: 5, loginConfirmMs: 150, logoutConfirmMs: 150, confirmEnterMs: 5 })
   const READY = '\x1b[3;1H>\x1b[K\r\n\x1b[90m? for shortcuts\x1b[0m'
   const SIGNED_OUT = 'Welcome to the Antigravity CLI. You are currently not signed in.\r\n'
   const METHOD = 'Select login method:\r\n> 1. Google OAuth\r\n'
@@ -1528,10 +1528,53 @@ describe('Antigravity account terminal guide (synthetic agy screens)', () => {
     const f = fixture()
     const { id } = await f.manager.start('p', 'antigravity', 'logout', f.cwd, f.signal)
     const watched = frames(f, id)
-    f.output.write(SIGNED_OUT + READY)
+    f.output.write(SIGNED_OUT + METHOD)
     await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed' }))
     expect(f.terminal.write).not.toHaveBeenCalled()
     expect(watched.steps()).toEqual(['notSignedIn'])
+  })
+
+  it('logs out from the real signed-in start, which first prints the signed-out line', async () => {
+    fast()
+    const f = fixture()
+    f.identity.mockImplementation(async () =>
+      state(vi.mocked(f.terminal.write).mock.calls.some(([data]) => data === '\r') ? 'unconfigured' : 'authenticated'),
+    )
+    const { id } = await f.manager.start('p', 'antigravity', 'logout', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write(SIGNED_OUT + '\u28fe  Signing in...')
+    await tick()
+    expect(watched.steps()).toEqual([])
+    f.output.write(READY)
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed' }))
+    expect(watched.steps()).toEqual(['loggingOut', 'loggedOut'])
+  })
+
+  it('presses Enter once more when /logout only completed the slash command', async () => {
+    fast()
+    const f = fixture()
+    const enters = () => vi.mocked(f.terminal.write).mock.calls.filter(([data]) => data === '\r').length
+    f.identity.mockImplementation(async () => state(enters() >= 2 ? 'unconfigured' : 'authenticated'))
+    const { id } = await f.manager.start('p', 'antigravity', 'logout', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write(READY)
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed' }))
+    expect(vi.mocked(f.terminal.write).mock.calls).toEqual([['/logout'], ['\r'], ['\r']])
+  })
+
+  it('never presses Enter again once agy shows its login menu', async () => {
+    fast()
+    Object.assign(AGY_GUIDE_TIMING, { confirmEnterMs: 300, logoutConfirmMs: 500 })
+    const f = fixture()
+    f.identity.mockResolvedValue(state('authenticated'))
+    const { id } = await f.manager.start('p', 'antigravity', 'logout', f.cwd, f.signal)
+    const watched = frames(f, id)
+    f.output.write(READY)
+    await vi.waitFor(() => expect(f.terminal.write).toHaveBeenCalledWith('\r'), { interval: 5 })
+    f.output.write(METHOD)
+    await vi.waitFor(() => expect(watched.steps()).toContain('logoutUnconfirmed'))
+    expect(vi.mocked(f.terminal.write).mock.calls).toEqual([['/logout'], ['\r']])
+    await f.manager.stop('p', id)
   })
 
   it('reports an unconfirmed sign-out and leaves the terminal to the user', async () => {

@@ -130,7 +130,7 @@ it('asks for the native account once a screen with no known step settles', () =>
 })
 
 it('never asks while a known step is on screen', () => {
-  for (const screen of [SIGNED_OUT, METHOD, TRUST, CODE + CODE_TAIL]) {
+  for (const screen of [METHOD, TRUST, CODE + CODE_TAIL]) {
     const guide = new AgyAccountGuide('logout')
     guide.output(screen)
     expect(guide.settled()).toEqual([])
@@ -139,3 +139,18 @@ it('never asks while a known step is on screen', () => {
   manage.output('synthetic screen')
   expect(manage.settled()).toEqual([])
 })
+
+it('treats the signed-out line as a sign-in check, not as a signed-out account (real agy 1.4.7 start)', () => {
+  const logout = new AgyAccountGuide('logout')
+  expect(logout.output(SIGNED_OUT + '\u28fe  Signing in...')).toEqual([])
+  expect(logout.output(READY)).toEqual([{ guide: AGY_GUIDES.loggingOut }, { command: 'logout' }])
+  expect(logout.loginMenuAfterCommand()).toBe(false)
+  logout.output(METHOD)
+  expect(logout.loginMenuAfterCommand()).toBe(true)
+  const login = new AgyAccountGuide('login')
+  expect(login.output(SIGNED_OUT + READY)).toEqual([{ guide: AGY_GUIDES.alreadySignedIn }])
+  const settling = new AgyAccountGuide('logout')
+  settling.output(SIGNED_OUT)
+  expect(settling.settled()).toEqual([{ identify: true }])
+})
+

@@ -74,10 +74,12 @@ export const AGY_GUIDE_TIMING = {
   pollMs: 1500,
   loginConfirmMs: 20_000,
   logoutConfirmMs: 20_000,
-  /** Output pause that counts as a finished draw. */
-  quietMs: 1200,
+  /** Output pause that counts as a finished draw; agy pauses ~2 s while signing in. */
+  quietMs: 3000,
   /** A screen that keeps animating is still read after this long. */
-  settleCapMs: 8000,
+  settleCapMs: 10_000,
+  /** When `/logout` is still pending after this, one more Enter runs a completed slash command. */
+  confirmEnterMs: 1500,
 }
 /** The guided Antigravity terminal is not shown by default; a tall, wide PTY keeps every prompt on screen. */
 const AGY_GUIDED_SIZE = { cols: 200, rows: 60 }
@@ -1044,6 +1046,18 @@ export class AccountManager {
       await sleep(AGY_GUIDE_TIMING.commandDelayMs, undefined, { signal })
       if (session.state !== 'running' || session.stopping) return
       await session.terminal.write('\r')
+      // The first Enter may only accept the slash-command completion. Never press it
+      // again once the account is gone or agy shows its login menu (Enter would sign in).
+      await sleep(AGY_GUIDE_TIMING.confirmEnterMs, undefined, { signal })
+      const identity = await this.identity(session.cli, signal).catch(() => undefined)
+      signal.throwIfAborted()
+      if (
+        identity?.state === 'authenticated' &&
+        !session.guide!.loginMenuAfterCommand() &&
+        session.state === 'running' &&
+        !session.stopping
+      )
+        await session.terminal.write('\r')
     } catch {
       if (!signal.aborted) this.emit(session, { guide: AGY_GUIDES.logoutUnconfirmed })
       return

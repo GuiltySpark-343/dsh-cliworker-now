@@ -3,6 +3,8 @@ import type { AccountAction, AccountGuide } from '../shared/accounts.ts'
 /**
  * Screen texts of agy 1.4.7 (checked on macOS 2026-10-26). Whitespace is
  * ignored when matching, since a TUI may draw spaces as cursor moves.
+ * `signedOut` is drawn before every sign-in check, also for a signed-in
+ * account, so only the login method menu proves a signed-out start.
  */
 const MARKERS = {
   trust: 'Do you trust the contents of this project?',
@@ -71,6 +73,7 @@ export class AgyAccountGuide {
   private typed = false
   private commandSent = false
   private identifying = false
+  private afterCommand = ''
 
   constructor(private readonly action: AccountAction) {}
 
@@ -80,8 +83,12 @@ export class AgyAccountGuide {
     const seen = (marker: keyof typeof MARKERS) => this.screen.includes(PATTERNS[marker])
     const linked = this.action === 'login' ? this.readLink(text) : false
     if (this.action === 'logout') {
-      if (this.commandSent || this.step) return []
-      if (seen('trust') || seen('signedOut')) return this.show(seen('trust') ? AGY_GUIDES.trust : AGY_GUIDES.notSignedIn)
+      if (this.commandSent) {
+        this.afterCommand = (this.afterCommand + compact(text.replace(CONTROL, ''))).slice(-SCREEN_LIMIT)
+        return []
+      }
+      if (this.step) return []
+      if (seen('trust') || seen('method')) return this.show(seen('trust') ? AGY_GUIDES.trust : AGY_GUIDES.notSignedIn)
       if (!seen('ready')) return []
       this.commandSent = true
       return [...this.show(AGY_GUIDES.loggingOut), { command: 'logout' }]
@@ -90,7 +97,7 @@ export class AgyAccountGuide {
     if (seen('code') && this.order('code')) return this.show(AGY_GUIDES.code)
     if (seen('method') && this.order('method')) return this.show(AGY_GUIDES.method)
     if (seen('trust') && !this.step) return this.show(AGY_GUIDES.trust)
-    if (seen('ready') && !seen('signedOut') && (!this.step || this.step === 'trust'))
+    if (seen('ready') && !seen('method') && (!this.step || this.step === 'trust'))
       return this.show(AGY_GUIDES.alreadySignedIn)
     // A sign-in address drawn after the code prompt still reaches the open step.
     if (linked && this.step === 'code') return [{ guide: this.withLink(AGY_GUIDES.code) }]
@@ -104,9 +111,14 @@ export class AgyAccountGuide {
   settled(): AgyGuideEvent[] {
     if (this.action === 'manage' || this.step || this.commandSent || this.identifying || !this.screen) return []
     const seen = (marker: keyof typeof MARKERS) => this.screen.includes(PATTERNS[marker])
-    if (seen('trust') || seen('signedOut') || seen('method') || seen('code')) return []
+    if (seen('trust') || seen('method') || seen('code')) return []
     this.identifying = true
     return [{ identify: true }]
+  }
+
+  /** agy redrew its login menu after `/logout`: a further Enter would start a sign-in. */
+  loginMenuAfterCommand(): boolean {
+    return this.afterCommand.includes(PATTERNS.method)
   }
 
   /** The native account state read after `settled`. */

@@ -4,7 +4,7 @@
 - [x] 1.2 `src/host/accounts.ts`：Antigravity 登录/退出会话挂接引导；自动写入 `/logout` 与回车；`identity()` 轮询确认登录/退出，超时提示；关闭时中止。
 - [x] 1.3 `src/shared/accounts.ts` `AccountFrame.guide`；`src/client/account-terminal.tsx` 引导横幅；`src/client/styles.ts`；英文词条。
 - [x] 1.4 `src/host/cli-account-binding.ts`：Antigravity 未登录时给出明确的登录说明。
-- [ ] 1.5 以真实已登录主界面校准就绪标记 `MARKERS.ready`（当前为占位；D9 的静止判定不依赖它）。
+- [x] 1.5 以真实已登录主界面校准就绪标记：2026-10-26 22:5x 只读探测（200×60，只回复终端查询）确认 `? for shortcuts` 为真实文字；同时发现已登录启动也会先打印「You are currently not signed in.」再「Signing in...」（约 2 秒停顿）后进入主界面，故未登录只以登录方式菜单判定，静止阈值改为 3 秒，`/logout` 后仍已登录且未出现登录菜单时再按一次回车（D11）。
 - [x] 1.6 自制登录窗口：`src/client/agy-account-wizard.tsx`（三步登录、退出进度与结果、原生终端后备）；`account-terminal.tsx` 隐藏原生终端且隐藏期间不缩放；Host `AGY_GUIDED_SIZE`、OSC 8 登录地址、静止后读取原生账号、登录成功后结束终端；样式与英文词条。
 
 ## 2. 自动检查
@@ -12,6 +12,7 @@
 - [x] 2.1 `tests/agy-account-guide.test.ts`：合成 agy 画面（标注模拟）覆盖登录全流程、粘贴/键入、重绘不回退、超时后重粘、信任与已登录、退出只在主界面写入、未登录/信任/管理不写入、文案不含输入。
 - [x] 2.2 `tests/accounts.test.ts`：Host 自动退出写入 `/logout`+回车并确认后关闭解除占用；未登录不写入并关闭；退出未确认保留终端；登录引导只写用户输入且帧中不含授权码；登录超时提示；关闭后停止轮询。
 - [x] 2.4 修订后：`agy-account-guide` 新增登录地址（仅 Google、晚到更新）、静止核对与已知步骤不核对；`accounts` 新增 200×60 尺寸、静止后自动退出、静止且未登录不写入、登录成功关闭解除占用；`account-terminal` 新增 6 项窗口测试（隐藏且不缩放、选择方式与授权码括号粘贴+回车、非 Google 链接不提供、未确认重新开始、退出进度不写入、管理动作保留终端）。
+- [x] 2.5 D11 用例：真实启动顺序下自动退出、二次回车、出现登录菜单后不再回车；登录时先打印未登录行仍判为已登录；仅未登录行时仍做账号核对。
 - [ ] 2.3 全量测试、类型检查、OpenSpec 严格校验、隔离构建。
 
 ## 3. 真实验收（macOS，用户本人登录）
