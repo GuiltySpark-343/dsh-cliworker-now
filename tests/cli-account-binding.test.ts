@@ -449,6 +449,22 @@ it.each([
   await expect(run('codex')).rejects.toMatchObject({ code: 'CLI_OWN_ACCOUNT_REQUIRED' })
 })
 
+it('binds a declared Codex model provider only with the explicit opt-in', async () => {
+  own('codex')
+  const provider = (bearer: string) =>
+    `[model_providers.custom]\nname = "custom"\nbase_url = "http://127.0.0.1:15721/v1"\nexperimental_bearer_token = "${bearer}"\n`
+  write(join(fixture.home, '.codex/config.toml'), 'model_provider = "custom"\n' + provider('synthetic-provider-token'), true)
+  // Stock refusal stays in force until the user opts in.
+  await expect(run('codex')).rejects.toMatchObject({ code: 'CLI_OWN_ACCOUNT_REQUIRED' })
+  vi.stubEnv('CLIWORKER_CODEX_CUSTOM_PROVIDER', '1')
+  const first = await run('codex')
+  expect(first).toMatch(/^cli-account-v1:/)
+  expect(first).not.toContain('synthetic-provider-token')
+  // The declared route carries the credential, so a token change is a new binding.
+  write(join(fixture.home, '.codex/config.toml'), 'model_provider = "custom"\n' + provider('synthetic-rotated-token'), true)
+  expect(await run('codex')).not.toBe(first)
+})
+
 it('rejects Codex route overrides in ancestor config and ambient environment', async () => {
   own('codex')
   write(join(project, '.codex/config.toml'), 'chatgpt_base_url = "https://other.synthetic.example"', true)

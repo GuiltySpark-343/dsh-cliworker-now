@@ -14,6 +14,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { CLI_LABELS, type CliId } from '../shared/types.ts'
 import { captureCatalogMetadata, resolveCliExecutable } from './adapters.ts'
 import { readCodexAccount } from './codex-account.ts'
+import { codexCustomProviderRoute } from './codex-custom-provider.ts'
 import { assertAgyNativeAccountRoute } from './agy-models.ts'
 import { readWindowsAgyAccount } from './agy-windows-account.ts'
 import { readFirstPartyModelSources } from './first-party-models.ts'
@@ -322,6 +323,29 @@ async function material(
     return { sourceIds: [root], entries: principal ? [{ provider: 'antigravity', principal }] : [] }
   }
   if (cli === 'codex') {
+    // Local patch: a declared [model_providers.*] route (cc-switch style) carries its
+    // own credential inside the CLI config, so the Host binds to that declared route
+    // instead of demanding an official OpenAI/ChatGPT identity. Opt-in only; without
+    // the marker file or env the stock refusal below stays in force.
+    const declared = await codexCustomProviderRoute(project, signal)
+    if (declared)
+      return {
+        sourceIds: [declared.root, `custom-provider:${declared.name}`],
+        entries: [
+          {
+            provider: 'openai-compatible',
+            route: {
+              source: 'declared-model-provider',
+              name: declared.name,
+              baseUrl: declared.baseUrl,
+            },
+            principal: {
+              kind: 'api',
+              routeHash: hash(JSON.stringify([declared.name, declared.baseUrl, declared.bearer])),
+            },
+          },
+        ],
+      }
     const { root, store } = await codexStore(project, signal)
     if (store !== 'file') {
       await requireDefaultCodexRoute(root, project, signal)
