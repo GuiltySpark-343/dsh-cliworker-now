@@ -1034,7 +1034,10 @@ function CliSettings({
             />
           </label>
           <p className="cwn-settings-notice cwn-settings-hint" role="status">
-            {modelError || (cli === 'claude' && catalog?.notice?.includes('路由') ? hostText(catalog.notice) : '')}
+            {modelError ||
+              ((cli === 'claude' || cli === 'codex') && catalog?.notice?.includes('路由')
+                ? hostText(catalog.notice)
+                : '')}
           </p>
           {(saving || saveError) && (
             <div className="cwn-settings-save">

@@ -209,34 +209,79 @@ async function codexStore(project: string, signal: AbortSignal) {
   }
   return { root, store }
 }
+const CODEX_ROUTE_ENV = [
+  'CODEX_API_KEY',
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'CODEX_BASE_URL',
+  'CHATGPT_BASE_URL',
+  'CODEX_PROFILE',
+]
+const CODEX_ROUTE_LINE =
+  /^\s*(?:["']?(?:model_provider|model_providers|openai_base_url|chatgpt_base_url|profile)["']?\s*=|\[\[?\s*(?:profiles|model_providers)(?:\.|\]|\s))/
+async function codexConfigs(root: string, project: string, signal: AbortSignal) {
+  const configs: [string, string][] = []
+  for (const path of codexConfigPaths(root, project)) {
+    const raw = await read(path, signal)
+    if (raw) configs.push([path, raw])
+  }
+  return configs
+}
+/**
+ * Codex's own config sends it to another provider, address or profile (a relay).
+ * Inherited route variables alone are not Codex's own setting.
+ */
+async function codexCustomRoute(root: string, project: string, signal: AbortSignal) {
+  return (await codexConfigs(root, project, signal)).some(([, raw]) =>
+    raw.split(/\r?\n/).some((line) => CODEX_ROUTE_LINE.test(line)),
+  )
+}
+/**
+ * A relay has no account the plugin can read, so its version is a digest of what
+ * Codex reads for it: the config files, route variables, the `env_key` variables and
+ * auth.json. Any change counts as an account change. Raw values never leave here.
+ */
+const codexEnvKeys = (configs: [string, string][]) =>
+  configs.flatMap(([, raw]) =>
+    [...raw.matchAll(/^\s*env_key\s*=\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/gm)].map((match) => match[1]!),
+  )
+async function codexRouteVersion(root: string, project: string, signal: AbortSignal) {
+  const configs = await codexConfigs(root, project, signal)
+  const keys = codexEnvKeys(configs)
+  const auth = await read(join(root, 'auth.json'), signal)
+  if (auth !== undefined && !object(JSON.parse(auth))) throw new CliAccountBindingError('codex')
+  return hash(
+    stable({
+      configs: configs.map(([path, raw]) => [path, hash(raw)]),
+      env: [...new Set([...CODEX_ROUTE_ENV, ...keys])]
+        .sort()
+        .map((name) => [name, text(process.env[name]) ? hash(process.env[name]!) : null]),
+      auth: auth === undefined ? null : hash(auth),
+    }),
+  )
+}
+/** The version of Codex's custom route, or undefined when Codex uses its official account. */
+export async function readCodexCustomRouteVersion(project: string, signal: AbortSignal) {
+  const { root } = await codexStore(project, signal)
+  return (await codexCustomRoute(root, project, signal)) ? codexRouteVersion(root, project, signal) : undefined
+}
+/**
+ * Workers start from a scrubbed environment. A relay's `env_key` variables, named in
+ * Codex's own config, are passed on when the Host has them; nothing else is added.
+ */
+export async function codexRouteEnvironment(project: string, signal: AbortSignal): Promise<Record<string, string>> {
+  const { root } = await codexStore(project, signal)
+  if (!(await codexCustomRoute(root, project, signal))) return {}
+  const env: Record<string, string> = {}
+  for (const name of codexEnvKeys(await codexConfigs(root, project, signal)))
+    if (text(process.env[name])) env[name] = process.env[name]!
+  return env
+}
 async function requireDefaultCodexRoute(root: string, project: string, signal: AbortSignal) {
   // These native overrides can route model/list and execution to another account.
   // Do not infer their endpoint/provider semantics from an unrelated auth.json.
-  if (
-    [
-      'CODEX_API_KEY',
-      'OPENAI_API_KEY',
-      'OPENAI_BASE_URL',
-      'CODEX_BASE_URL',
-      'CHATGPT_BASE_URL',
-      'CODEX_PROFILE',
-    ].some((name) => text(process.env[name]))
-  )
+  if (CODEX_ROUTE_ENV.some((name) => text(process.env[name])) || (await codexCustomRoute(root, project, signal)))
     throw new CliAccountBindingError('codex')
-  for (const path of codexConfigPaths(root, project)) {
-    const raw = await read(path, signal)
-    if (!raw) continue
-    if (
-      raw
-        .split(/\r?\n/)
-        .some((line) =>
-          /^\s*(?:["']?(?:model_provider|model_providers|openai_base_url|chatgpt_base_url|profile)["']?\s*=|\[\[?\s*(?:profiles|model_providers)(?:\.|\]|\s))/.test(
-            line,
-          ),
-        )
-    )
-      throw new CliAccountBindingError('codex')
-  }
 }
 /** File-backed Codex auth only. Native keyring/auto cannot use a stale auth.json for model queries. */
 export async function readCodexOwnAccountSource(project: string, signal: AbortSignal) {
@@ -340,6 +385,17 @@ async function material(
   }
   if (cli === 'codex') {
     const { root, store } = await codexStore(project, signal)
+    // A relay set in Codex's own config: Codex runs it as configured.
+    if (await codexCustomRoute(root, project, signal))
+      return {
+        sourceIds: [root, ...(store === 'file' ? [] : [`native-store:${store}`])],
+        entries: [
+          {
+            provider: 'codex-custom-route',
+            principal: { kind: 'route', version: await codexRouteVersion(root, project, signal) },
+          },
+        ],
+      }
     if (store !== 'file') {
       await requireDefaultCodexRoute(root, project, signal)
       const executable = await resolveCliExecutable(cli, backend, config, signal)

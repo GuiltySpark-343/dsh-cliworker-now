@@ -71,7 +71,7 @@ import { projectPublicToolCall } from './public-tool-projection.ts'
 import { WorkerStorage } from './storage.ts'
 import { authorizeSelection, ACCOUNT_CHANGED } from './authorized-catalog.ts'
 import { ownAccountBusy as accountBusy } from './own-account-lease.mjs'
-import { readCliAccountBinding } from './cli-account-binding.ts'
+import { codexRouteEnvironment, readCliAccountBinding } from './cli-account-binding.ts'
 import { crossAccountResume, nativeSessionReachable } from './cross-account-resume.ts'
 import { carryoverContext } from './carryover-context.ts'
 import { assertFirstPartyConfiguration, firstPartyEnvironment } from './first-party-models.ts'
@@ -1244,6 +1244,7 @@ export class WorkerRuntime {
       const nativeState = this.nativeStateDirectory(worker)
       mkdirSync(nativeState, { recursive: true, mode: 0o700 })
       const prompt = '分支元数据操作（不发送模型任务）'
+      const relayEnv = cli === 'codex' ? await codexRouteEnvironment(worker.project, ownSignal) : {}
       const launch = isExtendedCli(cli)
         ? await extendedLaunch(cli, executable, worker.project, worker.preference, worker.mode, prompt, nativeState,
             this.config, conversationId,
@@ -1251,7 +1252,7 @@ export class WorkerRuntime {
             { backend: this.backend, signal: ownSignal, graceMs: this.config.graceMs }, true)
         : await prepareNativeWorker({ argv: workerArguments(executable, worker.project, worker.preference, worker.mode,
             prompt, this.config.timeoutMs, conversationId, true),
-            env: { ...firstPartyEnvironment(cli), ...(['qoder', 'qodercn'].includes(cli) ? qoderEnvironment(cli as 'qoder' | 'qodercn') : {}) } },
+            env: { ...firstPartyEnvironment(cli), ...relayEnv, ...(['qoder', 'qodercn'].includes(cli) ? qoderEnvironment(cli as 'qoder' | 'qodercn') : {}) } },
             { cli, project: worker.project, preference: worker.preference, mode: worker.mode,
               prompt, conversationId, stateDirectory: nativeState }, this.config)
       let output = '', problem: unknown
@@ -2315,6 +2316,8 @@ export class WorkerRuntime {
           ))
       )
         throw new Error(ACCOUNT_CHANGED)
+      const relayEnv =
+        cliOf(worker.preference) === 'codex' ? await codexRouteEnvironment(directory, controller.signal) : {}
       const launch = isExtendedCli(cliOf(worker.preference))
         ? await extendedLaunch(
             cliOf(worker.preference),
@@ -2354,6 +2357,7 @@ export class WorkerRuntime {
           : {
               env: {
                 ...firstPartyEnvironment(cliOf(worker.preference)),
+                ...relayEnv,
                 ...agyBackgroundEnvironment(cliOf(worker.preference)),
                 ...(['qoder', 'qodercn'].includes(cliOf(worker.preference)) ? qoderEnvironment(cliOf(worker.preference) as 'qoder' | 'qodercn') : {}),
               },

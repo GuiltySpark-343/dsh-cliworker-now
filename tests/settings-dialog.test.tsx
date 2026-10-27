@@ -2872,3 +2872,13 @@ it('names each OMP account of one provider by its email when replacing one', asy
   expect(t.text()).toContain('替换 first@example.invalid')
   expect(t.text()).toContain('替换 second@example.invalid')
 })
+
+it('explains a Codex relay route catalog the way it does a Claude route', async () => {
+  // Simulated relay catalog notice from the Host; no real relay.
+  const notice = 'Codex 自定义路由模型；来自 Codex 自带列表，中转是否支持以实际调用为准'
+  const relay = vi.fn(async (_session, cli: CliId) =>
+    cli === 'codex' ? remote({ cli, models: [{ id: 'codex-fixture', efforts: ['low'] }], notice }) : catalog(cli),
+  )
+  const t = await setup({ catalogForCli: relay, refreshCatalogForCli: relay }, undefined, 'codex')
+  await vi.waitFor(() => expect(t.text()).toContain(notice))
+})

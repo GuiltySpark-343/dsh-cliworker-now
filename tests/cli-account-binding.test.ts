@@ -68,7 +68,11 @@ vi.mock('../src/host/agy-macos-account.ts', async (original) => {
     }),
   }
 })
-import { readCliAccountBinding, readCodexOwnAccountSource } from '../src/host/cli-account-binding.ts'
+import {
+  codexRouteEnvironment,
+  readCliAccountBinding,
+  readCodexOwnAccountSource,
+} from '../src/host/cli-account-binding.ts'
 import { captureCatalogMetadata, catalogFor } from '../src/host/adapters.ts'
 import { authorizeSelection } from '../src/host/authorized-catalog.ts'
 const backend: ProcessBackend = { resolveExecutable: vi.fn(), spawn: vi.fn() }
@@ -502,18 +506,67 @@ it.each([
   'model_provider = "other"',
   '[model_providers.other]\nbase_url = "https://other.synthetic.example"',
   '[profiles.other]\nmodel = "other"',
-])('rejects Codex unknown configured execution routes: %s', async (toml) => {
-  own('codex')
+])('binds a Codex relay route set in its own config: %s', async (toml) => {
   write(join(fixture.home, '.codex/config.toml'), toml, true)
+  expect(await run('codex')).toMatch(/^cli-account-v1:/)
+  // The official account source still refuses to guess the relay's endpoint.
+  await expect(readCodexOwnAccountSource(project, new AbortController().signal)).rejects.toThrow()
+})
+
+it('versions a Codex relay route by its config, its env_key value and auth.json', async () => {
+  const config = join(fixture.home, '.codex/config.toml')
+  write(
+    config,
+    'model_provider = "relay"\n[model_providers.relay]\nbase_url = "https://relay.synthetic.example/v1"\nenv_key = "SYNTHETIC_RELAY_KEY"\n',
+    true,
+  )
+  vi.stubEnv('SYNTHETIC_RELAY_KEY', 'synthetic-relay-key-1')
+  const first = await run('codex')
+  expect(await run('codex')).toBe(first)
+  expect(first).not.toContain('synthetic-relay-key-1')
+  vi.stubEnv('SYNTHETIC_RELAY_KEY', 'synthetic-relay-key-2')
+  const rotated = await run('codex')
+  expect(rotated).not.toBe(first)
+  write(join(fixture.home, '.codex/auth.json'), { OPENAI_API_KEY: 'synthetic-relay-auth' })
+  const withAuth = await run('codex')
+  expect(withAuth).not.toBe(rotated)
+  write(config, 'model = "other"\nmodel_provider = "relay"\n', true)
+  expect(await run('codex')).not.toBe(withAuth)
+  // A relay's auth.json must still be a JSON object.
+  write(join(fixture.home, '.codex/auth.json'), '[]', true)
   await expect(run('codex')).rejects.toMatchObject({ code: 'CLI_OWN_ACCOUNT_REQUIRED' })
 })
 
-it('rejects Codex route overrides in ancestor config and ambient environment', async () => {
+it('passes only the env_key variables a Codex relay names to its workers', async () => {
+  const signal = new AbortController().signal
+  vi.stubEnv('SYNTHETIC_RELAY_KEY', 'synthetic-relay-key')
+  vi.stubEnv('OPENAI_API_KEY', 'synthetic-host-key')
+  expect(await codexRouteEnvironment(project, signal)).toEqual({})
+  write(
+    join(fixture.home, '.codex/config.toml'),
+    'model_provider = "relay"\n[model_providers.relay]\nenv_key = "SYNTHETIC_RELAY_KEY"\n[model_providers.unset]\nenv_key = "SYNTHETIC_UNSET_KEY"\n',
+    true,
+  )
+  expect(await codexRouteEnvironment(project, signal)).toEqual({ SYNTHETIC_RELAY_KEY: 'synthetic-relay-key' })
+})
+
+it('rejects an unsafe Codex relay config instead of versioning part of it', async () => {
+  const real = join(fixture.home, 'elsewhere.toml')
+  write(real, 'model_provider = "relay"\n', true)
+  mkdirSync(join(fixture.home, '.codex'), { recursive: true })
+  symlinkSync(real, join(fixture.home, '.codex/config.toml'))
+  await expect(run('codex')).rejects.toMatchObject({ code: 'CLI_OWN_ACCOUNT_REQUIRED' })
+})
+
+it('binds a relay in ancestor config but still rejects inherited route variables alone', async () => {
   own('codex')
   write(join(project, '.codex/config.toml'), 'chatgpt_base_url = "https://other.synthetic.example"', true)
   const child = join(project, 'nested')
   mkdirSync(child)
   await expect(readCodexOwnAccountSource(child, new AbortController().signal)).rejects.toThrow()
+  expect(await readCliAccountBinding('codex', backend, config, child, new AbortController().signal)).toMatch(
+    /^cli-account-v1:/,
+  )
   rmSync(join(project, '.codex/config.toml'))
   vi.stubEnv('OPENAI_BASE_URL', 'https://other.synthetic.example')
   await expect(run('codex')).rejects.toMatchObject({ code: 'CLI_OWN_ACCOUNT_REQUIRED' })

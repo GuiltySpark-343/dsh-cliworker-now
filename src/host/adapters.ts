@@ -3,6 +3,7 @@ import { qoderVariant } from './qoder-variant.ts'
 import { readClaudeOwnRoute, claudeNativeSettingsArguments } from './claude-own-route.ts'
 import { discoverClaudeNativeOAuth } from './claude-native-oauth.ts'
 import { discoverCodexModels } from './codex-models.ts'
+import { readCodexCustomRouteVersion } from './cli-account-binding.ts'
 import { discoverAgyAccountModels } from './agy-models.ts'
 import { agyBackgroundEnvironment } from './agy-background-environment.ts'
 import { discoverQoderModels } from './qoder-accounts.ts'
@@ -188,9 +189,10 @@ export async function catalogFor(
     return { cli, models, notice: '当前账号可用模型' }
   }
   if (cli === 'codex') {
+    const relay = (await readCodexCustomRouteVersion(cwd, signal)) !== undefined
     const models = await discoverCodexModels(backend, config, executable, cwd, signal)
     if (!models.length) throw new Error('Codex 当前账号暂无可确认模型，请刷新')
-    return { cli, models, notice: '当前账号可用模型' }
+    return { cli, models, notice: relay ? 'Codex 自定义路由模型；来自 Codex 自带列表，中转是否支持以实际调用为准' : '当前账号可用模型' }
   }
   if (cli === 'claude' || cli === 'kimi' || cli === 'mimo') {
     const claudeRoute = cli === 'claude' ? await readClaudeOwnRoute(cwd, signal) : undefined

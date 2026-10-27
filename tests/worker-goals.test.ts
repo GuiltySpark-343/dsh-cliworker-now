@@ -16,7 +16,10 @@ import { DEFAULT_CONFIG, type ProcessBackend } from '../src/host/process.ts'
 
 // 模拟：仅运行真实 runtime/storage/Remote；账号、CLI 适配与进程均为本地夹具，无模型调用。
 const controls = vi.hoisted(() => ({ steer: vi.fn(async () => {}) }))
-vi.mock('../src/host/cli-account-binding.ts', () => ({ readCliAccountBinding: async () => '模拟账号' }))
+vi.mock('../src/host/cli-account-binding.ts', () => ({
+  readCliAccountBinding: async () => '模拟账号',
+  codexRouteEnvironment: async () => ({}),
+}))
 vi.mock('../src/host/authorized-catalog.ts', () => ({
   ACCOUNT_CHANGED: '模拟账号已改变',
   authorizeSelection: async (preference: unknown) => ({ binding: '模拟账号', preference }),

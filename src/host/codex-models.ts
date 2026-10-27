@@ -2,7 +2,7 @@ import { StringDecoder } from 'node:string_decoder'
 import { EFFORTS, type ModelChoice } from '../shared/types.ts'
 import { ProcessCleanupUnconfirmedError, type ProcessBackend, type RuntimeConfig } from './process.ts'
 import { probeAccountModels } from './account-models.mjs'
-import { readCodexOwnAccountSource } from './cli-account-binding.ts'
+import { readCodexCustomRouteVersion, readCodexOwnAccountSource } from './cli-account-binding.ts'
 
 const record = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v)
 const validId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(v)
@@ -157,6 +157,15 @@ export async function discoverCodexModels(
   cwd: string,
   signal: AbortSignal,
 ): Promise<ModelChoice[]> {
+  // A relay has no account scope to query: Codex's own list, as its /model shows it.
+  const route = await readCodexCustomRouteVersion(cwd, signal)
+  if (route !== undefined) {
+    const models = await readCodexNativeModels(backend, config, executable, cwd, signal)
+    signal.throwIfAborted()
+    if ((await readCodexCustomRouteVersion(cwd, signal)) !== route)
+      throw new Error('Codex 路由配置已变化，请刷新')
+    return models.map((model) => ({ ...model, cost: 'unknown' as const }))
+  }
   // Resolve the native source before opening the server, then reread after its normal OAuth refresh.
   const before = await readCodexOwnAccountSource(cwd, signal)
   if (!before.nativeRouteConfirmed) return []

@@ -5,6 +5,9 @@
  * interpolation and must match between the two languages.
  */
 export const en = {
+  // Codex relay catalog
+  'Codex 自定义路由模型；来自 Codex 自带列表，中转是否支持以实际调用为准':
+    'Codex custom route models; from Codex\'s built-in list, the relay\'s support is confirmed by actual calls',
   // harness-feature-support
   '当前 CLI 不支持目标': 'This CLI does not support goals',
   '当前 CLI 不支持规划模式': 'This CLI does not support plan mode',

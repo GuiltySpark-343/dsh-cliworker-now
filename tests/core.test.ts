@@ -504,6 +504,7 @@ it('run timing uses persisted per-turn events and survives a sliced timeline', (
 // are exercised separately by authorized-catalog and runtime-account-isolation.
 vi.mock('../src/host/cli-account-binding.ts', () => ({
   readCliAccountBinding: async () => 'synthetic-own-account',
+  codexRouteEnvironment: async () => ({}),
 }))
 vi.mock('../src/host/authorized-catalog.ts', () => ({
   ACCOUNT_CHANGED: '账号已变更，请重新选择或新建任务',

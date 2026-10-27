@@ -245,7 +245,7 @@ Pi、OMP、Kimi 同样在「账号」窗口逐行退出、按「登录到」添�
 
 Claude 会显示当前来源：自身配置的本地代理可达时使用代理，代理关闭时使用原生官方账号。代理认证或模型查询失败会明确报错，不自动换号。官方登录／退出只作用于官方账号，保留代理设置；任务启动前固定来源，不在运行中切换。官方 OAuth 模型需同时通过原生身份、模型能力和剩余额度核验；缺少证据时不放行。
 
-当前账号范围边界：Kimi 原生 managed OAuth 使用自身模型别名、认证目录和可确认的套餐额度；额度为空、未知或耗尽时提示检查账号。其他未核验的 Kimi OAuth 模式及 OpenCode OAuth 暂不开放派遣。Claude 自身设置中的 API Key／Bearer Token、Kimi 自身 API 配置、MiMo 原生网页登录写入的自身 API 认证，以及可核对的本地配置，按账号列表筛选；保留网页登录附带的官方服务地址。Codex 支持已核验的官方文件账号路径，keyring 或自定义路由缺少范围证据时不放行。MiMo 目前只接受可核验的本地配置，文件／环境插值和远程组织配置需先移除。OpenCode 原生 OAuth 写回缺少账号版本保护，暂只开放自身 API 配置。
+当前账号范围边界：Kimi 原生 managed OAuth 使用自身模型别名、认证目录和可确认的套餐额度；额度为空、未知或耗尽时提示检查账号。其他未核验的 Kimi OAuth 模式及 OpenCode OAuth 暂不开放派遣。Claude 自身设置中的 API Key／Bearer Token、Kimi 自身 API 配置、MiMo 原生网页登录写入的自身 API 认证，以及可核对的本地配置，按账号列表筛选；保留网页登录附带的官方服务地址。Codex 支持已核验的官方文件账号路径；keyring 缺少范围证据时不放行。Codex 自身 `config.toml`（`CODEX_HOME` 及项目各级 `.codex/`）声明的自定义路由（如第三方中转的 `model_provider`）交给 Codex 自己处理：模型列表取 Codex 自带清单（费用未知，中转是否支持以实际调用为准），账号版本取配置、`env_key` 所指变量与 `auth.json` 的摘要，任一变化按换号自动续接。派遣时只把配置 `env_key` 指定且宿主进程中存在的变量传给 Codex；DSH Desktop 不一定继承终端里设置的变量，中转密钥建议写在 Codex 自己的 `auth.json`（`requires_openai_auth = true`）。只有宿主继承的 `OPENAI_API_KEY`、`OPENAI_BASE_URL` 等变量而 Codex 配置未声明路由时仍不放行。MiMo 目前只接受可核验的本地配置，文件／环境插值和远程组织配置需先移除。OpenCode 原生 OAuth 写回缺少账号版本保护，暂只开放自身 API 配置。
 
 Codex 能读取模型但当前额度耗尽时，设置明确提示等待额度恢复；认证失效或访问被拒绝单独提示检查登录。两者都保留现有账号和项目偏好，不把原生模型能力当成当前可调用权限。
 

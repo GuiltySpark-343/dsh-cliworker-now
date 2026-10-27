@@ -3,10 +3,13 @@ import { PassThrough, Writable } from 'node:stream'
 import type { SubprocessHandle, SubprocessOutcome } from '@deepseek-ai/dsh-subprocess'
 import { DEFAULT_CONFIG, type ProcessBackend } from '../src/host/process.ts'
 import { discoverCodexModels, readCodexNativeModels } from '../src/host/codex-models.ts'
-import { readCodexOwnAccountSource } from '../src/host/cli-account-binding.ts'
+import { readCodexCustomRouteVersion, readCodexOwnAccountSource } from '../src/host/cli-account-binding.ts'
 import { probeAccountModels } from '../src/host/account-models.mjs'
 
-vi.mock('../src/host/cli-account-binding.ts', () => ({ readCodexOwnAccountSource: vi.fn() }))
+vi.mock('../src/host/cli-account-binding.ts', () => ({
+  readCodexOwnAccountSource: vi.fn(),
+  readCodexCustomRouteVersion: vi.fn(),
+}))
 vi.mock('../src/host/account-models.mjs', () => ({ probeAccountModels: vi.fn() }))
 afterEach(() => vi.resetAllMocks())
 // Synthetic app-server and account service: never read native auth or contact a server.
@@ -77,6 +80,21 @@ function fixture(
   }
 }
 describe('Codex native capability intersection', () => {
+  it('lists Codex\'s own models for a relay route without any account query', async () => {
+    const f = fixture([[entry('relay-listed')]])
+    vi.mocked(readCodexCustomRouteVersion).mockResolvedValue('synthetic-route-v1')
+    const models = await discoverCodexModels(f.backend, DEFAULT_CONFIG, '/synthetic/codex', '/synthetic', new AbortController().signal)
+    expect(models).toEqual([{ id: 'relay-listed', label: 'relay-listed', efforts: ['low', 'high'], cost: 'unknown' }])
+    expect(readCodexOwnAccountSource).not.toHaveBeenCalled()
+    expect(probeAccountModels).not.toHaveBeenCalled()
+  })
+  it('fails a relay listing when the route changes while it is read', async () => {
+    const f = fixture([[entry('relay-listed')]])
+    vi.mocked(readCodexCustomRouteVersion).mockResolvedValueOnce('synthetic-route-v1').mockResolvedValueOnce('synthetic-route-v2')
+    await expect(
+      discoverCodexModels(f.backend, DEFAULT_CONFIG, '/synthetic/codex', '/synthetic', new AbortController().signal),
+    ).rejects.toThrow('Codex 路由配置已变化，请刷新')
+  })
   it('pages native metadata and rejects hidden, restricted and unsupported effort candidates', async () => {
     const f = fixture([
       [entry('allowed'), entry('hidden', { hidden: true })],

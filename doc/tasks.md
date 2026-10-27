@@ -2835,3 +2835,15 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 用户认可新账号窗口后，单账号 CLI（如 MiMo）的「登录 / 切换账号」已登录页改为同样的卡片样式：当前账号卡片（品牌图标、登录方式与邮箱、「已登录」）与右对齐「关闭 / 切换账号」，不再显示居中结果页与「显示原生终端」。账号信息来自设置页已有的账号状态，不另读凭据。自动检查：`account-terminal` 新增已登录卡片页 1 项（模拟账号状态）；全量 `vitest run` 233 个文件通过、3 个跳过，4689 项通过、13 项跳过；类型检查通过。Desktop 中的实际外观由用户查看，未截图核对。用户查看后确认满意。
 - 「CLI Worker 设置」通用页的「语言」标题紧贴页头（用户截图反馈）：CLI 页页头下有 28px 开关状态行，通用页没有。改为通用页第一分区上方补 28px，两类页面标题到第一分区的距离一致。自动检查：`general-settings`、`settings-dialog` 测试与全量 `vitest run` 通过；Desktop 外观由用户查看。用户确认间距合适。
 - 用户要求点击设置默认进入「CLI Worker 设置」而非 Antigravity：面板标题栏设置按钮改为打开通用页（不再记住上次的 CLI），任务详情「默认设置」仍打开该任务的 CLI。自动检查：`panel` 新增 1 项（通用页选中、选择 CLI 前不读取模型目录），原生设置交接测试改为先选 Antigravity；全量 `vitest run` 与类型检查通过。
+
+## 2026-10-27 Codex 第三方中转兼容（`allow-codex-custom-route`，未发布）
+
+- 用户反馈：Codex 在 `~/.codex/config.toml` 设置 `model_provider` 指向第三方中转，命令行正常，插件派遣立即报「Codex 无法确认当前自身账号」。原因：`requireDefaultCodexRoute` 见到自定义路由配置即拒绝；模型目录只向 OpenAI 官方核对账号范围。派遣参数本不覆盖 provider。
+- 方案（用户选择「交给 Codex 自己处理」）：Codex 自身配置声明的路由不再拒绝；账号版本取配置文件、`env_key` 变量与 `auth.json` 的摘要；模型取 Codex 自带 `model/list`（费用未知，设置页显示中转说明）；派遣与分支只额外传入配置 `env_key` 指定且宿主存在的变量。只有宿主继承的 `OPENAI_*` 变量而无配置路由时仍拒绝。
+- 本机模拟验收（Codex CLI 0.162.1，隔离 `CODEX_HOME`，本机 127.0.0.1 模拟中转，模拟密钥，无真实凭据与模型调用）：
+  - 直接运行 `codex exec` 经模拟中转完成；同配置下 `app-server model/list` 返回 Codex 自带 8 个模型，不访问中转 `/v1/models`；插件解析后 7 个（`gpt-6.1-sol` 被原有原生过滤规则排除，未改）。
+  - 经插件 Host（`authorizeSelection` + `WorkerRuntime.submit`，计划模式）：`auth.json` + `requires_openai_auth = true` 形式首轮、续聊均 completed、同一会话；改写 `auth.json` 密钥后账号版本变化，续聊自动继续 completed、同一会话；模拟中转日志对应 3 次 `POST /v1/responses`（带 Bearer，model 为所选 `gpt-6-sol`）。
+  - `env_key` 形式：首次运行失败，Codex 报 `Missing environment variable: MOCK_RELAY_KEY`——DSH 子进程环境经净化，变量未传入。增加 `env_key` 透传后重跑，首轮、续聊、换密钥后续聊均 completed，同一会话，中转日志 3 次请求。
+- 自动检查：`cli-account-binding` 改 4 项、新增 3 项；`codex-models` 新增 2 项；`settings-dialog` 新增 1 项。`core`、`worker-goals` 的 mock 补 `codexRouteEnvironment`。全量 `vitest run` 233 个文件通过、3 个跳过，4696 项通过、13 项跳过；类型检查通过；`openspec validate allow-codex-custom-route --strict` 通过。变更保持未归档，等待真实中转实测（任务 3.2）。
+- 未验证：真实中转站（无账号，需反馈用户实测）；DSH Desktop 中由终端设置的 `env_key` 变量是否被宿主进程继承；keyring 存储下中转密钥变化不会改变账号版本（已知边界）。
+
