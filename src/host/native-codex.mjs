@@ -6,6 +6,14 @@ import { CodexRunUsage } from './codex-run-usage.mjs'
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value)
 const string = (value) => typeof value === 'string' && value.trim().length > 0
 const fail = (message) => new Error(`Codex app-server: ${message}`)
+/** Public, non-secret reason for one failed tool item. */
+function toolFailureReason(item) {
+  const detail = String(item.error ?? item.failure ?? '')
+  if (item.status === 'declined' || /denied|permission|rejected/i.test(detail)) return '权限或审批被拒绝'
+  if (typeof item.exitCode === 'number' && item.exitCode !== 0) return `非零退出（exit ${item.exitCode}）`
+  return '工具执行失败'
+}
+
 const toolTypes = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch', 'collabAgentToolCall', 'imageGeneration'])
 
 /** Convert only the verified native exec argv, before any platform launcher. */
@@ -34,6 +42,25 @@ export function nativeCodexArgv(config) {
   return [argv[0], 'app-server', '--stdio', ...preserved]
 }
 
+// Local patch: a progress frame mirrors only the tail; the raw log keeps everything.
+const DETAIL_LIMIT = 32 * 1024
+function tailText(value) {
+  const text = typeof value === 'string' ? value : ''
+  if (text.length <= DETAIL_LIMIT) return { text }
+  return { text: `…（前 ${text.length - DETAIL_LIMIT} 字符已省略）\n${text.slice(-DETAIL_LIMIT)}`, truncated: true }
+}
+function tailValue(value) {
+  return typeof value === 'string' ? tailText(value).text : value
+}
+function tailItem(item) {
+  const snapshot = safeItem(item)
+  if (!object(snapshot)) return snapshot
+  const next = { ...snapshot }
+  if (typeof next.aggregatedOutput === 'string') next.aggregatedOutput = tailValue(next.aggregatedOutput)
+  if (typeof next.result === 'string') next.result = tailValue(next.result)
+  return next
+}
+
 function safeItem(item) {
   // The app-server exposes raw reasoning separately. Only its public summary is used.
   if (item.type === 'reasoning') return { id: item.id, type: item.type, summary: item.summary }
@@ -47,8 +74,8 @@ function publicTool(item) {
     ...(Object.hasOwn(item, 'arguments') ? { input: item.arguments } : {}),
     ...(item.type === 'fileChange' && Object.hasOwn(item, 'changes') ? { output: item.changes } : {}),
     ...(typeof item.command === 'string' ? { command: item.command } : {}),
-    ...(Object.hasOwn(item, 'aggregatedOutput') ? { output: item.aggregatedOutput } : {}),
-    ...(Object.hasOwn(item, 'result') ? { output: item.result } : {}),
+    ...(Object.hasOwn(item, 'aggregatedOutput') ? { output: tailValue(item.aggregatedOutput) } : {}),
+    ...(Object.hasOwn(item, 'result') ? { output: tailValue(item.result) } : {}),
     ...(Array.isArray(item.contentItems) ? { output: item.contentItems } : {}),
     ...(Number.isSafeInteger(item.exitCode) ? { exitCode: item.exitCode } : {}),
   }
@@ -58,7 +85,7 @@ export async function runNativeCodex(config, io) {
   const peer = await io.openStdio(nativeCodexArgv(config), { env: config.env, cwd: config.project })
   let threadId, turnId, response = '', failure, completed = false, started = false
   const steps = new Map(), messages = new Map(), summaries = new Map(), finished = new Set(), tools = new Set(), receipts = new Map()
-  const steerReceipts = new Map(), toolItems = new Map(), toolOutput = new Map()
+  const steerReceipts = new Map(), toolItems = new Map(), toolOutput = new Map(), lastToolEmit = new Map(), lastToolLength = new Map()
   const runUsage = new CodexRunUsage(config.conversationId)
   const step = (id) => {
     if (!steps.has(id)) steps.set(id, steps.size)
@@ -120,9 +147,12 @@ export async function runNativeCodex(config, io) {
       tools.delete(item.id)
       // Every typed tool except webSearch has an explicit native completion status.
       const failed = (item.type !== 'webSearch' && item.status !== 'completed') || item.success === false || !!item.error || !!item.failure || (typeof item.exitCode === 'number' && item.exitCode !== 0)
-      if (failed) markFailure('原生工具失败或权限被拒绝')
-      io.event({ kind: 'tool', step: step(item.id), text: item.command ?? item.tool ?? item.type, state: failed ? 'FAILED' : 'COMPLETED', detail: JSON.stringify(safeItem(item)), toolCall: { ...publicTool(item),
-        ...(item.type === 'commandExecution' && item.aggregatedOutput == null && toolOutput.has(item.id) ? { output: toolOutput.get(item.id) } : {}) } })
+      // Local patch: a failed tool call is data for the agent, not a failed turn.
+      // Only turn-level evidence (turn status, exit code, protocol) fails the run.
+      if (failed)
+        io.event({ kind: 'diagnostic', text: `本轮工具未成功：${toolFailureReason(item)}`, state: 'FAILED' })
+      io.event({ kind: 'tool', step: step(item.id), text: item.command ?? item.tool ?? item.type, state: failed ? 'FAILED' : 'COMPLETED', detail: JSON.stringify(tailItem(item)), toolCall: { ...publicTool(item),
+        ...(item.type === 'commandExecution' && item.aggregatedOutput == null && toolOutput.has(item.id) ? { output: tailValue(toolOutput.get(item.id)) } : {}) } })
     }
   }
   const unsubscribe = peer.onMessage((message) => {
@@ -181,19 +211,25 @@ export async function runNativeCodex(config, io) {
         item.type !== (command ? 'commandExecution' : 'mcpToolCall') || typeof delta !== 'string') return
       const output = command ? (toolOutput.get(params.itemId) ?? '') + delta : delta
       toolOutput.set(params.itemId, output)
+      // Local patch: coalesce progress frames and mirror only the tail, so one long
+      // command cannot consume the whole run budget (the raw log keeps the full text).
+      const now = Date.now()
+      if (now - (lastToolEmit.get(params.itemId) ?? 0) < 120 && output.length - (lastToolLength.get(params.itemId) ?? 0) < 8192) return
+      lastToolEmit.set(params.itemId, now)
+      lastToolLength.set(params.itemId, output.length)
+      const visible = tailText(output)
       io.event({ kind: 'tool', step: step(item.id), text: item.command ?? item.tool ?? item.type,
-        state: 'RUNNING', detail: output, toolCall: { ...publicTool(item), output } })
-      io.native(message)
+        state: 'RUNNING', detail: visible.text, toolCall: { ...publicTool(item), output: visible.text } })
     } else if (message.method === 'item/started' || message.method === 'item/completed') {
       const item = params.item
       if (!object(item) || !string(item.id) || !string(item.type)) throw fail('无效的条目通知')
-      io.native({ method: message.method, params: { ...params, item: safeItem(item) } })
+      io.native({ method: message.method, params: { ...params, item: tailItem(item) } })
       if (message.method === 'item/completed') completeItem(item)
       else if (toolTypes.has(item.type)) {
         if (finished.has(item.id)) throw fail('条目完成后再次启动')
         tools.add(item.id)
         toolItems.set(item.id, item)
-        io.event({ kind: 'tool', step: step(item.id), text: item.command ?? item.tool ?? item.type, state: 'RUNNING', detail: JSON.stringify(safeItem(item)), toolCall: publicTool(item) })
+        io.event({ kind: 'tool', step: step(item.id), text: item.command ?? item.tool ?? item.type, state: 'RUNNING', detail: JSON.stringify(tailItem(item)), toolCall: publicTool(item) })
       }
     } else if (message.method === 'thread/tokenUsage/updated') {
       runUsage.active(params)

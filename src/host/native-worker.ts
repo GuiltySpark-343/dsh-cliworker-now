@@ -108,6 +108,7 @@ export async function prepareNativeWorker<
         timeoutMs: config.timeoutMs,
         maxLineBytes: config.maxLineBytes,
         maxRunBytes: config.maxRunBytes,
+        overflow: config.overflow ?? 'truncate',
       }),
       { mode: 0o600, flag: 'wx' },
     )

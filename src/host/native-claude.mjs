@@ -60,6 +60,19 @@ export function nativeClaudeArgv(config) {
   return [...args, ...(config.forkSource ? ['--fork-session', '--resume-session-at', config.forkSource.messageId] : []), '--input-format', 'stream-json', ...(args.includes('--include-partial-messages') ? [] : ['--include-partial-messages']), '--permission-prompts', 'none']
 }
 
+// Local patch: mirror only the tail of one tool payload; the raw log keeps the full text.
+const DETAIL_LIMIT = 32 * 1024
+function tailDetail(value) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value)
+  if (typeof text !== 'string' || text.length <= DETAIL_LIMIT) return text
+  return `…（前 ${text.length - DETAIL_LIMIT} 字符已省略）\n${text.slice(-DETAIL_LIMIT)}`
+}
+function tailValue(value) {
+  if (typeof value === 'string') return tailDetail(value)
+  const text = JSON.stringify(value)
+  return typeof text === 'string' && text.length > DETAIL_LIMIT ? tailDetail(text) : value
+}
+
 export async function runNativeClaude(config, io) {
   const peer = await io.openStdio(nativeClaudeArgv(config), { env: config.env, cwd: config.project })
   let sessionId, result, response = '', failure, submitted = false, models
@@ -206,10 +219,12 @@ export async function runNativeClaude(config, io) {
         if (finished.has(`tool:${block.tool_use_id}`)) continue
         tools.delete(block.tool_use_id)
         finished.add(`tool:${block.tool_use_id}`)
-        if (block.is_error) failure ??= '原生工具执行失败'
-        emit({ kind: 'tool', step: step(`tool:${block.tool_use_id}`), text: '工具结果', detail: typeof block.content === 'string' ? block.content : JSON.stringify(block.content), state: block.is_error ? 'FAILED' : 'COMPLETED',
+        // Local patch: a failed tool result is data for the agent; the turn-level
+        // result below still fails the run when Claude itself reports failure.
+        if (block.is_error) emit({ kind: 'diagnostic', text: '本轮工具未成功：工具结果标记为失败', state: 'FAILED' })
+        emit({ kind: 'tool', step: step(`tool:${block.tool_use_id}`), text: '工具结果', detail: tailDetail(block.content), state: block.is_error ? 'FAILED' : 'COMPLETED',
           ...(toolResponses.has(block.tool_use_id) ? { response: toolResponses.get(block.tool_use_id) } : {}),
-          toolCall: { ...toolMetadata.get(block.tool_use_id), callId: block.tool_use_id, output: block.content,
+          toolCall: { ...toolMetadata.get(block.tool_use_id), callId: block.tool_use_id, output: tailValue(block.content),
             ...(string(value.parent_tool_use_id) ? { parentCallId: value.parent_tool_use_id } : {}) } })
       }
     } else if (value.type === 'result') {
@@ -217,7 +232,8 @@ export async function runNativeClaude(config, io) {
       responses.finish()
       flushChildren()
       result = value
-      if (Array.isArray(value.permission_denials) && value.permission_denials.length) failure ??= '工具权限被拒绝；未执行的操作不能视为完成'
+      if (Array.isArray(value.permission_denials) && value.permission_denials.length)
+        emit({ kind: 'diagnostic', text: `本轮有 ${value.permission_denials.length} 个工具权限被拒绝；未执行的操作不能视为完成`, state: 'FAILED' })
       if (value.is_error || value.subtype !== 'success') failure ??= Array.isArray(value.errors) ? value.errors.filter((entry) => typeof entry === 'string').join('; ') || 'Claude 原生任务失败' : 'Claude 原生任务失败'
       if (tools.size) failure ??= '原生任务结束时仍有未完成工具'
       if (typeof value.result === 'string' && value.result.trim()) response = value.result

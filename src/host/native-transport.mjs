@@ -19,14 +19,26 @@ export function createNativeIO(config, emit, signal, onNativeStderr = () => {}) 
     response = '',
     total = 0,
     outgoing = 0,
+    truncated = false,
     closed = false
+  // 'truncate' keeps the run alive and cuts only the mirror stream; 'fail' is the
+  // pre-0.8.3 behavior that terminated the process on a volume overrun.
+  const truncating = () => (config.overflow ?? 'truncate') !== 'fail'
   const output = (value) => {
     if (closed) throw failure('Native bridge is closed')
     const line = JSON.stringify(value) + '\n'
-    if (!bounded(line, config.maxLineBytes)) throw failure('Native bridge frame exceeds limit')
-    outgoing += Buffer.byteLength(line)
-    if (value.type !== 'result' && outgoing > config.maxRunBytes)
-      throw failure('Native bridge output exceeds run limit')
+    const size = Buffer.byteLength(line)
+    if (!bounded(line, config.maxLineBytes)) {
+      if (!truncating() || value.type === 'result') throw failure('Native bridge frame exceeds limit')
+      truncated = true
+      return
+    }
+    if (value.type !== 'result' && outgoing + size > config.maxRunBytes) {
+      if (!truncating()) throw failure('Native bridge output exceeds run limit')
+      truncated = true
+      return
+    }
+    outgoing += size
     emit(line)
   }
   const io = {
@@ -133,7 +145,8 @@ export function createNativeIO(config, emit, signal, onNativeStderr = () => {}) 
       }
       const read = (chunk, callback, isError) => {
         total += chunk.length
-        if (total > config.maxRunBytes) return fail(failure('Native stream exceeds run limit'))
+        // Keep draining the CLI in truncate mode; the turn timeout bounds a runaway.
+        if (total > config.maxRunBytes && !truncating()) return fail(failure('Native stream exceeds run limit'))
         if (isError) {
           stderr = (stderr + chunk.toString('utf8')).slice(-8192)
           onNativeStderr(chunk)
@@ -230,6 +243,7 @@ export function createNativeIO(config, emit, signal, onNativeStderr = () => {}) 
           error: String(error.message ?? error).slice(0, 4096),
         }
       if (!result) result = { type: 'result', status: 'ERROR', response, resultScope: 'run', error: '原生协议结束但没有轮次终态' }
+      if (truncated) result = { ...result, truncated: true }
       if (!sessionId && !config.forkOperation && result.status !== 'ERROR') throw failure('Native result has no session')
       output(result)
       closed = true

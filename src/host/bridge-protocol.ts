@@ -90,6 +90,7 @@ export class BridgeProtocol {
         status: v.status,
         response: v.response,
         error: typeof v.error === 'string' ? v.error : undefined,
+        ...(v.truncated === true ? { truncated: true } : {}),
       }
       this.emit({ kind: 'result', text: v.response, state: v.status,
         ...(v.resultScope === 'run' || v.resultScope === 'response' ? { resultScope: v.resultScope } : {}),

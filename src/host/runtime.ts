@@ -1100,7 +1100,7 @@ export class WorkerRuntime {
   private forkRunSource(worker: Worker, runId: string): { workerId: string; conversationId: string } {
     let current = worker.id, conversationId = worker.conversationId!
     const visited = new Set<string>()
-    while (!existsSync(join(this.storage.directory, `${current}.${runId}.raw.jsonl`))) {
+    while (!existsSync(this.storage.layout.pathFor(worker.project, `${current}.${runId}.raw.jsonl`, true))) {
       if (visited.has(current)) throw new Error('分支历史来源循环')
       visited.add(current)
       const state = readWorkerForkState(this.storage.directory, current)
@@ -1218,7 +1218,7 @@ export class WorkerRuntime {
           worker: source, workers: () => [...this.storage.workers.values(), ...this.stagedForks.values()],
           assertIdle: () => { ownSignal.throwIfAborted() },
           history: (at) => bridge.forkHistory(source, at, ownSignal),
-          raw: (runId) => readFileSync(join(this.storage.directory, `${this.forkRunSource(source, runId).workerId}.${runId}.raw.jsonl`), 'utf8'),
+          raw: (runId) => readFileSync(this.storage.layout.pathFor(source.project, `${this.forkRunSource(source, runId).workerId}.${runId}.raw.jsonl`, true), 'utf8'),
           rawSourceId: (runId) => this.forkRunSource(source, runId).conversationId,
           native: (cut) => this.forkNative(source, cut, ownSignal),
           stage: (worker) => { this.stagedForks.set(worker.id, worker); created.push(worker.id) },
@@ -1227,8 +1227,10 @@ export class WorkerRuntime {
           remove: (worker) => {
             this.storage.workers.delete(worker.id)
             this.stagedForks.delete(worker.id)
-            for (const suffix of ['.worker.json', '.events.jsonl', '.account-binding.json', '.fork.json'])
+            for (const suffix of ['.worker.json', '.account-binding.json', '.fork.json'])
               rmSync(join(this.storage.directory, worker.id + suffix), { force: true })
+            rmSync(this.storage.layout.pathFor(worker.project, `${worker.id}.events.jsonl`), { force: true })
+            rmSync(join(this.storage.directory, `${worker.id}.events.jsonl`), { force: true })
           },
           changed: () => this.changed(),
           nativeStateWorkerId: readWorkerForkState(this.storage.directory, id)?.nativeStateWorkerId,
@@ -1241,7 +1243,7 @@ export class WorkerRuntime {
     const events = this.storage.history(source.id)
     const cutoff = events.findLastIndex((event) => event.runId === history.runId && event.kind !== 'submission')
     if (cutoff < 0) throw new Error('分支运行历史缺失')
-    writeFileSync(join(this.storage.directory, `${worker.id}.events.jsonl`), events.slice(0, cutoff + 1)
+    writeFileSync(this.storage.layout.pathFor(worker.project, `${worker.id}.events.jsonl`), events.slice(0, cutoff + 1)
       .map((event) => JSON.stringify(event)).join('\n') + '\n', { mode: 0o600, flag: 'wx' })
     const binding = this.storage.accountBinding(source.id)
     if (binding) this.storage.bindAccount(worker.id, binding)
@@ -1311,7 +1313,7 @@ export class WorkerRuntime {
   }
   private timeline(worker: Worker): TimelineItem[] {
     const events = this.nativeTimelineReprojector.project(worker, this.storage.history(worker.id), (runId) =>
-      join(this.storage.directory, `${worker.id}.${runId}.raw.jsonl`),
+      this.storage.logPath(worker, runId, true),
     )
     const rows = foldEvents(
       events.map((event) => ({
@@ -1326,7 +1328,7 @@ export class WorkerRuntime {
     return rows
   }
   private runTelemetry(worker: Worker, runId: string) {
-    const rawPath = join(this.storage.directory, `${worker.id}.${runId}.raw.jsonl`)
+    const rawPath = this.storage.logPath(worker, runId, true)
     const observed = { ...this.telemetryReader.read(
       rawPath,
       cliOf(worker.preference),
@@ -1338,6 +1340,7 @@ export class WorkerRuntime {
           }
         : undefined,
     ), ...this.supplementalContextReader.read({ worker, runId, rawPath, storageDirectory: this.storage.directory,
+      logDirectory: this.storage.logDirectory(worker.project),
       ...(runId === worker.runId ? { currentIdentity: { conversationId: worker.conversationId,
         model: worker.observedModel ?? worker.preference.model } } : {}),
     }) }
@@ -1368,7 +1371,7 @@ export class WorkerRuntime {
       ['completed', 'failed', 'interrupted'].includes(event.state ?? ''))
     if (!terminal) return
     const receipt = this.telemetryReader.read(
-      join(this.storage.directory, `${worker.id}.${runId}.raw.jsonl`), cliOf(worker.preference),
+      this.storage.logPath(worker, runId, true), cliOf(worker.preference),
       { conversationId: worker.conversationId },
     ).runUsage
     return receipt?.scope === 'run' ? receipt : undefined
@@ -1884,6 +1887,7 @@ export class WorkerRuntime {
       // A later followup mutates the live worker. Completion consumers must retain
       // the exact outcome of this run, including its runId and response.
       task.settle(outcome)
+      this.storage.pruneRunLogs()
       this.drain()
       if (worker.status === 'completed') this.dispatchFollowup(worker)
     }
@@ -1894,7 +1898,6 @@ export class WorkerRuntime {
     let readers: Promise<void>[] = []
     let harnessLease: { connection?: NativeHarnessConnection; close(): Promise<void> } | undefined
     let stderr = ''
-    let totalBytes = 0
     const timeout = setTimeout(() => controller.abort(new Error('任务超时')), this.config.timeoutMs)
     const pendingFork = readWorkerForkState(this.storage.directory, worker.id)
     const resumeConversation = worker.conversationId ?? pendingFork?.sourceConversationId
@@ -1974,6 +1977,7 @@ export class WorkerRuntime {
       // Local patch: count only turns that actually reach the CLI. Preparation
       // failures and cancelled queue entries never get here.
       worker.runCount = (worker.runCount ?? 0) + 1
+      delete worker.displayTruncated
       this.storage.save(worker)
       this.changed()
       const selectedClaudeRoute =
@@ -2152,11 +2156,12 @@ export class WorkerRuntime {
       const capture = async (stream: SubprocessHandle['stdout'], isError: boolean) => {
         if (!stream) throw new Error('CLI pipe unavailable')
         const decoder = new StringDecoder('utf8')
+        let rawBytes = 0
         for await (const chunk of stream) {
-          totalBytes += Buffer.byteLength(chunk)
-          if (totalBytes > this.config.maxRunBytes)
-            throw new Error('CLI output exceeded the configured per-run limit')
-          appendFileSync(this.storage.rawPath(worker) + (isError ? '.stderr' : ''), chunk, { mode: 0o600 })
+          // Local patch: a volume overrun stops the raw mirror, never the CLI turn.
+          rawBytes += Buffer.byteLength(chunk)
+          if (rawBytes <= this.config.maxRunBytes)
+            appendFileSync(this.storage.rawPath(worker) + (isError ? '.stderr' : ''), chunk, { mode: 0o600 })
           if (isError) stderr = (stderr + decoder.write(chunk)).slice(-8192)
           else protocol.feed(chunk)
         }
@@ -2254,6 +2259,8 @@ export class WorkerRuntime {
         text: 'CLI 诊断',
         detail: stderr,
       })
+    // Local patch: the bridge reports a cut mirror stream; the turn itself is intact.
+    if (protocol.result) worker.displayTruncated = protocol.result.truncated === true
     let status: Worker['status'] = 'completed'
     let error: string | undefined
     let interruptionReason: Worker['interruptionReason']

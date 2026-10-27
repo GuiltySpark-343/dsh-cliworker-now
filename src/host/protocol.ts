@@ -13,6 +13,8 @@ export interface ProtocolResult {
   currentTurnResponse?: string
   /** Evidence of DONE steps only; this does not establish task success. */
   completedStepResponse?: string
+  /** The mirror stream was truncated; the CLI turn itself completed. */
+  truncated?: boolean
 }
 export type EventInput = Omit<WorkerEvent, 'seq' | 'runId' | 'time'>
 

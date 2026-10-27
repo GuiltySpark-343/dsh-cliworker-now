@@ -5,6 +5,7 @@ import { visibleModelChoices } from '../shared/model-presentation.ts'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { z as validate } from 'zod'
+import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
@@ -146,8 +147,16 @@ export interface Config {
   maxLineBytes?: number
   /** Maximum output bytes per run (default 16777216). */
   maxRunBytes?: number
+  /** Volume overrun behavior: 'truncate' (default) keeps the run alive and cuts the mirror stream. */
+  overflow?: string
+  /** Keep at most this many raw run logs per Worker (default 20). */
+  rawRetentionRuns?: number
+  /** Global raw run-log ceiling in bytes (default 512 MiB). */
+  rawRetentionBytes?: number
   /** Maximum logical timeline rows in one live view (default 1000). */
   maxTimelineItems?: number
+  /** Large append-only logs: 'project' (default) writes under the project, 'global' keeps every file in the state directory. */
+  logsDirectory?: string
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -246,7 +255,12 @@ export class CliWorkerService extends TypertRemoteService {
     graceMs: z.natural().min(100).max(30000).default(DEFAULT_CONFIG.graceMs),
     maxLineBytes: z.natural().min(1024).default(DEFAULT_CONFIG.maxLineBytes),
     maxRunBytes: z.natural().min(1024).default(DEFAULT_CONFIG.maxRunBytes),
+    overflow: z.string().default('truncate'),
+    rawRetentionRuns: z.natural().min(1).default(20),
+    rawRetentionBytes: z.natural().min(1048576).default(536870912),
     maxTimelineItems: z.natural().min(10).default(DEFAULT_CONFIG.maxTimelineItems),
+    // Large append-only logs follow the project; small shared state stays global.
+    logsDirectory: z.string().default('project'),
   })
   private runtime: WorkerRuntime
   private accounts: AccountManager
@@ -274,6 +288,7 @@ export class CliWorkerService extends TypertRemoteService {
     this.options = {
       ...DEFAULT_CONFIG,
       ...config,
+      overflow: config.overflow === 'fail' ? 'fail' : 'truncate',
     }
     const stateDirectory =
       config.stateDirectory ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'cliworker-now')
@@ -283,12 +298,19 @@ export class CliWorkerService extends TypertRemoteService {
       this.runtime.blockCatalogOnCleanup(cli, error),
     )
     this.runtime = new WorkerRuntime(
-      new WorkerStorage(
-        config.stateDirectory ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'cliworker-now'),
-      ),
+      new WorkerStorage(stateDirectory, {
+        logsDirectory: config.logsDirectory === 'global' ? 'global' : 'project',
+        onLogFallback: (project, error) =>
+          this.ctx.logger?.warn?.(`CLI Worker 日志目录不可写，改用全局目录：${project}（${String(error)}）`),
+        retention: {
+          runs: config.rawRetentionRuns ?? 20,
+          bytes: config.rawRetentionBytes ?? 536870912,
+        },
+      }),
       this.backend,
       this.options,
     )
+    this.runtime.storage.pruneRunLogs()
     this.ctx.inject(['sessionController', 'subagents', 'llm'], (scope) => {
       const records = new HarnessConversationStore(this.runtime.storage.directory)
       this.harnessConversationStore = records
@@ -1969,6 +1991,55 @@ export class CliWorkerService extends TypertRemoteService {
       await this.parent(parentSessionId)
       signal.throwIfAborted()
       this.runtime.clearWorkerGoal(parentSessionId, workerId, expectedRevision)
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /**
+   * Local patch: bounded raw run log for one Worker run. The full stream stays on
+   * disk; the panel only ever receives a tail.
+   * @param parentSessionId - Owning conversation.
+   * @param workerId - Worker whose run is inspected.
+   * @param runId - Exact run identity (UUID).
+   * @param tailBytes - Requested tail size, clamped to 1 KiB…1 MiB.
+   * @param signal - Read lifetime.
+   */
+  @Remote('workerRawLog')
+  async workerRawLog(
+    parentSessionId: string,
+    workerId: string,
+    runId: string,
+    tailBytes: number,
+    signal: AbortSignal,
+  ): Promise<
+    { runId: string; size: number; truncated: boolean; text: string } | { missing: true }
+  > {
+    try {
+      await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      const worker = this.runtime.storage.workers.get(workerId)
+      if (!worker || worker.parentSessionId !== parentSessionId) throw new Error('此对话没有该智能体')
+      if (!/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(runId)) throw new Error('无效的运行标识')
+      const path = this.runtime.storage.logPath(worker, runId, true)
+      if (!existsSync(path)) return { missing: true }
+      const size = statSync(path).size
+      const limit = Math.min(Math.max(Number.isFinite(tailBytes) ? Math.floor(tailBytes) : 262144, 1024), 1_048_576)
+      const start = Math.max(0, size - limit)
+      const length = size - start
+      const buffer = Buffer.alloc(length)
+      const handle = openSync(path, 'r')
+      try {
+        let offset = 0
+        while (offset < length) {
+          const read = readSync(handle, buffer, offset, length - offset, start + offset)
+          if (!read) break
+          offset += read
+        }
+        signal.throwIfAborted()
+        return { runId, size, truncated: start > 0, text: buffer.subarray(0, offset).toString('utf8') }
+      } finally {
+        closeSync(handle)
+      }
     } catch (error) {
       throw failure(error)
     }

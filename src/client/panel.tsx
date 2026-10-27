@@ -33,6 +33,7 @@ import { BrandIcon, Glyph } from './icons.tsx'
 import { WorkerModelMenu } from './worker-model-menu.tsx'
 import { SettingsDialog } from './settings-dialog.tsx'
 import { RosterList } from './roster.tsx'
+import { RawLogDialog } from './raw-log.tsx'
 import { RenameWorker } from './rename-worker.tsx'
 import { WorkerCard, type WorkerManagementAction } from './worker-card.tsx'
 import { RUNNING_MESSAGE_LABELS } from '../shared/running-message.ts'
@@ -149,6 +150,7 @@ function SessionPanel({
   const [settingsCli, setSettingsCli] = useState<CliId>('antigravity')
   const [settings, setSettings] = useState(false)
   const [renaming, setRenaming] = useState<{ worker: Worker; mode: 'name' | 'title' }>()
+  const [rawLog, setRawLog] = useState<Worker>()
   const [restartFor, setRestartFor] = useState('')
   const nativeSettingsRequested = useRef(false)
   useEffect(() => {
@@ -517,6 +519,14 @@ function SessionPanel({
                         label="复制最新结果"
                       />
                     )}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setRawLog(worker)}
+                    >
+                      查看原始日志
+                    </Button>
                   </>
                 )}
                 <Button
@@ -578,6 +588,15 @@ function SessionPanel({
             {startingNew ? '取消' : '新建对话'}
           </Button>
         </div>
+      )}
+      {rawLog && (
+        <RawLogDialog
+          key={`raw:${rawLog.id}:${rawLog.runId}`}
+          api={api}
+          sessionId={sessionId}
+          worker={rawLog}
+          onClose={() => setRawLog(undefined)}
+        />
       )}
       {renaming && (
         <RenameWorker

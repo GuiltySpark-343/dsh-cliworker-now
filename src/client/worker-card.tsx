@@ -143,6 +143,19 @@ export function WorkerCard({
                   </span>
                 </>
               ) : null}
+              {worker.displayTruncated ? (
+                <>
+                  <span className="cwn-meta-divider" aria-hidden="true">
+                    ·
+                  </span>
+                  <span
+                    className="cwn-worker-truncated"
+                    title="本轮过程记录超出上限，已截断；任务本身正常完成"
+                  >
+                    过程已截断
+                  </span>
+                </>
+              ) : null}
             </div>
             <span className="cwn-worker-chevron" aria-hidden="true">
               <Glyph name="chevron" />

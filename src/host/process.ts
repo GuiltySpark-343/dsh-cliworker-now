@@ -60,6 +60,8 @@ export interface RuntimeConfig {
   maxLineBytes: number
   maxRunBytes: number
   maxTimelineItems: number
+  /** Volume overrun behavior for the native mirror stream (default truncate). */
+  overflow?: 'truncate' | 'fail'
 }
 export const DEFAULT_CONFIG: RuntimeConfig = {
   executable: 'agy',
@@ -69,6 +71,7 @@ export const DEFAULT_CONFIG: RuntimeConfig = {
   maxLineBytes: 1_048_576,
   maxRunBytes: 16_777_216,
   maxTimelineItems: 1000,
+  overflow: 'truncate',
 }
 
 export function projectDirectory(input: string): string {

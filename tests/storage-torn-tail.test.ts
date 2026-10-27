@@ -56,7 +56,7 @@ function fixture() {
   first.append(worker, { kind: 'user', text: '第一条' })
   first.append(worker, { kind: 'assistant', text: '第二条' })
   first.close()
-  const path = join(directory, `${worker.id}.events.jsonl`)
+  const path = first.eventPath(worker)
   return { directory, worker, path, complete: readFileSync(path) }
 }
 

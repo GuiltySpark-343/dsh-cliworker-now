@@ -350,12 +350,22 @@ describe('native primary runners (synthetic protocol processes, no real accounts
     const decision = cli === 'codex' ? messages.find((value) => value.id === 'synthetic-approval').result.decision : messages.find((value) => value.type === 'control_response').response.response.behavior
     expect(decision).toBe(cli === 'codex' ? 'decline' : 'deny')
   })
-  it.each(['codex', 'claude', 'antigravity'] as const)('%s never promotes native failure, failed tools, nonzero exit, missing or duplicate terminal to success', async (cli) => {
-    for (const scenario of ['failure', 'tool-failure', 'unfinished-tool', 'nonzero-exit', 'no-terminal', 'duplicate-terminal']) {
+  it.each(['codex', 'claude', 'antigravity'] as const)('%s never promotes native failure, nonzero exit, missing or duplicate terminal to success', async (cli) => {
+    for (const scenario of ['failure', 'nonzero-exit', 'no-terminal', 'duplicate-terminal']) {
       const { result } = await run(cli, scenario, false)
       expect(result.status, `${cli}: ${scenario}`).toBe('ERROR')
     }
   }, 10_000)
+  it.each(['codex', 'claude'] as const)('%s keeps a completed turn when only a tool call failed', async (cli) => {
+    const { result, frames } = await run(cli, 'tool-failure', false)
+    expect(result.status).toBe('SUCCESS')
+    expect(result.truncated).toBeUndefined()
+    expect(frames.some((frame) => frame.type === 'event' && frame.event.kind === 'diagnostic' && /工具未成功/.test(frame.event.text))).toBe(true)
+  })
+  it('antigravity keeps failing a turn whose native tool step reports an error', async () => {
+    const { result } = await run('antigravity', 'tool-failure', false)
+    expect(result.status).toBe('ERROR')
+  })
   it.each(['codex', 'claude', 'antigravity'] as const)('rejects %s resume identity changes', async (cli) => {
     const { result, messages } = await run(cli, 'identity-mismatch')
     expect(result.status).toBe('ERROR')

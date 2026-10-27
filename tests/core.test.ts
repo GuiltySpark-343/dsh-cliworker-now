@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, statSync, appendFileSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -183,7 +183,7 @@ describe('private durable storage', () => {
     first.save(worker)
     first.append(worker, { kind: 'user', text: 'one' })
     first.close()
-    const path = join(directory, `${worker.id}.events.jsonl`)
+    const path = first.eventPath(worker)
     appendFileSync(path, '{"broken":')
     const restored = new WorkerStorage(directory)
     cleanups.push(() => restored.close())
@@ -307,12 +307,17 @@ describe('scheduler, cancellation and session continuity', () => {
     expect(outcome.error).toBeTruthy()
     expect(call.terminated).toBe(true)
   })
-  it('bounds runaway output and times out idle runs', async () => {
-    const { runtime, backend, project } = setup({ maxRunBytes: 10, timeoutMs: 30 })
+  it('bounds the raw mirror instead of failing a runaway turn, and times out idle runs', async () => {
+    const { runtime, backend, project, storage } = setup({ maxRunBytes: 10, timeoutMs: 30 })
     const a = runtime.submit('p', project, 'a', 'a', pref, 'accept-edits')
     await tick()
     backend.calls[0].stdout.write('x'.repeat(11))
-    expect((await a.done).status).toBe('failed')
+    // Volume alone no longer fails the turn; this fake never returns a result,
+    // so the run ends by the idle timeout rather than the output cap.
+    expect((await a.done).status).toBe('interrupted')
+    const worker = [...storage.workers.values()][0]!
+    const raw = storage.rawPath(worker)
+    expect(existsSync(raw) ? statSync(raw).size : 0).toBe(0)
     const b = runtime.submit('p', project, 'b', 'b', pref, 'accept-edits')
     expect((await b.done).status).toBe('interrupted')
   })

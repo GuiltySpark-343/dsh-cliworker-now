@@ -160,6 +160,8 @@ export interface Worker {
   runCount?: number
   /** Local patch: roster template this Worker was created from, if any. */
   templateId?: string
+  /** Local patch: this run's mirror stream was truncated; the turn itself completed. */
+  displayTruncated?: boolean
   conversationId?: string
   /** A session receipt is replaced, never added to another invocation's cumulative receipt. */
   conversationTelemetry?: ConversationTelemetryCheckpoint
