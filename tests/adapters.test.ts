@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -156,6 +156,10 @@ describe('CLI public protocols (synthetic fixtures)', () => {
   })
 })
 describe('CLI launch and preference boundaries', () => {
+  // The YOLO marker lives in the real user home; pin the stock mode so this
+  // suite never depends on this machine's opt-in files.
+  beforeEach(() => vi.stubEnv('CLIWORKER_CLAUDE_PERMISSION', 'stock'))
+  afterEach(() => vi.unstubAllEnvs())
   it.each(['codex', 'claude', 'kimi'] as const)(
     '%s pins the exact session and model using argument arrays',
     (cli) => {

@@ -47,6 +47,7 @@ import type {} from '@deepseek-ai/dsh-plan-mode'
 import {
   CLI_IDS,
   CLI_LABELS,
+  active,
   cliOf,
   workerName,
   effortLabel,
@@ -57,6 +58,7 @@ import {
   type Preference,
   type TaskMode,
   type RoleSnapshot,
+  type RosterEntry,
   type Worker,
 } from '../shared/types.ts'
 import {
@@ -644,6 +646,27 @@ export class CliWorkerService extends TypertRemoteService {
         }),
       'cliworker:guidance',
     )
+    // Local patch: a session roster is advertised by its existence only. The full
+    // list stays behind cliworker_status so this prefix never grows with entries.
+    ctx.effect(
+      () =>
+        ctx.systemPrompt.section({
+          name: 'cliworker:roster',
+          order: 81,
+          interpolate: false,
+          text: (assemble) => {
+            const parent = assemble.agent?.id
+            if (!parent) return ''
+            try {
+              if (!this.runtime.storage.roster(parent).length) return ''
+            } catch {
+              return ''
+            }
+            return '本会话已配置可用智能体（角色 + CLI + 模型 + 思考强度的固定组合）。派遣前先调用 cliworker_status 查看清单、各自对应的 Worker 状态与执行次数；按 agent_name 派遣，续聊用 cliworker_followup。'
+          },
+        }),
+      'cliworker:roster',
+    )
   }
   private async parent(id: string): Promise<Agent> {
     // Use the same composition-owned resolution policy as native Remote Agent parameters.
@@ -655,6 +678,20 @@ export class CliWorkerService extends TypertRemoteService {
   private project(agent: Agent): string {
     if (!agent.session.header.cwd) throw new Error('此主对话没有工作目录，请先选择项目')
     return projectDirectory(agent.session.header.cwd)
+  }
+  /** Local patch: resolve a session-scoped roster entry by its stable title. */
+  private rosterEntry(parent: string, title: string): RosterEntry | undefined {
+    const wanted = title.trim().toLocaleLowerCase()
+    if (!wanted) return undefined
+    return this.runtime.storage
+      .roster(parent)
+      .find((entry) => entry.title.toLocaleLowerCase() === wanted)
+  }
+  /** Follow the source card while it exists; fall back to the last snapshot once deleted. */
+  private rosterRole(entry: RosterEntry): RoleSnapshot {
+    if (entry.roleSource !== 'preset' || !entry.presetId) return entry.role
+    const preset = this.runtime.storage.rolePresets().find((item) => item.id === entry.presetId)
+    return preset ? roleSnapshot(preset) : entry.role
   }
   private assertExecution(agent: Agent): void {
     if (agent.session.header.origin === 'subagent') throw new Error('MVP 只支持主对话下的直接 CLI 子 Agent')
@@ -786,7 +823,14 @@ export class CliWorkerService extends TypertRemoteService {
     agent: Agent,
     callerSignal: AbortSignal,
     cli: CliId,
-    overrides?: { model?: string; effort?: string; role?: string },
+    overrides?: {
+      model?: string
+      effort?: string
+      role?: string
+      roleSnapshot?: RoleSnapshot
+      pinned?: boolean
+      label?: string
+    },
   ): Promise<DispatchSetup> {
     const signal = AbortSignal.any([callerSignal, this.disposed.signal])
     signal.throwIfAborted()
@@ -840,10 +884,44 @@ export class CliWorkerService extends TypertRemoteService {
       const current = this.runtime.storage.conversationSetup(agent.id, project, cli)
       let setup: DispatchSetup | undefined = valid(current) ? current : undefined
       let selected = false
+      // Local patch: a roster entry already fixes CLI/model/effort/role, so this path
+      // opens no question card. A pinned choice that no longer resolves fails loudly.
+      if (overrides?.pinned) {
+        const label = overrides.label ?? '可用智能体'
+        const choices = visibleModelChoices(models)
+        const wanted = (overrides.model ?? '').trim()
+        const target = choices.find(
+          (model) =>
+            model.id === wanted ||
+            model.label === wanted ||
+            Object.values(model.variants ?? {}).includes(wanted),
+        )
+        if (!target?.efforts?.length)
+          throw new Error(
+            `可用智能体「${label}」固定的模型当前不可用：${wanted}；请在可用智能体里重新选择模型`,
+          )
+        const wantedEffort = (overrides.effort ?? '').trim()
+        if (wantedEffort && !target.efforts.includes(wantedEffort as (typeof EFFORTS)[number]))
+          throw new Error(
+            `可用智能体「${label}」固定的思考强度 ${effortLabel(wantedEffort)} 不被模型 ${target.label} 支持；可选：${target.efforts.map(effortLabel).join('、')}`,
+          )
+        setup = {
+          preference: resolveModel(
+            preferenceSchema.parse({
+              cli,
+              model: target.id,
+              effort: (wantedEffort || target.efforts[0]) as (typeof EFFORTS)[number],
+            }),
+            models,
+          ),
+          role: overrides.roleSnapshot ?? null,
+          binding,
+        }
+      }
       // Local patch: a new conversation silently reuses the saved setup instead of
       // asking "沿用?" every time. Set CLIWORKER_NO_REUSE_PROMPT=0 to restore the card.
       const autoReuse = (process.env.CLIWORKER_NO_REUSE_PROMPT || '').trim() !== '0'
-      if (!current) {
+      if (!overrides?.pinned && !current) {
         const saved = this.runtime.storage.dispatchSetup(project, cli)
         if (valid(saved)) {
           if (autoReuse) setup = saved
@@ -873,7 +951,7 @@ export class CliWorkerService extends TypertRemoteService {
           }
         }
       }
-      if (!setup) {
+      if (!overrides?.pinned && !setup) {
         const choices = visibleModelChoices(models)
         const response = await ask([
           {
@@ -915,6 +993,7 @@ export class CliWorkerService extends TypertRemoteService {
       // worker's setup without opening a question card. role accepts a preset name,
       // a literal role prompt, or "none".
       if (
+        !overrides?.pinned &&
         overrides &&
         (overrides.model !== undefined || overrides.effort !== undefined || overrides.role !== undefined)
       ) {
@@ -967,6 +1046,7 @@ export class CliWorkerService extends TypertRemoteService {
         selected = true
       }
       // A remembered answer is never execution authority. Detect changes during any question.
+      if (!setup) throw new Error('尚未完成选型')
       const checked = await this.querySelection(
         setup.preference,
         this.backend,
@@ -1339,23 +1419,55 @@ export class CliWorkerService extends TypertRemoteService {
                 cli = await this.chooseQoderVariant(exec.agent, exec.signal, args.cli)
               const agentName =
                 args.agent_name === undefined ? undefined : agentNameSchema.parse(args.agent_name)
+              // Local patch: a session roster entry fixes CLI/model/effort/role, so this
+              // dispatch opens no question card and refuses conflicting arguments.
+              const roster =
+                agentName === undefined ? undefined : this.rosterEntry(exec.agent.id, agentName)
+              if (roster) {
+                if (roster.cli !== cli)
+                  throw new Error(
+                    `可用智能体「${roster.title}」固定使用 ${CLI_LABELS[roster.cli]}，不能改用 ${CLI_LABELS[cli]}；需要其他 CLI 请另建一个可用智能体`,
+                  )
+                if (args.model !== undefined || args.effort !== undefined || args.role !== undefined)
+                  throw new Error(
+                    `可用智能体「${roster.title}」的 CLI、模型、思考强度与角色都已固定；如需临时调整，请换一个 agent_name 或先编辑该可用智能体`,
+                  )
+                const bound = roster.workerId
+                  ? this.runtime.storage.workers.get(roster.workerId)
+                  : undefined
+                if (bound)
+                  throw new Error(
+                    bound.archivedAt
+                      ? `可用智能体「${roster.title}」的对话已删除；请恢复该对话，或在可用智能体里另建一个`
+                      : `可用智能体「${roster.title}」已经创建过（${bound.id}）；继续用它请调用 cliworker_followup`,
+                  )
+              }
               if (cli === 'kimi' && args.read_only) throw new Error('Kimi 非交互模式不支持只读派遣')
               // Local patch: only pass overrides when the caller actually set one (or a
-              // preset supplied one), so the stock three-argument call shape is kept.
-              const overrideModel = args.model ?? namedPreset?.model
-              const overrideEffort = args.effort ?? namedPreset?.effort
+              // preset/roster supplied one), so the stock three-argument call shape is kept.
+              const overrideModel = roster?.model ?? args.model ?? namedPreset?.model
+              const overrideEffort = roster?.effort ?? args.effort ?? namedPreset?.effort
               const hasOverride =
-                overrideModel !== undefined || overrideEffort !== undefined || args.role !== undefined
+                roster !== undefined ||
+                overrideModel !== undefined ||
+                overrideEffort !== undefined ||
+                args.role !== undefined
               const dispatchSignal = AbortSignal.any([exec.signal, this.disposed.signal])
               const setup = hasOverride
                 ? await this.chooseDispatch(exec.agent, dispatchSignal, cli, {
                     model: overrideModel,
                     effort: overrideEffort,
-                    role: args.role,
+                    ...(roster
+                      ? {
+                          roleSnapshot: this.rosterRole(roster),
+                          pinned: true,
+                          label: roster.title,
+                        }
+                      : { role: args.role }),
                   })
                 : await this.chooseDispatch(exec.agent, dispatchSignal, cli)
               exec.signal.throwIfAborted()
-              return this.launch(
+              const result = await this.launch(
                 exec.agent,
                 args.title,
                 args.prompt,
@@ -1369,6 +1481,16 @@ export class CliWorkerService extends TypertRemoteService {
                 },
                 AbortSignal.any([exec.signal, this.disposed.signal]),
               )
+              if (roster) {
+                try {
+                  const receipt = JSON.parse(result) as { workerId?: string }
+                  if (receipt.workerId)
+                    this.runtime.storage.bindRosterWorker(exec.agent.id, roster.id, receipt.workerId)
+                } catch {
+                  /* 回填失败不影响已启动的任务；条目仍可按名称对应它的 Worker。 */
+                }
+              }
+              return result
             },
           }),
         ),
@@ -1380,22 +1502,66 @@ export class CliWorkerService extends TypertRemoteService {
           defineTool({
             name: 'cliworker_status',
             description:
-              'Read the parent conversation’s CLI workers or one worker’s latest result. Background completion is announced automatically.',
+              'Read the session picture before dispatching: the available agents (roster) with their pinned CLI/model/effort, every worker with its status and execution count, or one worker’s latest result. Never starts a CLI or reads the event log.',
             parameters: { worker_id: { type: 'string' }, worker_name: { type: 'string' } },
             output,
             isConcurrencySafe: () => true,
             execute: async (args, exec) => {
               if (!exec.agent) throw new Error('A parent Agent is required')
+              const parent = exec.agent.id
               if (args.worker_id || args.worker_name) {
-                const worker = this.runtime.resolveWorker(exec.agent.id, args.worker_id, args.worker_name)
-                return JSON.stringify({ ...worker, agentName: workerName(worker) })
-              }
-              return JSON.stringify(
-                this.runtime.snapshot(exec.agent.id).workers.map((worker) => ({
+                const worker = this.runtime.resolveWorker(parent, args.worker_id, args.worker_name)
+                return JSON.stringify({
                   ...worker,
                   agentName: workerName(worker),
-                })),
+                  runs: worker.runCount ?? 0,
+                })
+              }
+              const snapshot = this.runtime.snapshot(parent)
+              const live = snapshot.workers
+              const archived = snapshot.archivedWorkers ?? []
+              const all = [...live, ...archived]
+              const byId = new Map(all.map((worker) => [worker.id, worker]))
+              const byName = new Map(
+                all.map((worker) => [workerName(worker).toLocaleLowerCase(), worker]),
               )
+              const roster = this.runtime.storage.roster(parent).map((entry) => {
+                const worker =
+                  (entry.workerId ? byId.get(entry.workerId) : undefined) ??
+                  byName.get(entry.title.toLocaleLowerCase())
+                return {
+                  title: entry.title,
+                  cli: entry.cli,
+                  model: entry.model,
+                  effort: entry.effort,
+                  role: entry.role.name,
+                  roleSource: entry.roleSource,
+                  workerId: worker?.id ?? entry.workerId,
+                  status: worker ? (worker.archivedAt ? 'archived' : worker.status) : 'idle',
+                  runs: worker?.runCount ?? 0,
+                }
+              })
+              const brief = (worker: Worker) => ({
+                workerId: worker.id,
+                agentName: workerName(worker),
+                title: worker.title,
+                cli: cliOf(worker.preference),
+                model: worker.preference.model,
+                effort: worker.preference.effort,
+                status: worker.archivedAt ? 'archived' : worker.status,
+                runs: worker.runCount ?? 0,
+                ...(worker.error ? { error: worker.error } : {}),
+                ...(worker.lastResult ? { lastResult: worker.lastResult.slice(0, 400) } : {}),
+              })
+              return JSON.stringify({
+                roster,
+                workers: live.map(brief),
+                archived: archived.map(brief),
+                counts: {
+                  running: live.filter((worker) => active(worker.status)).length,
+                  idle: live.filter((worker) => !active(worker.status)).length,
+                },
+              })
             },
           }),
         ),
@@ -1667,6 +1833,78 @@ export class CliWorkerService extends TypertRemoteService {
       signal.throwIfAborted()
       this.runtime.storage.deleteRolePreset(presetId)
       this.runtime.changed()
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param signal - Query lifetime. @returns Session roster JSON. */
+  @Remote('roster')
+  async roster(parentSessionId: string, signal: AbortSignal): Promise<string> {
+    try {
+      await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      return JSON.stringify(this.runtime.storage.roster(parentSessionId))
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param requestJSON - Roster fields, optional existing id. @param signal - Mutation lifetime. @returns Saved entry JSON. */
+  @Remote('saveRosterEntry')
+  async saveRosterEntry(
+    parentSessionId: string,
+    requestJSON: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    try {
+      const agent = await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      const saved = this.runtime.storage.saveRosterEntry(
+        parentSessionId,
+        this.project(agent),
+        JSON.parse(requestJSON),
+      )
+      this.runtime.changed()
+      return JSON.stringify(saved)
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param entryId - Roster entry to remove. @param signal - Mutation lifetime. @returns Completion; the entry’s Worker is untouched. */
+  @Remote('deleteRosterEntry')
+  async deleteRosterEntry(
+    parentSessionId: string,
+    entryId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    try {
+      await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      this.runtime.storage.deleteRosterEntry(parentSessionId, entryId)
+      this.runtime.changed()
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param cli - Selected CLI. @param signal - Query lifetime. @returns Last probed catalog and saved preference; never probes the CLI. */
+  @Remote('rosterCatalog')
+  async rosterCatalog(parentSessionId: string, cli: string, signal: AbortSignal): Promise<string> {
+    try {
+      const id = validate.enum(CLI_IDS).parse(cli)
+      const agent = await this.parent(parentSessionId)
+      const project = this.project(agent)
+      signal.throwIfAborted()
+      this.runtime.assertCliEnabled(id)
+      this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
+      const preference = this.runtime.storage.preference(project, id)
+      const saved = this.settingsCatalogs.saved(project, id)
+      if (!saved) return JSON.stringify({ cli: id, missing: true, preference })
+      return JSON.stringify({
+        cli: id,
+        catalog: saved.catalog,
+        // The account identity last probed; a mismatch only means "stale display".
+        current: this.settingsCatalogs.displayBinding(project, id) === saved.binding,
+        preference,
+      })
     } catch (error) {
       throw failure(error)
     }

@@ -39,6 +39,7 @@ import {
   NO_ROLE_LABEL,
   rolePresetInputSchema,
   rolePresetSchema,
+  roleSnapshot,
   roleSnapshotSchema,
 } from './roles.ts'
 import {
@@ -56,6 +57,7 @@ import {
   type Preference,
   type RolePreset,
   type RoleSnapshot,
+  type RosterEntry,
   type Worker,
   type WorkerEvent,
 } from '../shared/types.ts'
@@ -94,6 +96,38 @@ const conversationSetupSchema = z.object({
   cli: z.enum(CLI_IDS),
   setup: dispatchSetupSchema,
 })
+/** Local patch: session-scoped roster entry. Configuration only, never a Worker. */
+const rosterEntrySchema = z.object({
+  id: z.uuid(),
+  parentSessionId: z.string().min(1),
+  project: z.string().min(1),
+  title: agentNameSchema,
+  presetId: z.string().min(1).max(100).optional(),
+  roleSource: z.enum(['preset', 'custom']),
+  role: roleSnapshotSchema,
+  cli: z.enum(CLI_IDS),
+  model: z.string().min(1).max(200),
+  effort: z.enum(EFFORTS),
+  workerId: z.uuid().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+const rosterEntryInputSchema = rosterEntrySchema
+  .omit({
+    id: true,
+    parentSessionId: true,
+    project: true,
+    title: true,
+    workerId: true,
+    createdAt: true,
+    updatedAt: true,
+  })
+  .extend({ id: z.uuid().optional(), title: agentNameSchema.optional(), role: roleSnapshotSchema.optional() })
+const rosterFileSchema = z.object({
+  policy: z.literal(1),
+  parent: z.string().min(1),
+  entries: z.array(rosterEntrySchema).max(64),
+})
 // Read old Harness settings without exposing that retired entry as an active CLI.
 const storedCliSchema = z.enum([...CLI_IDS, 'harness'])
 const storedPreferenceSchema = preferenceSchema.extend({ cli: storedCliSchema.optional() })
@@ -121,6 +155,8 @@ const workerSchema = z.object({
   mode: z.enum(['plan', 'accept-edits']),
   // Local patch: leader-opt-in flag; two marked workers may write concurrently.
   parallelWrite: z.boolean().optional(),
+  // Local patch: started turns; older records omit it and read as zero.
+  runCount: z.number().int().nonnegative().optional(),
   conversationId: z.string().optional(),
   // Bad optional telemetry must not make an otherwise valid conversation unreadable.
   conversationTelemetry: conversationTelemetrySchema.optional().catch(undefined),
@@ -251,6 +287,8 @@ export class WorkerStorage {
   private candidate: string
   private enabled = enabledByDefault()
   private presets: RolePreset[] = []
+  /** Local patch: roster per parent session, read lazily and cached after the first load. */
+  private rosters = new Map<string, RosterEntry[]>()
   /** Account epochs live outside public Worker records and event/history responses. */
   accountBinding(id: string): string | undefined {
     z.uuid().parse(id)
@@ -516,6 +554,128 @@ export class WorkerStorage {
     const next = this.presets.filter((preset) => preset.id !== id)
     atomicJSON(join(this.directory, 'role-presets.json'), next)
     this.presets = next
+  }
+  /** Local patch: every session owns its own roster file; entries never cross sessions. */
+  private rosterPath(parent: string): string {
+    return join(this.directory, `roster-${createHash('sha256').update(parent).digest('hex')}.json`)
+  }
+  roster(parent: string): RosterEntry[] {
+    z.string().min(1).parse(parent)
+    const cached = this.rosters.get(parent)
+    if (cached) return structuredClone(cached)
+    const path = this.rosterPath(parent)
+    if (!existsSync(path)) {
+      this.rosters.set(parent, [])
+      return []
+    }
+    const value = rosterFileSchema.parse(JSON.parse(readFileSync(path, 'utf8')))
+    if (value.parent !== parent) throw new Error('可用智能体记录的会话身份不匹配')
+    this.rosters.set(parent, value.entries)
+    return structuredClone(value.entries)
+  }
+  private writeRoster(parent: string, entries: RosterEntry[]): void {
+    atomicJSON(this.rosterPath(parent), { policy: 1, parent, entries })
+    this.rosters.set(parent, entries)
+  }
+  /** Titles stay unique inside the session and never shadow an existing Worker name. */
+  private rosterTaken(parent: string): Set<string> {
+    const names = this.roster(parent).map((entry) => entry.title.toLocaleLowerCase())
+    for (const worker of this.workers.values()) {
+      if (worker.parentSessionId !== parent) continue
+      names.push(workerName(worker).toLocaleLowerCase())
+      for (const alias of worker.nameAliases ?? []) names.push(alias.toLocaleLowerCase())
+    }
+    return new Set(names)
+  }
+  private assertRosterTitle(parent: string, title: string, excludingId?: string): void {
+    const wanted = title.toLocaleLowerCase()
+    if (
+      this.roster(parent).some(
+        (entry) => entry.id !== excludingId && entry.title.toLocaleLowerCase() === wanted,
+      )
+    )
+      throw new Error('当前会话已有同名可用智能体，请换一个名称')
+    if (
+      [...this.workers.values()].some(
+        (worker) =>
+          worker.parentSessionId === parent &&
+          [workerName(worker), ...(worker.nameAliases ?? [])].some(
+            (name) => name.toLocaleLowerCase() === wanted,
+          ),
+      )
+    )
+      throw new Error('当前会话已有同名智能体，请换一个名称')
+  }
+  nextRosterTitle(parent: string, base: string): string {
+    const stem = agentNameSchema.parse(base).slice(0, 48)
+    const taken = this.rosterTaken(parent)
+    for (let index = 1; index <= 999; index++) {
+      const title = `${stem}${index}`
+      if (!taken.has(title.toLocaleLowerCase())) return title
+    }
+    throw new Error('同一角色的可用智能体数量已达上限')
+  }
+  saveRosterEntry(parent: string, project: string, input: unknown): RosterEntry {
+    z.string().min(1).parse(parent)
+    z.string().min(1).parse(project)
+    const value = rosterEntryInputSchema.parse(input)
+    const entries = this.roster(parent)
+    const previous = value.id ? entries.find((entry) => entry.id === value.id) : undefined
+    if (value.id && !previous) throw new Error('此可用智能体已被删除，请重新创建')
+    if (!previous && entries.length >= 64) throw new Error('当前会话最多配置 64 个可用智能体')
+    const preset = value.presetId
+      ? this.presets.find((item) => item.id === value.presetId)
+      : undefined
+    if (value.presetId && !preset && !previous) throw new Error('此角色预设已删除，请重新选择')
+    const follow = value.roleSource === 'preset' && preset !== undefined
+    if (value.roleSource === 'preset' && !preset && previous)
+      throw new Error('来源角色卡片已删除，请改为自定义提示词')
+    if (!follow && !value.role) throw new Error('请填写角色提示词')
+    const defaultTitle = follow ? preset.name : (value.role?.name ?? '智能体')
+    const title = (
+      value.title?.trim() ||
+      previous?.title ||
+      this.nextRosterTitle(parent, defaultTitle)
+    ).trim()
+    this.assertRosterTitle(parent, title, previous?.id)
+    const now = new Date().toISOString()
+    const saved: RosterEntry = {
+      id: previous?.id ?? randomUUID(),
+      parentSessionId: parent,
+      project,
+      title,
+      ...(value.presetId ? { presetId: value.presetId } : {}),
+      roleSource: follow ? 'preset' : 'custom',
+      role: follow ? roleSnapshot(preset!) : value.role!,
+      cli: value.cli,
+      model: value.model,
+      effort: value.effort,
+      ...(previous?.workerId ? { workerId: previous.workerId } : {}),
+      createdAt: previous?.createdAt ?? now,
+      updatedAt: now,
+    }
+    const next = previous
+      ? entries.map((entry) => (entry.id === saved.id ? saved : entry))
+      : [...entries, saved]
+    this.writeRoster(parent, next)
+    return structuredClone(saved)
+  }
+  deleteRosterEntry(parent: string, id: string): void {
+    const entries = this.roster(parent)
+    if (!entries.some((entry) => entry.id === id)) throw new Error('此可用智能体已被删除')
+    this.writeRoster(parent, entries.filter((entry) => entry.id !== id))
+  }
+  /** Records the Worker created by the entry's first dispatch; later edits keep it. */
+  bindRosterWorker(parent: string, id: string, workerId: string): void {
+    z.uuid().parse(workerId)
+    const entries = this.roster(parent)
+    const found = entries.find((entry) => entry.id === id)
+    if (!found) throw new Error('此可用智能体已被删除')
+    if (found.workerId === workerId) return
+    this.writeRoster(
+      parent,
+      entries.map((entry) => (entry.id === id ? { ...entry, workerId } : entry)),
+    )
   }
   setCliEnabled(cli: CliId, enabled: boolean): CliSettings {
     if (isRetiredCli(cli)) throw new Error(RETIRED_HARNESS_NOTICE)

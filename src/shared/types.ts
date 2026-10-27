@@ -109,6 +109,31 @@ export interface RolePreset {
   builtin?: boolean
   source?: string
 }
+/**
+ * Local patch: one session-scoped, concrete agent built from a role card.
+ * It pins the exact CLI/model/effort so a leader can dispatch by name without
+ * opening a question card; it is configuration, never a running Worker.
+ */
+export interface RosterEntry {
+  id: string
+  /** The conversation that owns this entry; entries never cross sessions. */
+  parentSessionId: string
+  project: string
+  /** Unique inside the session; doubles as the Worker agentName when dispatched. */
+  title: string
+  /** Source card, absent when the entry was created from a literal prompt. */
+  presetId?: string
+  /** `preset` follows the card's current prompt; `custom` uses `role.prompt`. */
+  roleSource: 'preset' | 'custom'
+  role: RoleSnapshot
+  cli: CliId
+  model: string
+  effort: Effort
+  /** Backfilled after the first successful dispatch; kept after the Worker is archived. */
+  workerId?: string
+  createdAt: string
+  updatedAt: string
+}
 /** Frozen when a worker is created; library edits cannot change an existing conversation. */
 export interface RoleSnapshot {
   presetId?: string
@@ -133,6 +158,8 @@ export interface Worker {
   mode: TaskMode
   /** Local patch: leader opt-in that lets two marked workers write concurrently. */
   parallelWrite?: boolean
+  /** Local patch: number of started turns; missing on records written by older versions. */
+  runCount?: number
   conversationId?: string
   /** A session receipt is replaced, never added to another invocation's cumulative receipt. */
   conversationTelemetry?: ConversationTelemetryCheckpoint

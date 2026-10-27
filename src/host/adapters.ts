@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
+import { claudeNonPlanPermission } from './native-claude.mjs'
 import { qoderVariant } from './qoder-variant.ts'
 import { readClaudeOwnRoute, claudeNativeSettingsArguments } from './claude-own-route.ts'
 import { discoverClaudeNativeOAuth } from './claude-native-oauth.ts'
@@ -51,18 +51,7 @@ import {
   type ProcessBackend,
   type RuntimeConfig,
 } from './process.ts'
-/** Local patch: opt-in YOLO permission for non-plan Claude runs. */
-function claudeNonPlanPermission(): string {
-  if ((process.env.CLIWORKER_CLAUDE_PERMISSION || '').trim() === 'bypassPermissions') return 'bypassPermissions'
-  try {
-    if (
-      readFileSync(join(homedir(), '.dsh', 'cliworker-now', 'claude-permission.txt'), 'utf8').trim() ===
-      'bypassPermissions'
-    )
-      return 'bypassPermissions'
-  } catch {}
-  return 'acceptEdits'
-}
+/** Local patch: opt-in YOLO permission is shared with the native Claude bridge. */
 
 
 export interface Catalog {

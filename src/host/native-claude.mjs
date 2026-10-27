@@ -8,8 +8,10 @@ const string = (value) => typeof value === 'string' && value.trim().length > 0
 const fail = (message) => new Error(`Claude stream-json: ${message}`)
 /** Local patch: opt-in YOLO permission for non-plan Claude runs. */
 const claudePermissionOverride = () => (process.env.CLIWORKER_CLAUDE_PERMISSION || '').trim()
-const claudeNonPlanPermission = () => {
-  if (claudePermissionOverride() === 'bypassPermissions') return 'bypassPermissions'
+export const claudeNonPlanPermission = () => {
+  // An explicit env choice wins over the marker file, so tests and CI can pin stock.
+  const forced = claudePermissionOverride()
+  if (forced) return forced === 'bypassPermissions' ? 'bypassPermissions' : 'acceptEdits'
   try {
     if (readFileSync(join(homedir(), '.dsh', 'cliworker-now', 'claude-permission.txt'), 'utf8').trim() === 'bypassPermissions')
       return 'bypassPermissions'

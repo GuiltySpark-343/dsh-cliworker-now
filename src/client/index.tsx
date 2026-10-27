@@ -36,6 +36,7 @@ import {
   conversationInteractionStyles,
   settingsStyles,
   rolePresetStyles,
+  rosterStyles,
 } from './styles.ts'
 import { BrandIcon } from './icons.tsx'
 import { installNativeJobOverlay } from './native-job-overlay.ts'
@@ -204,6 +205,7 @@ export function apply(ctx: Context): void {
         conversationInteractionStyles +
         settingsStyles +
         rolePresetStyles +
+        rosterStyles +
         workerManagementStyles +
         renameCopyStyles +
         processStyles +

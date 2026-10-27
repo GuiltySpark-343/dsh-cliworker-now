@@ -32,6 +32,7 @@ import { CopyText } from './copy-text.tsx'
 import { BrandIcon, Glyph } from './icons.tsx'
 import { WorkerModelMenu } from './worker-model-menu.tsx'
 import { SettingsDialog } from './settings-dialog.tsx'
+import { RosterPane } from './roster.tsx'
 import { RenameWorker } from './rename-worker.tsx'
 import { WorkerCard, type WorkerManagementAction } from './worker-card.tsx'
 import { RUNNING_MESSAGE_LABELS } from '../shared/running-message.ts'
@@ -605,7 +606,15 @@ function SessionPanel({
       />
       {!selected && (
         <div className="cwn-overview">
-          <div className="cwn-overview-controls">
+          <div className="cwn-overview-top">
+            <RosterPane
+              api={api}
+              sessionId={sessionId}
+              workers={snapshot.workers}
+              archived={snapshot.archivedWorkers ?? []}
+              onOpenWorker={openWorker}
+            />
+            <div className="cwn-overview-controls">
             <Input
               className="cwn-search"
               icon={<Glyph name="search" />}
@@ -653,6 +662,7 @@ function SessionPanel({
                   <IconTrashOutlineRegular />
                 </Button>
               </Tooltip>
+            </div>
             </div>
           </div>
           <div

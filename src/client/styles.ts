@@ -267,3 +267,46 @@ export const rolePresetStyles = `
 .cwn-rename-dialog{width:min(420px,90vw);max-width:90vw}.cwn-rename-form>p{font-size:var(--dsw-font-xxs-12-font-size);color:var(--dsw-alias-label-tertiary);line-height:20px}
 @media(max-width:700px){.cwn-role-grid{grid-template-columns:1fr}.cwn-roles-toolbar{flex-wrap:wrap}.cwn-roles-toolbar>span{flex-basis:100%}}
 `
+
+/* 可用智能体：会话级配置列表，位于面板顶部、状态筛选左侧 */
+export const rosterStyles = `
+.cwn-overview-top{flex:none;display:flex;align-items:flex-start;gap:10px;padding:4px 14px 0;min-width:0}
+.cwn-overview-controls{flex:1;min-width:0;padding:0}
+.cwn-roster{flex:none;width:150px;max-height:264px;display:flex;flex-direction:column;gap:6px;padding:7px;border:.5px solid var(--cwn-border);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-base)}
+.cwn-roster-head{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:var(--dsw-font-xxs-12-font-size);color:var(--cwn-muted);padding:0 2px}
+.cwn-roster-count{display:inline-flex;align-items:center;justify-content:center;min-width:14px}
+.cwn-roster-list{flex:1 1 auto;display:flex;flex-direction:column;gap:2px;min-height:0;overflow:auto;overscroll-behavior:contain}
+.cwn-roster-item{display:flex;align-items:stretch;border-radius:var(--dsw-radius-md)}
+.cwn-roster-item:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.cwn-roster-open{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;padding:6px 4px 6px 7px;border:0;background:transparent;color:inherit;text-align:left;border-radius:var(--dsw-radius-md)}
+.cwn-roster-title{display:flex;align-items:center;gap:5px;min-width:0;font-size:var(--dsw-font-xxs-12-font-size);line-height:16px}
+.cwn-roster-title strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.cwn-roster-meta{display:flex;align-items:center;gap:4px;min-width:0;font-size:10px;line-height:14px;color:var(--cwn-muted)}
+.cwn-roster-meta>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cwn-roster-meta>span:last-child{flex:none}
+.cwn-roster-state{font-size:10px;line-height:14px;color:var(--cwn-muted)}
+.cwn-roster-edit{flex:none;width:22px!important;padding:0!important;align-self:center;opacity:0;color:var(--cwn-muted)!important}
+.cwn-roster-item:hover .cwn-roster-edit,.cwn-roster-edit:focus-visible{opacity:1}
+.cwn-overview-top .cwn-filters{gap:4px}.cwn-overview-top .cwn-filters button{white-space:nowrap;padding-left:4px!important;padding-right:4px!important}.cwn-roster-empty{margin:2px;font-size:10px;line-height:15px;color:var(--cwn-muted)}
+.cwn-roster-add{width:100%}
+.cwn-roster-feedback{margin:0;font-size:10px;line-height:14px;color:var(--cwn-muted);overflow-wrap:anywhere}
+.cwn-roster-feedback[role=alert]{color:var(--dsw-alias-state-error-primary)}
+.cwn-roster-dialog{width:min(620px,92vw);max-width:92vw}
+.cwn-roster-dialog-content{display:flex;flex-direction:column;gap:14px;max-height:78vh;overflow:auto}
+.cwn-roster-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+.cwn-roster-card{display:flex;flex-direction:column;gap:4px;padding:12px;text-align:left;border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-base);color:inherit}
+.cwn-roster-card:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.cwn-roster-card strong{font-size:var(--dsw-font-s-14-font-size);font-weight:600}
+.cwn-roster-card span{font-size:var(--dsw-font-xxs-12-font-size);line-height:18px;color:var(--cwn-muted)}
+.cwn-roster-hint{margin:0;font-size:var(--dsw-font-xxs-12-font-size);line-height:18px;color:var(--cwn-muted)}
+.cwn-roster-form{display:flex;flex-direction:column;gap:12px}
+.cwn-roster-form label{display:flex;flex-direction:column;gap:6px;font-size:var(--dsw-font-xxs-12-font-size);color:var(--cwn-muted)}
+.cwn-roster-form label>span{line-height:18px}
+.cwn-roster-select{width:100%;border:.5px solid var(--cwn-border);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);color:inherit;padding:7px;font-size:var(--dsw-font-s-14-font-size)}
+.cwn-roster-prompt{width:100%;box-sizing:border-box;border:.5px solid var(--cwn-border);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);color:inherit;padding:8px;font-size:var(--dsw-font-xxs-12-font-size);line-height:20px;resize:vertical}
+.cwn-roster-row{display:grid;grid-template-columns:1fr 1.3fr .9fr;gap:10px}
+.cwn-roster-form-actions{display:flex;align-items:center;gap:8px}
+.cwn-roster-spacer{flex:1}
+@media(max-width:520px){.cwn-roster-row{grid-template-columns:1fr}}
+@container (max-width:400px){.cwn-overview-top{flex-direction:column;align-items:stretch}.cwn-roster{width:auto;max-height:none}.cwn-roster-list{max-height:150px}.cwn-roster-edit{opacity:1}}
+`

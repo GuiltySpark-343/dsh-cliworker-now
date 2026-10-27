@@ -1939,6 +1939,9 @@ export class WorkerRuntime {
         ...(harnessLease?.connection ? { harnessTools: harnessLease.connection } : {}),
       }
       worker.status = 'running'
+      // Local patch: count only turns that actually reach the CLI. Preparation
+      // failures and cancelled queue entries never get here.
+      worker.runCount = (worker.runCount ?? 0) + 1
       this.storage.save(worker)
       this.changed()
       const selectedClaudeRoute =
