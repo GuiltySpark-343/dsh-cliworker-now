@@ -139,6 +139,51 @@ function LinkActions({ link, onOpen }: { link?: string; onOpen: (url: string) =>
   )
 }
 
+/** Antigravity's own terms pages, fixed plugin text rather than CLI output. */
+const AGY_TERMS = [
+  { label: '服务条款', url: 'https://antigravity.google/terms' },
+  { label: '隐私政策', url: 'https://policies.google.com/privacy' },
+] as const
+
+/** A CLI's terms: the user agrees here; sharing data with the CLI's maker stays off unless ticked. */
+function TermsAnswer({
+  text,
+  running,
+  onAgree,
+  onCancel,
+}: {
+  text: string
+  running: boolean
+  onAgree: (share: boolean) => void
+  onCancel: () => void
+}) {
+  const [share, setShare] = useState(false)
+  return (
+    <>
+      <p>{text}</p>
+      <div className="cwn-login-actions">
+        {AGY_TERMS.map((page) => (
+          <Button key={page.url} variant="ghost" size="sm" onClick={() => window.open(page.url, '_blank', 'noopener,noreferrer')}>
+            {t(page.label)}
+          </Button>
+        ))}
+      </div>
+      <label className="cwn-login-check">
+        <input type="checkbox" checked={share} disabled={!running} onChange={(event) => setShare(event.target.checked)} />
+        <span>{t('允许 Google 收集我的交互数据，用于改进 Antigravity CLI（之后可在 Antigravity 设置中关闭）')}</span>
+      </label>
+      <div className="cwn-login-actions">
+        <Button variant="primary" size="md" disabled={!running} onClick={() => onAgree(share)}>
+          {t('同意并继续')}
+        </Button>
+        <Button variant="ghost" size="md" onClick={onCancel}>
+          {t('取消')}
+        </Button>
+      </div>
+    </>
+  )
+}
+
 /** One pasted value: an authorization code (shown) or a key (masked, cleared on submit). */
 function AnswerForm({
   kind,
@@ -350,7 +395,8 @@ export function LoginWindow({
   const body = (template = guide?.template): ReactNode => {
     if (!guide || template === 'starting')
       return ended ? null : <Waiting text={guide ? hostText(guide.text) : t('正在启动 {cli}…', { cli: name })} />
-    if (submitted && template !== 'choice' && template !== 'trust') return <Waiting text={t('正在确认登录…')} />
+    if (submitted && template !== 'choice' && template !== 'trust' && template !== 'terms')
+      return <Waiting text={t('正在确认登录…')} />
     switch (template) {
       case 'trust':
         return (
@@ -365,6 +411,15 @@ export function LoginWindow({
               </Button>
             </div>
           </>
+        )
+      case 'terms':
+        return (
+          <TermsAnswer
+            text={hostText(guide.text)}
+            running={running}
+            onAgree={(share) => respond({ agree: 'terms', share })}
+            onCancel={onDone}
+          />
         )
       case 'choice':
         return (

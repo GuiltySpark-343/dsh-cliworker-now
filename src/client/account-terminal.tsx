@@ -604,7 +604,10 @@ export function AccountTerminal({
     return operation
   }
   useEffect(() => {
-    if (rawVisible) refit.current()
+    if (!rawVisible) return
+    refit.current()
+    // Keys typed right after the terminal opens belong to it, e.g. a CLI's own setup screen.
+    focus.current()
   }, [rawVisible])
   // The Host could not follow the screen: show the native terminal for the user to continue.
   useEffect(() => {

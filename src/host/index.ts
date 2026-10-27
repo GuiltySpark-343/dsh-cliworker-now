@@ -2155,6 +2155,8 @@ export class CliWorkerService extends TypertRemoteService {
       else if (text('code')) answer = { code: value.code as string }
       else if (text('secret')) answer = { secret: value.secret as string }
       else if (keys.length === 1 && (value.confirm === 'trust' || value.confirm === 'decline')) answer = { confirm: value.confirm }
+      else if (keys.length === 2 && value.agree === 'terms' && typeof value.share === 'boolean')
+        answer = { agree: 'terms', share: value.share }
       else throw new Error('无效的账号窗口操作')
       await this.accounts.respond(parentSessionId, accountId, answer)
       return true

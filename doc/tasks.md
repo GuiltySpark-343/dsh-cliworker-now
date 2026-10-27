@@ -2872,11 +2872,19 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 ## 2026-10-27 Windows 账号退出卡住修复（v0.8.4 发布前）
 
 - 用户反馈：Windows 上多个 CLI 的「退出」窗口卡住。用户授权后，用 Antigravity 做了一次真实退出复现。窗口停在「正在启动」约 13 秒，转入「正在退出」，最后报「未能确认已退出」；账号仍是已登录。
-- 根因一，Antigravity：Windows 上的 agy 首次打开终端时会进入初始设置，先选配色（Choose your color scheme），再勾选服务条款与数据使用。插件不认识这两屏，等屏幕静止后读到账号已登录，就输入了 `/logout` 和回车。这次回车只把向导推进到服务条款页，退出没有发生。修复：把配色与服务条款两屏连同已有的文件夹信任，作为只能由用户回答的步骤。窗口提示用户在原生终端里完成初始设置，并自动展开原生终端；插件不替用户选择，等用户回车后再继续退出。登录流程同样适用。
+- 根因一，Antigravity：Windows 上的 agy 首次打开终端时会进入初始设置，先选配色（Choose your color scheme），再勾选服务条款与数据使用。插件不认识这两屏，等屏幕静止后读到账号已登录，就输入了 `/logout` 和回车。这次回车只把向导推进到服务条款页，退出没有发生。初版修复只是把这两屏交给用户在原生终端里完成。后续实测发现两个问题：自动展开的原生终端没有键盘焦点，用户按键根本没送到 agy（agy 日志在 11:55–12:13 之间没有任何记录，`onboarding.json` 始终未完成），所以每次都重新出现；而且用户不想自己逐屏处理。按用户选定的方案（OpenSpec `guide-agy-account-terminal` D14）改为：
+  - 配色页整页画完后，插件按一次回车采用默认配色。
+  - 服务条款画成插件窗口中的一步，数据收集选项默认不勾；用户点「同意并继续」后，Host 按读到的勾选状态切换，再按 ↓ →，确认 `[Done]` 已选中后按回车。
+  - 无法跟随的画面转给原生终端，终端出现时自动获得焦点。
+  - 登录流程同样适用。
+  - `agy -p /help` 列出的打印模式命令不含 `/logout`，所以无法绕开交互界面。
 - 根因二，Node 包装入口：Codex 的 npm `codex.js` 等 Node 包装脚本以 `stdio: 'inherit'` 启动原生程序。Electron 运行时下 fd 0 是 NUL，原生程序因此报 `stdin is not a terminal`：Codex 账号终端直接以退出码 1 结束，交互输入也无法送达。修复：在账号终端专用的 `windows-account-stdio.mjs` 中，把 `spawn`/`spawnSync` 继承来的 stdin 换成已重新打开的控制台输入（`CONIN$`）。任务进程与共享 Host 不受影响。
 - Windows 实测（x64，DSH Desktop，正常退出 Harness 后用原生安装器安装修复后的隔离包，702 个 lib 文件逐一匹配）：
   - SSH 伪终端下，修复前包装脚本启动的子进程 `IsInputRedirected=True`，修复后为 `False`。
   - Codex「账号终端」修复前报 `stdin is not a terminal`（退出码 1），修复后正常显示 Codex 主界面；未输入任何内容即关闭。
-  - Antigravity「退出」修复后约 6 秒停在初始设置提示，原生终端自动展开，插件没有输入任何按键。之后的设置与退出需由用户完成，结果待补。
-- macOS：`typecheck` 通过；全量 `pnpm test` 234 文件通过、3 跳过；4699 通过、0 失败、13 跳过。
+  - Antigravity「退出」初版修复后约 6 秒停在初始设置提示，原生终端自动展开，插件没有输入任何按键。
+  - 第三版（终端获得焦点）：退出窗口出现首次设置提示时，焦点元素为 `Terminal input`。
+  - 用 PTY 只读抓取条款页：只在配色页按回车，在条款页只按方向键、不提交。确认了勾选框默认 `[x]`，回车切换勾选，↓ 到 `[Previous]`，→ 到 `[Done]`（显示为 `> Done`）；配色页在启动时画两次。
+  - 第四版因配色页第二次重画被误判为「回到配色页」，转进了原生终端后备步骤。第五版（重画时继续等待）：约 8 秒自动跳过配色，停在条款步骤，「同意并继续」按钮出现。用户本人点击后，`onboarding.json` 变为 `onboardingComplete: true`，设置页显示「未登录」，无残留 agy 进程。用户选择的数据收集设置未单独读取核对。
+- macOS：`typecheck` 通过；全量 `pnpm test` 234 文件通过、3 跳过；4699 通过、0 失败、13 跳过。首次设置改动后：`typecheck` 通过；全量 234 文件通过、3 跳过，4702 通过、0 失败、13 跳过；之后的配色重画修正只重跑了关联的 3 个文件（228 项通过）；`pnpm spec validate guide-agy-account-terminal --strict` 通过。
 - 未验证：Codex、ZCode 等其他 CLI 在 Windows 上的真实退出（本次只授权了 Antigravity）。Qoder 的 `/logout` 同样依赖屏幕静止后输入，Windows 首次运行屏未实测。

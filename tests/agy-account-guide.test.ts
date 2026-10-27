@@ -169,45 +169,94 @@ it('continues an automatic sign-out only after the user answers the folder trust
   expect(settling.identified('authenticated')).toContainEqual({ command: '/logout' })
 })
 
-// Synthetic first-run setup screens of agy on Windows (2026-10-27): a color scheme picker, then a consent checkbox.
-const SCHEME =
-  '\x1b[2J\x1b[1;1HWelcome to Antigravity CLI!\r\n\nChoose your color\x1b[1Cscheme:\r\n  > terminal\r\n    light\r\n[Next]\r\n  \u2191/\u2193 Navigate \u00b7 enter Confirm'
-const TERMS =
-  '\x1b[2J\x1b[1;1HTerms of Service\x1b[1C& Data Use\r\nAI coding agents are known to have certain security risks.\r\n> [ ] Yes, I agree to help improve Antigravity CLI\r\n'
+// Synthetic first-run setup screens modelled on agy 1.4.7 on Windows (2026-10-27): a color
+// scheme list, then the terms with a data-sharing box that starts ticked and [Previous] [Done].
+const SCHEME_LIST = '\x1b[2J\x1b[1;1HWelcome to Antigravity CLI!\r\n\nChoose your color\x1b[1Cscheme:\r\n  > terminal\r\n    light\r\n'
+const SCHEME_KEYS = '  [Next]\r\n\r\n   \x1b[1m↑/↓\x1b[m  Navigate ·  \x1b[1menter\x1b[m  Confirm'
+const TERMS_TITLE = '\x1b[2J\x1b[1;1HTerms of Service\x1b[1C& Data Use\r\nAI coding agents are known to have certain security risks.\r\n'
+const TERMS_BOX = (ticked: boolean) =>
+  `  > [${ticked ? 'x' : ' '}] Yes, I agree to help improve Antigravity CLI by allowing\r\n  [Previous]        [Done]\r\n   ↑/↓  Navigate ·  enter  Toggle`
+const PREVIOUS = '\r\x1b[15;3H  \x1b[26;3H> \x1b[34;7m Previous \x1b[m\x1b[29;24H\x1b[90mConfirm\x1b[m'
+const DONE = '\x1b[26;3H  \x1b[34;1m[Previous]\x1b[m    > \x1b[32;7m Done \x1b[m'
 
-it('never types into the first-run setup screens and continues the sign-out after the user answers them', () => {
-  const scheme = new AgyAccountGuide('logout')
-  expect(scheme.output(SCHEME)).toEqual([{ guide: AGY_GUIDES.setup }])
-  expect(scheme.settled()).toEqual([])
-  expect(scheme.identified('authenticated')).toEqual([])
-  expect(scheme.input('\r')).toEqual([])
-  expect(scheme.output(TERMS)).toEqual([{ guide: AGY_GUIDES.setup }])
-  expect(scheme.output(READY)).toEqual([])
-  scheme.input('\r')
-  expect(scheme.output(READY)).toEqual([{ guide: AGY_GUIDES.loggingOut }, { command: '/logout' }])
+it('takes the default color scheme, then agrees to the terms only when the user does, leaving data sharing off', () => {
   const guide = new AgyAccountGuide('logout')
-  expect(guide.output(TERMS)).toEqual([{ guide: AGY_GUIDES.setup }])
-  expect(AGY_GUIDES.setup.template).toBe('native')
-  // A quiet terms screen is the user's to answer, never a signed-in main screen.
+  // The list alone is not enough: Enter waits for its [Next] and key hints.
+  expect(guide.output(SCHEME_LIST)).toEqual([])
+  expect(guide.output(SCHEME_KEYS)).toEqual([{ guide: AGY_GUIDES.preparing }, { write: '\r' }])
+  expect(guide.output(TERMS_TITLE)).toEqual([])
+  expect(guide.output(TERMS_BOX(true))).toEqual([{ guide: AGY_GUIDES.terms }])
+  expect(AGY_GUIDES.terms.template).toBe('terms')
+  // Nothing is typed into the terms screen by itself, whatever the account.
   expect(guide.settled()).toEqual([])
   expect(guide.identified('authenticated')).toEqual([])
   expect(guide.output(READY)).toEqual([])
-  // Space toggles the box without answering; Enter answers it.
-  expect(guide.input(' ')).toEqual([])
-  expect(guide.output(TERMS)).toEqual([])
-  expect(guide.input('\r')).toEqual([])
+  // agy ticks the box; the user left it off, so Enter toggles it before ↓ → reach [Done].
+  expect(guide.respond({ agree: 'terms', share: false })).toEqual([
+    { write: '\r\x1b[B\x1b[C' },
+    { guide: AGY_GUIDES.preparing },
+  ])
+  expect(guide.output(PREVIOUS)).toEqual([])
+  expect(guide.output(DONE)).toEqual([{ write: '\r' }])
   expect(guide.output(READY)).toEqual([{ guide: AGY_GUIDES.loggingOut }, { command: '/logout' }])
+
+  const sharing = new AgyAccountGuide('logout')
+  sharing.output(SCHEME_LIST + SCHEME_KEYS)
+  sharing.output(TERMS_TITLE + TERMS_BOX(true))
+  expect(sharing.respond({ agree: 'terms', share: true })).toContainEqual({ write: '\x1b[B\x1b[C' })
+  const unticked = new AgyAccountGuide('login')
+  unticked.output(TERMS_TITLE + TERMS_BOX(false))
+  expect(unticked.respond({ agree: 'terms', share: false })).toContainEqual({ write: '\x1b[B\x1b[C' })
+})
+
+it('leaves the rest of the first-run setup to the user when it is not the screen the guide knows', () => {
+  // [Done] never shows as selected: no Enter, and the user finishes in the terminal.
+  const stuck = new AgyAccountGuide('logout')
+  stuck.output(TERMS_TITLE + TERMS_BOX(true))
+  stuck.respond({ agree: 'terms', share: false })
+  stuck.output(PREVIOUS)
+  expect(stuck.settled()).toEqual([{ guide: AGY_GUIDES.setup }])
+  expect(AGY_GUIDES.setup.template).toBe('native')
+  expect(stuck.output(DONE)).toEqual([])
+  stuck.input('\r')
+  expect(stuck.output(READY)).toContainEqual({ command: '/logout' })
+  // An unknown wizard step after the terms is never mistaken for the main screen.
+  const unknown = new AgyAccountGuide('logout')
+  unknown.output(TERMS_TITLE + TERMS_BOX(true))
+  unknown.respond({ agree: 'terms', share: false })
+  unknown.output(DONE)
+  unknown.output('\x1b[2J\x1b[1;1HImport from Gemini CLI\r\n  [Previous]   [Next]\r\n   ↑/↓ Navigate · enter Confirm')
+  expect(unknown.settled()).toEqual([{ guide: AGY_GUIDES.setup }])
+  expect(unknown.identified('authenticated')).toEqual([])
+  // A box agy draws in a way the guide cannot read is the user's to answer.
+  const odd = new AgyAccountGuide('logout')
+  expect(odd.output(TERMS_TITLE + '  > (?) Yes, I agree to help improve Antigravity CLI\r\n')).toEqual([{ guide: AGY_GUIDES.setup }])
+  expect(() => odd.respond({ agree: 'terms', share: false })).toThrow()
+  // A resize redraws the color scheme before agy reads the Enter: no second Enter, and the terms follow.
+  const resized = new AgyAccountGuide('logout')
+  resized.output(SCHEME_LIST + SCHEME_KEYS)
+  expect(resized.output(SCHEME_LIST + SCHEME_KEYS)).toEqual([])
+  expect(resized.output(TERMS_TITLE + TERMS_BOX(true))).toEqual([{ guide: AGY_GUIDES.terms }])
+  // Still on the color scheme once the screen is quiet: the user picks it in the terminal.
+  const again = new AgyAccountGuide('logout')
+  again.output(SCHEME_LIST + SCHEME_KEYS)
+  again.output(SCHEME_LIST + SCHEME_KEYS)
+  expect(again.settled()).toEqual([{ guide: AGY_GUIDES.setup }])
+  expect(again.identified('authenticated')).toEqual([])
 })
 
 it('shows the folder trust question that follows the terms screen, and the terms before a sign-in', () => {
   const logout = new AgyAccountGuide('logout')
-  logout.output(TERMS)
-  logout.input('\r')
+  logout.output(TERMS_TITLE + TERMS_BOX(true))
+  logout.respond({ agree: 'terms', share: false })
+  logout.output(DONE)
   expect(logout.output(TRUST)).toEqual([{ guide: AGY_GUIDES.trust }])
   expect(logout.respond({ confirm: 'trust' })).toEqual([{ write: '\r' }])
   expect(logout.output(READY)).toContainEqual({ command: '/logout' })
   const login = new AgyAccountGuide('login')
-  expect(steps(login.output(TERMS))).toEqual(['setup'])
-  login.input('\r')
+  login.output(SCHEME_LIST + SCHEME_KEYS)
+  expect(steps(login.output(TERMS_TITLE + TERMS_BOX(true)))).toEqual(['terms'])
+  login.respond({ agree: 'terms', share: false })
+  login.output(DONE)
   expect(steps(login.output(SIGNED_OUT + METHOD))).toEqual(['method'])
 })

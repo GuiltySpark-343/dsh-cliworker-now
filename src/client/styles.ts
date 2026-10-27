@@ -253,6 +253,7 @@ export const settingsStyles = `
 .cwn-login-step-body{display:flex;flex-direction:column;gap:12px;margin-top:8px;color:var(--dsw-alias-label-secondary)}
 .cwn-login-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .cwn-login-hint{color:var(--dsw-alias-label-tertiary);font-size:var(--dsw-font-xxs-12-font-size);line-height:18px}
+.cwn-login-check{display:flex;align-items:flex-start;gap:8px;color:var(--dsw-alias-label-secondary);cursor:pointer}.cwn-login-check input{flex:none;margin:3px 0 0;accent-color:var(--dsw-alias-label-primary)}
 .cwn-login-code{display:flex;flex-direction:column;gap:12px}.cwn-login-code input{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .cwn-login-callout{display:flex;align-items:center;gap:8px;margin:0;padding:10px 12px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere}.cwn-login-callout>svg{flex:none}.cwn-login-callout span{flex:1}.cwn-login-callout strong{font-weight:600;margin-left:4px}
 .cwn-login-callout[data-tone=success]{background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 12%,transparent)}.cwn-login-callout[data-tone=success]>svg{color:var(--dsw-alias-state-success-primary)}

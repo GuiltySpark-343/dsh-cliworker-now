@@ -1509,6 +1509,30 @@ describe('Antigravity account terminal guide (synthetic agy screens)', () => {
     expect(f.manager.isBusy('antigravity')).toBe(false)
   })
 
+  it('skips the agy color scheme, waits for the user to agree to the terms, then signs out', async () => {
+    fast()
+    const f = fixture()
+    const typed = () => vi.mocked(f.terminal.write).mock.calls.map(([data]) => data)
+    f.identity.mockImplementation(async () => state(typed().slice(-2).join('') === '/logout\r' ? 'unconfigured' : 'authenticated'))
+    const { id } = await f.manager.start('p', 'antigravity', 'logout', f.cwd, f.signal)
+    const watched = frames(f, id)
+    // Synthetic first-run screens, as agy 1.4.7 drew them on Windows (2026-10-27).
+    f.output.write('\x1b[2JWelcome to Antigravity CLI!\r\nChoose your color scheme:\r\n  > terminal\r\n  [Next]\r\n  ↑/↓ Navigate · enter Confirm')
+    await vi.waitFor(() => expect(typed()).toEqual(['\r']))
+    f.output.write('\x1b[2JTerms of Service & Data Use\r\n  > [x] Yes, I agree to help improve Antigravity CLI\r\n  [Previous]   [Done]')
+    await vi.waitFor(() => expect(watched.steps().at(-1)).toBe('terms'))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(typed()).toEqual(['\r'])
+    await f.manager.respond('p', id, { agree: 'terms', share: false })
+    expect(typed()).toEqual(['\r', '\r\x1b[B\x1b[C'])
+    f.output.write('\x1b[26;3H  [Previous]    > \x1b[32;7m Done \x1b[m')
+    await vi.waitFor(() => expect(typed()).toEqual(['\r', '\r\x1b[B\x1b[C', '\r']))
+    f.output.write(READY)
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed', cleanupConfirmed: true }))
+    expect(typed().slice(3)).toEqual(['/logout', '\r'])
+    expect(watched.steps()).toEqual(['preparing', 'terms', 'preparing', 'loggingOut', 'loggedOut'])
+  })
+
   it('opens the guided agy terminal large enough to keep every prompt on screen', async () => {
     fast()
     const f = fixture()

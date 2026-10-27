@@ -1280,6 +1280,24 @@ describe('Antigravity sign-in window (simulated Host frames)', () => {
     expect(f.accountRespond).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', JSON.stringify({ confirm: 'trust' }))
   })
 
+  it('agrees to Antigravity terms only on the user click, with data sharing off unless ticked', async () => {
+    const f = await setup(false)
+    await f.update('antigravity', 'logout')
+    await f.start()
+    await push(f, { guide: AGY_GUIDES.terms }, 1)
+    expect(JSON.stringify(f.renderer.toJSON())).toContain('服务条款')
+    const box = f.renderer.root.findByProps({ type: 'checkbox' })
+    expect(box.props.checked).toBe(false)
+    expect(f.accountRespond).not.toHaveBeenCalled()
+    expect(f.accountWrite).not.toHaveBeenCalled()
+    await f.click('同意并继续')
+    expect(f.accountRespond).toHaveBeenCalledExactlyOnceWith('parent', 'terminal-a', JSON.stringify({ agree: 'terms', share: false }))
+    // The step stays answerable until the Host moves on; a tick is passed through as given.
+    await act(async () => box.props.onChange({ target: { checked: true } }))
+    await f.click('同意并继续')
+    expect(f.accountRespond).toHaveBeenLastCalledWith('parent', 'terminal-a', JSON.stringify({ agree: 'terms', share: true }))
+  })
+
   it('shows the terminal status on the same footer line as the native terminal toggle', async () => {
     const f = await setup(false)
     await f.update('antigravity', 'logout')
@@ -1291,12 +1309,15 @@ describe('Antigravity sign-in window (simulated Host frames)', () => {
     expect(f.renderer.root.findAllByProps({ className: 'cwn-account-instruction' })).toEqual([])
   })
 
-  it('shows the native terminal when the Host cannot follow the screen', async () => {
+  it('shows the native terminal with keyboard focus when the Host cannot follow the screen', async () => {
     const f = await setup(false)
     await f.update('antigravity', 'login')
     await f.start()
+    expect(terminals[0].focus).not.toHaveBeenCalled()
     await push(f, { guide: { step: 'native', tone: 'warning', template: 'native', text: '无法识别当前步骤，请在原生终端中继续。' } }, 1)
     expect(f.renderer.root.findByProps({ className: 'cwn-account-terminal-view' }).props.hidden).toBe(false)
+    // The user's keys go to the CLI's own screen without clicking it first.
+    expect(terminals[0].focus).toHaveBeenCalled()
   })
 
   it('keeps the plain terminal for Antigravity account management', async () => {

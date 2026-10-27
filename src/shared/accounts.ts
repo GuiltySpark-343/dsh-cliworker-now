@@ -55,6 +55,8 @@ export interface AccountStatus {
 export type AccountTemplate =
   | 'starting'
   | 'trust'
+  /** A CLI's own terms screen: agree, and an optional data-sharing choice that starts unticked. */
+  | 'terms'
   | 'choice'
   | 'browser'
   | 'browserCode'
@@ -91,6 +93,7 @@ export type AccountResponse =
   | { code: string }
   | { secret: string }
   | { confirm: 'trust' | 'decline' }
+  | { agree: 'terms'; share: boolean }
 /** How a login treats a provider that is already signed in. */
 export type AccountLoginMode = 'add' | 'replace'
 export interface AccountStartOptions {
