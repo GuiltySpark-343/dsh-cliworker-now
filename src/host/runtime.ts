@@ -1070,6 +1070,25 @@ export class WorkerRuntime {
     if (!worker.archivedAt) throw new Error('此任务尚未删除')
     const restored = { ...worker }
     delete restored.archivedAt
+    // Local patch: deleting a Worker releases its name, so a restored record may
+    // collide with an instance created afterwards. Keep the old name when free and
+    // allocate a deterministic suffix otherwise; never restore a duplicate name.
+    if (restored.agentName) {
+      const wanted = restored.agentName.toLocaleLowerCase()
+      const taken = [...this.storage.workers.values()].some(
+        (other) =>
+          other.id !== id &&
+          other.parentSessionId === parent &&
+          !other.archivedAt &&
+          [workerName(other), ...(other.nameAliases ?? [])].some(
+            (name) => name.toLocaleLowerCase() === wanted,
+          ),
+      )
+      if (taken) {
+        restored.agentName = availableAgentName(this.storage.workers.values(), parent, restored.agentName)
+        restored.agentNameOrigin = 'custom'
+      }
+    }
     this.storage.save(restored)
     this.changed()
   }
