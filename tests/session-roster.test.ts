@@ -41,7 +41,7 @@ function worker(parentSessionId = parent, agentName = '项目执行者1'): Worke
 }
 
 describe('session roster storage', () => {
-  it('numbers repeated cards and snapshots the card prompt', () => {
+  it('keeps the card name for the first template and only numbers a repeat', () => {
     const { store } = fixture()
     const preset = card(store)
     const first = store.saveRosterEntry(parent, project, {
@@ -58,8 +58,8 @@ describe('session roster storage', () => {
       model: 'other-model',
       effort: 'low',
     })
-    expect(first.title).toBe(`${preset.name}1`)
-    expect(second.title).toBe(`${preset.name}2`)
+    expect(first.title).toBe(preset.name)
+    expect(second.title).toBe(`${preset.name}1`)
     expect(first.role.prompt).toBe(preset.prompt)
     expect(second.cli).toBe('claude')
     expect(store.roster(parent)).toHaveLength(2)

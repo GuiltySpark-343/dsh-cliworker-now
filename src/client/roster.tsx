@@ -140,7 +140,15 @@ export function RosterList({
     (cli) => enabled[cli] !== false && !isRetiredCli(cli) && usable(catalogs[cli]).length > 0,
   )
   const suggestTitle = (base: string) => {
-    const used = new Set(entries.map((entry) => entry.title.toLocaleLowerCase()))
+    // The bare card name is the template name; numbering belongs to the instances
+    // created from it. Only a real collision (template or live Worker) adds a suffix.
+    const used = new Set([
+      ...entries.map((entry) => entry.title.toLocaleLowerCase()),
+      ...workers.flatMap((worker) =>
+        [workerName(worker), ...(worker.nameAliases ?? [])].map((name) => name.toLocaleLowerCase()),
+      ),
+    ])
+    if (!used.has(base.toLocaleLowerCase())) return base
     for (let index = 1; index < 1000; index++)
       if (!used.has(`${base}${index}`.toLocaleLowerCase())) return `${base}${index}`
     return base

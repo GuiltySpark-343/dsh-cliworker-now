@@ -611,6 +611,8 @@ export class WorkerStorage {
   nextRosterTitle(parent: string, base: string): string {
     const stem = agentNameSchema.parse(base).slice(0, 48)
     const taken = this.rosterTaken(parent)
+    // Local patch: a template keeps the card's name; the number only breaks a collision.
+    if (!taken.has(stem.toLocaleLowerCase())) return stem
     for (let index = 1; index <= 999; index++) {
       const title = `${stem}${index}`
       if (!taken.has(title.toLocaleLowerCase())) return title
