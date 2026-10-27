@@ -1008,15 +1008,40 @@ export class HarnessConversationBridge implements HarnessConversationApi {
     const binding = worker.harnessConversation
     if (!binding) return 'none'
     const record = this.records.get(binding.sessionId)
-    if (!record || record.workerId !== worker.id) return 'none'
-    const parent = this.ctx.agents.get(record.parentSessionId as Agent['id'])
-    if (parent) await this.drainChildren(parent, [SessionId(record.sessionId)])
-    await this.deps.unbind(record)
-    this.records.delete(record.sessionId)
+    if (record && record.workerId !== worker.id) return 'none'
+    const parentId = record?.parentSessionId ?? binding.parentSessionId
+    const parent = parentId ? this.ctx.agents.get(parentId as Agent['id']) : undefined
+    // An orphaned binding (store lost the record, Worker kept the id) has no live
+    // child to drain; the archive below still hides the session from the parent.
+    if (parent) {
+      try {
+        await this.drainChildren(parent, [SessionId(binding.sessionId)])
+      } catch {
+        /* 已无活跃子会话，继续归档即可 */
+      }
+    }
+    if (record) {
+      try {
+        await this.deps.unbind(record)
+      } catch {
+        /* 绑定存储已不含该记录 */
+      }
+      this.records.delete(binding.sessionId)
+    }
+    // The real Host service is `workspaceRegistry`; older compositions exposed a
+    // looser `workspaces` helper. Try both, and never fail the release on archive.
+    const registry = this.ctx.get('workspaceRegistry') as
+      | { archiveSession?(id: ReturnType<typeof SessionId>): Promise<unknown> }
+      | undefined
     const workspaces = this.ctx.get('workspaces') as
       | { archiveSession?(id: ReturnType<typeof SessionId>): Promise<unknown> }
       | undefined
-    if (workspaces?.archiveSession) await workspaces.archiveSession(SessionId(record.sessionId))
+    try {
+      if (registry?.archiveSession) await registry.archiveSession(SessionId(binding.sessionId))
+      else if (workspaces?.archiveSession) await workspaces.archiveSession(SessionId(binding.sessionId))
+    } catch {
+      /* 会话已不存在或仍有活动；绑定仍会被清空，下次启动再试。 */
+    }
     return 'released'
   }
 
