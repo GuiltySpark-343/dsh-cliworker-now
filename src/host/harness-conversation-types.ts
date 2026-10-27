@@ -113,7 +113,7 @@ export interface HarnessConversationApi {
   ): Promise<HarnessConversationBinding>
   lookup(sessionId: string): HarnessConversationRecord | undefined
   /** Local patch: release one deleted Worker's display child Session. */
-  release(worker: Worker): Promise<'released' | 'none'>
+  release(worker: Worker): Promise<'released' | 'none' | 'failed'>
   /** Stops only this bridge's active runs and releases its registrations. */
   dispose(): Promise<void>
 }

@@ -1004,7 +1004,7 @@ export class HarnessConversationBridge implements HarnessConversationApi {
    * Local patch: release the display child Session behind a deleted Worker so it
    * stops counting as a subagent. Durable logs are archived when the Host exposes it.
    */
-  async release(worker: Worker): Promise<'released' | 'none'> {
+  async release(worker: Worker): Promise<'released' | 'none' | 'failed'> {
     const binding = worker.harnessConversation
     if (!binding) return 'none'
     const record = this.records.get(binding.sessionId)
@@ -1039,8 +1039,10 @@ export class HarnessConversationBridge implements HarnessConversationApi {
     try {
       if (registry?.archiveSession) await registry.archiveSession(SessionId(binding.sessionId))
       else if (workspaces?.archiveSession) await workspaces.archiveSession(SessionId(binding.sessionId))
+      else return 'failed'
     } catch {
-      /* 会话已不存在或仍有活动；绑定仍会被清空，下次启动再试。 */
+      // Keep the binding so the next start retries instead of losing the session id.
+      return 'failed'
     }
     return 'released'
   }
