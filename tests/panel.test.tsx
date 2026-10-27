@@ -1419,12 +1419,26 @@ it.each([false, true])(
     })
     await t.click('默认设置')
     expect(t.r.root.findAllByProps({ role: 'dialog' })).toHaveLength(1)
+    await t.click('Antigravity 设置')
     await t.click('登录设置')
     expect(openNativeSettings).toHaveBeenCalledTimes(1)
     expect(t.r.root.findAllByProps({ role: 'dialog' })).toHaveLength(0)
     if (fail) expect(t.text()).toContain('设置 → 模型')
   },
 )
+
+it('opens 「CLI Worker 设置」 from the header and no CLI catalog until one is chosen', async () => {
+  const t = await setup(false)
+  const catalogForCli = vi.fn().mockResolvedValue({ ok: true, value: JSON.stringify({ cli: 'codex', models: [] }) })
+  Object.assign(t.api.cliworker, { catalogForCli })
+  await t.click('默认设置')
+  const general = t.r.root.findAllByType('button').find((b) => b.props['aria-label'] === 'CLI Worker 设置')!
+  expect(general.props['aria-pressed']).toBe(true)
+  expect(t.text()).toContain('适用于所有 CLI 与对话')
+  expect(catalogForCli).not.toHaveBeenCalled()
+  await t.click('Codex 设置')
+  expect(catalogForCli).toHaveBeenCalledWith('parent', 'codex', expect.anything())
+})
 
 it('keeps retired Harness history readable without offering resume or configuration', async () => {
   const legacy: Worker = {

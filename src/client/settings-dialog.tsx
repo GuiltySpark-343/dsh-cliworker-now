@@ -45,7 +45,8 @@ interface SettingsDialogProps {
   onClose: () => void
   api: API
   sessionId: string
-  initialCli: CliId
+  /** The CLI page to open; without one the dialog opens on 「CLI Worker 设置」. */
+  initialCli?: CliId
   openNativeSettings?: () => void
 }
 type Enabled = Record<CliId, boolean>
@@ -135,8 +136,10 @@ function OpenSettingsDialog({
 }: SettingsDialogProps & { fallbackSaves: SettingsPreferenceSaves }) {
   useT()
   const scrolling = useScrollingMark()
-  const [cli, setCli] = useState<CliId>(isRetiredCli(initialCli) ? 'hermes' : initialCli)
-  const [page, setPage] = useState<'cli' | 'roles' | 'general'>('cli')
+  const [cli, setCli] = useState<CliId>(
+    !initialCli ? 'antigravity' : isRetiredCli(initialCli) ? 'hermes' : initialCli,
+  )
+  const [page, setPage] = useState<'cli' | 'roles' | 'general'>(initialCli ? 'cli' : 'general')
   const [cliExpanded, setCliExpanded] = useState(true)
   const cliGroupId = useId()
   const [enabled, setEnabled] = useState<Enabled>()

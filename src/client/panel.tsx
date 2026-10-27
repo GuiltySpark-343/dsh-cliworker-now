@@ -149,7 +149,8 @@ function SessionPanel({
       managementAbort.current?.abort()
     }
   }, [])
-  const [settingsCli, setSettingsCli] = useState<CliId>('antigravity')
+  // A task's 「默认设置」 opens its CLI; the header button opens 「CLI Worker 设置」.
+  const [settingsCli, setSettingsCli] = useState<CliId>()
   const [settings, setSettings] = useState(false)
   const [renaming, setRenaming] = useState<{ worker: Worker; mode: 'name' | 'title' }>()
   const [restartFor, setRestartFor] = useState('')
@@ -553,7 +554,10 @@ function SessionPanel({
                 size="md"
                 className="cwn-settings-button"
                 aria-label={t('默认设置')}
-                onClick={() => setSettings(true)}
+                onClick={() => {
+                  setSettingsCli(undefined)
+                  setSettings(true)
+                }}
               >
                 <Glyph name="settings" />
               </Button>
