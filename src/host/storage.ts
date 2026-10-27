@@ -869,22 +869,26 @@ export class WorkerStorage {
     this.lastPrune = now
     const entries: { path: string; size: number; mtime: number; workerId: string; runId: string }[] = []
     for (const worker of this.workers.values()) {
-      const directory = this.layout.directoryFor(worker.project)
-      let names: string[]
-      try {
-        names = readdirSync(directory)
-      } catch {
-        continue
-      }
       const prefix = `${worker.id}.`
-      for (const name of names) {
-        if (!name.startsWith(prefix) || !name.endsWith('.raw.jsonl')) continue
-        const runId = name.slice(prefix.length, -'.raw.jsonl'.length)
+      // The project directory holds new runs; the global one still holds runs
+      // recorded before the split, and both must obey the same retention.
+      const directories = new Set([this.layout.directoryFor(worker.project), this.directory])
+      for (const directory of directories) {
+        let names: string[]
         try {
-          const info = statSync(join(directory, name))
-          entries.push({ path: join(directory, name), size: info.size, mtime: info.mtimeMs, workerId: worker.id, runId })
+          names = readdirSync(directory)
         } catch {
-          /* A concurrent cleanup already removed it. */
+          continue
+        }
+        for (const name of names) {
+          if (!name.startsWith(prefix) || !name.endsWith('.raw.jsonl')) continue
+          const runId = name.slice(prefix.length, -'.raw.jsonl'.length)
+          try {
+            const info = statSync(join(directory, name))
+            entries.push({ path: join(directory, name), size: info.size, mtime: info.mtimeMs, workerId: worker.id, runId })
+          } catch {
+            /* A concurrent cleanup already removed it. */
+          }
         }
       }
     }
