@@ -854,22 +854,22 @@ it('keeps search and status controls outside the card scroller and restores its 
   expect(t.overviewFocus).toHaveBeenCalledWith({ preventScroll: true })
 })
 
-it('toggles the accessible trash entry without changing search or any of the four status filters', async () => {
+it('toggles the accessible trash entry without changing search or any of the five views', async () => {
   const t = await setup(false)
   const search = () => t.r.root.findByProps({ 'aria-label': '筛选子 Agent' })
   await act(async () => search().props.onChange({ target: { value: 'Worker a' } }))
   await t.click('已完成')
   const filters = () => t.r.root.findByProps({ 'aria-label': '任务状态筛选' }).findAllByType('button')
   const selection = () => filters().map((button) => button.props['aria-pressed'])
-  expect(selection()).toEqual([false, false, true, false])
+  expect(selection()).toEqual([false, false, true, false, false])
   await t.click('已删除')
   expect(t.r.root.findByProps({ 'aria-label': '返回列表' }).props['aria-pressed']).toBe(true)
-  expect(selection()).toEqual([false, false, false, false])
+  expect(selection()).toEqual([false, false, false, false, false])
   expect(search().props.value).toBe('Worker a')
   expect(t.text()).toContain('没有已删除的对话')
   expect(t.text()).not.toContain('把想做的事')
   await t.click('返回列表')
-  expect(selection()).toEqual([false, false, true, false])
+  expect(selection()).toEqual([false, false, true, false, false])
   expect(search().props.value).toBe('Worker a')
   expect(t.r.root.findAllByProps({ 'data-open-worker-id': 'a' })).toHaveLength(1)
   expect(t.r.root.findAllByProps({ 'data-open-worker-id': 'b' })).toHaveLength(0)
@@ -1676,7 +1676,7 @@ it('copies a card name independently and reports actual clipboard failure', asyn
   expect(t.r.root.findAllByType('textarea')).toHaveLength(0)
 })
 
-it('deletes only the chosen card, retains four main filters and restores from the persistent deleted view', async () => {
+it('deletes only the chosen card, retains five views and restores from the persistent deleted view', async () => {
   const t = await setup(false)
   await act(async () =>
     t.r.root
@@ -1690,7 +1690,7 @@ it('deletes only the chosen card, retains four main filters and restores from th
   await act(async () =>
     t.streams.at(-1)!.push({ ...t.snapshot(), workers: [workers[1]!], archivedWorkers: [archived] }),
   )
-  expect(t.r.root.findByProps({ 'aria-label': '任务状态筛选' }).findAllByType('button')).toHaveLength(4)
+  expect(t.r.root.findByProps({ 'aria-label': '任务状态筛选' }).findAllByType('button')).toHaveLength(5)
   expect(t.r.root.findByProps({ 'aria-label': '已删除对话' }).findAllByType('article')).toHaveLength(1)
   await t.click('恢复对话 Worker a')
   expect(vi.mocked(t.api.cliworker.restoreWorker).mock.calls[0]!.slice(0, 2)).toEqual(['parent', 'a'])
