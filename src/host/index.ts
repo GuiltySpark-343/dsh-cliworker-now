@@ -428,7 +428,6 @@ export class CliWorkerService extends TypertRemoteService {
         },
       })
       this.harnessConversation = bridge
-      this.releaseArchivedHarnessSessions()
       const removeModelGuard = installHarnessModelGuard(scope)
       const removePreparation = this.runtime.setHarnessPreparation(async (worker, signal, input) => {
         const parent = await this.parent(worker.parentSessionId)
@@ -1980,51 +1979,10 @@ export class CliWorkerService extends TypertRemoteService {
     try {
       await this.parent(parentSessionId)
       signal.throwIfAborted()
-      await this.releaseDeletedHarnessSession(parentSessionId, workerId)
-      signal.throwIfAborted()
       this.runtime.deleteWorker(parentSessionId, workerId)
     } catch (error) {
       throw failure(error)
     }
-  }
-  /**
-   * Local patch: a deleted Worker must stop counting as a DSH subagent. Release its
-   * display child session first; a failed release never blocks the deletion itself.
-   */
-  private async releaseDeletedHarnessSession(parentSessionId: string, workerId: string): Promise<void> {
-    const bridge = this.harnessConversation
-    if (!bridge) return
-    const worker = this.runtime.storage.workers.get(workerId)
-    if (!worker || worker.parentSessionId !== parentSessionId || !worker.harnessConversation) return
-    try {
-      const outcome = await bridge.release(worker)
-      if (outcome !== 'released') return
-      delete worker.harnessConversation
-      this.runtime.storage.save(worker)
-    } catch (error) {
-      this.ctx.logger?.warn?.(`释放 CLI 子会话失败：${String(error)}`)
-    }
-  }
-  /**
-   * Local patch: Workers deleted before this rule existed still hold a child session.
-   * Release them once after the bridge is ready so the session stops listing them.
-   */
-  private releaseArchivedHarnessSessions(): void {
-    const bridge = this.harnessConversation
-    if (!bridge) return
-    void (async () => {
-      for (const worker of [...this.runtime.storage.workers.values()]) {
-        if (!worker.archivedAt || !worker.harnessConversation) continue
-        try {
-          const outcome = await bridge.release(worker)
-          if (outcome !== 'released') continue
-          delete worker.harnessConversation
-          this.runtime.storage.save(worker)
-        } catch {
-          /* 单个历史会话释放失败不影响其他记录。 */
-        }
-      }
-    })()
   }
   /** @param parentSessionId - Owning parent. @param workerId - Deleted Worker identity. @param signal - Mutation lifetime. @returns Completion with the original ID and history. */
   @Remote('restoreWorker')
