@@ -16,9 +16,13 @@ import {
  * ignored when matching, since a TUI may draw spaces as cursor moves.
  * `signedOut` is drawn before every sign-in check, also for a signed-in
  * account, so only the login method menu proves a signed-out start.
+ * `scheme` and `terms` are agy's first-run setup screens, a color scheme picker and
+ * then a consent checkbox (seen on Windows 2026-10-27).
  */
 const MARKERS = {
   trust: 'Do you trust the contents of this project?',
+  scheme: 'Choose your color scheme',
+  terms: 'Terms of Service & Data Use',
   signedOut: 'You are currently not signed in.',
   method: 'Select login method',
   code: 'paste the authorization code',
@@ -30,6 +34,14 @@ const login = { plan: PLAN } as const
 
 export const AGY_GUIDES = {
   trust: { step: 'trust', tone: 'action', template: 'trust', ...login, stage: 0, text: 'Antigravity 首次在此项目文件夹运行，需要你确认是否信任该文件夹。' },
+  setup: {
+    step: 'setup',
+    tone: 'action',
+    template: 'native',
+    ...login,
+    stage: 0,
+    text: 'Antigravity 首次运行，需要你在下方原生终端中完成初始设置（配色、服务条款与数据使用选项），插件不会替你选择。每步按回车确认后插件会继续。',
+  },
   method: {
     step: 'method',
     tone: 'action',
@@ -81,6 +93,8 @@ const googleSignIn = (value: string): string | undefined => {
     return undefined
   }
 }
+/** Questions only the user answers; the guide waits for their Enter before reading on. */
+const GATES = new Set(['trust', 'setup'])
 const PATTERNS = Object.fromEntries(
   Object.entries(MARKERS).map(([key, value]) => [key, compact(value)]),
 ) as Record<keyof typeof MARKERS, string>
@@ -96,7 +110,8 @@ export class AgyAccountGuide implements AccountGuideDriver {
   private commandSent = false
   private identifying = false
   private afterCommand = ''
-  private trustAnswered = false
+  /** The trust or setup question on screen was answered with Enter; judge what agy draws next. */
+  private gateAnswered = false
 
   constructor(private readonly action: AccountAction) {}
 
@@ -110,9 +125,10 @@ export class AgyAccountGuide implements AccountGuideDriver {
         this.afterCommand = (this.afterCommand + compact(text.replace(CONTROL, ''))).slice(-SCREEN_LIMIT)
         return []
       }
-      // After the user answers the folder trust question, the main screen follows.
-      if (this.step && (this.step !== 'trust' || !this.trustAnswered)) return []
-      if (seen('trust') && !this.step) return this.show(AGY_GUIDES.trust)
+      // After the user answers the trust or setup question, the main screen follows.
+      if (this.waiting()) return []
+      const gate = this.gate(seen)
+      if (gate) return gate
       if (seen('method')) return this.show(AGY_GUIDES.notSignedIn)
       if (!seen('ready')) return []
       this.commandSent = true
@@ -121,8 +137,11 @@ export class AgyAccountGuide implements AccountGuideDriver {
     // Login steps only move forward; a redraw of an earlier screen is ignored.
     if (seen('code') && this.order('code')) return this.show(AGY_GUIDES.code)
     if (seen('method') && this.order('method')) return this.show(AGY_GUIDES.method)
-    if (seen('trust') && !this.step) return this.show(AGY_GUIDES.trust)
-    if (seen('ready') && !seen('method') && (!this.step || this.step === 'trust'))
+    if (!this.waiting() && (!this.step || GATES.has(this.step))) {
+      const gate = this.gate(seen)
+      if (gate) return gate
+    }
+    if (seen('ready') && !seen('method') && (!this.step || GATES.has(this.step)))
       return this.show(AGY_GUIDES.alreadySignedIn)
     // A sign-in address drawn after the code prompt still reaches the open step.
     if (linked && this.step === 'code') return [{ guide: this.withLink(AGY_GUIDES.code) }]
@@ -134,10 +153,10 @@ export class AgyAccountGuide implements AccountGuideDriver {
    * native account. The main screen's exact text is not relied on alone.
    */
   settled(): AgyGuideEvent[] {
-    if (this.action === 'manage' || (this.step && (this.step !== 'trust' || !this.trustAnswered)) || this.commandSent || this.identifying || !this.screen)
+    if (this.action === 'manage' || this.waiting() || this.commandSent || this.identifying || !this.screen)
       return []
     const seen = (marker: keyof typeof MARKERS) => this.screen.includes(PATTERNS[marker])
-    if (seen('trust') || seen('method') || seen('code')) return []
+    if (seen('trust') || seen('scheme') || seen('terms') || seen('method') || seen('code')) return []
     this.identifying = true
     return [{ identify: true }]
   }
@@ -151,7 +170,7 @@ export class AgyAccountGuide implements AccountGuideDriver {
   identified(evidence: AccountEvidence | string | undefined): AgyGuideEvent[] {
     const state = typeof evidence === 'string' ? evidence : evidence?.state
     this.identifying = false
-    if ((this.step && (this.step !== 'trust' || !this.trustAnswered)) || this.commandSent) return []
+    if (this.waiting() || this.commandSent) return []
     if (state === 'authenticated') {
       if (this.action === 'login') return this.show(AGY_GUIDES.alreadySignedIn)
       this.commandSent = true
@@ -162,10 +181,10 @@ export class AgyAccountGuide implements AccountGuideDriver {
   }
 
   input(data: string): AgyGuideEvent[] {
-    // The trust question is answered: judge only what agy draws next.
-    if (this.step === 'trust' && /[\r\n]/.test(data)) {
+    // The trust or setup question is answered: judge only what agy draws next.
+    if (this.step && GATES.has(this.step) && /[\r\n]/.test(data)) {
       this.screen = ''
-      this.trustAnswered = true
+      this.gateAnswered = true
     }
     if (this.action !== 'login' || (this.step !== 'code' && this.step !== 'pasted')) return []
     const enter = /[\r\n]/.test(data)
@@ -189,10 +208,10 @@ export class AgyAccountGuide implements AccountGuideDriver {
   /** An answer from the plugin window, turned into the keys agy expects. */
   respond(response: AccountResponse): AgyGuideEvent[] {
     if (this.action === 'manage') throw new GuideResponseError()
-    if ('confirm' in response && this.step === 'trust' && !this.trustAnswered) {
+    if ('confirm' in response && this.step === 'trust' && !this.gateAnswered) {
       if (response.confirm === 'decline') return [{ finish: true }]
       this.screen = ''
-      this.trustAnswered = true
+      this.gateAnswered = true
       return [{ write: '\r' }]
     }
     if (this.action !== 'login') throw new GuideResponseError()
@@ -224,6 +243,19 @@ export class AgyAccountGuide implements AccountGuideDriver {
 
   proves(change: AccountChange, _before: AccountEvidence | undefined, after: AccountEvidence | undefined): boolean {
     return change === 'login' ? after?.state === 'authenticated' : after?.state === 'unconfigured'
+  }
+
+  /** A step other than an answered trust or setup question is on screen: wait for it. */
+  private waiting(): boolean {
+    return !!this.step && (!GATES.has(this.step) || !this.gateAnswered)
+  }
+
+  /** The user's own question on screen, shown before anything is typed; the plugin never answers setup. */
+  private gate(seen: (marker: keyof typeof MARKERS) => boolean): AgyGuideEvent[] | undefined {
+    const guide = seen('scheme') || seen('terms') ? AGY_GUIDES.setup : seen('trust') ? AGY_GUIDES.trust : undefined
+    if (!guide) return undefined
+    this.gateAnswered = false
+    return this.show(guide)
   }
 
   private order(step: 'method' | 'code') {

@@ -168,3 +168,46 @@ it('continues an automatic sign-out only after the user answers the folder trust
   expect(settling.settled()).toEqual([{ identify: true }])
   expect(settling.identified('authenticated')).toContainEqual({ command: '/logout' })
 })
+
+// Synthetic first-run setup screens of agy on Windows (2026-10-27): a color scheme picker, then a consent checkbox.
+const SCHEME =
+  '\x1b[2J\x1b[1;1HWelcome to Antigravity CLI!\r\n\nChoose your color\x1b[1Cscheme:\r\n  > terminal\r\n    light\r\n[Next]\r\n  \u2191/\u2193 Navigate \u00b7 enter Confirm'
+const TERMS =
+  '\x1b[2J\x1b[1;1HTerms of Service\x1b[1C& Data Use\r\nAI coding agents are known to have certain security risks.\r\n> [ ] Yes, I agree to help improve Antigravity CLI\r\n'
+
+it('never types into the first-run setup screens and continues the sign-out after the user answers them', () => {
+  const scheme = new AgyAccountGuide('logout')
+  expect(scheme.output(SCHEME)).toEqual([{ guide: AGY_GUIDES.setup }])
+  expect(scheme.settled()).toEqual([])
+  expect(scheme.identified('authenticated')).toEqual([])
+  expect(scheme.input('\r')).toEqual([])
+  expect(scheme.output(TERMS)).toEqual([{ guide: AGY_GUIDES.setup }])
+  expect(scheme.output(READY)).toEqual([])
+  scheme.input('\r')
+  expect(scheme.output(READY)).toEqual([{ guide: AGY_GUIDES.loggingOut }, { command: '/logout' }])
+  const guide = new AgyAccountGuide('logout')
+  expect(guide.output(TERMS)).toEqual([{ guide: AGY_GUIDES.setup }])
+  expect(AGY_GUIDES.setup.template).toBe('native')
+  // A quiet terms screen is the user's to answer, never a signed-in main screen.
+  expect(guide.settled()).toEqual([])
+  expect(guide.identified('authenticated')).toEqual([])
+  expect(guide.output(READY)).toEqual([])
+  // Space toggles the box without answering; Enter answers it.
+  expect(guide.input(' ')).toEqual([])
+  expect(guide.output(TERMS)).toEqual([])
+  expect(guide.input('\r')).toEqual([])
+  expect(guide.output(READY)).toEqual([{ guide: AGY_GUIDES.loggingOut }, { command: '/logout' }])
+})
+
+it('shows the folder trust question that follows the terms screen, and the terms before a sign-in', () => {
+  const logout = new AgyAccountGuide('logout')
+  logout.output(TERMS)
+  logout.input('\r')
+  expect(logout.output(TRUST)).toEqual([{ guide: AGY_GUIDES.trust }])
+  expect(logout.respond({ confirm: 'trust' })).toEqual([{ write: '\r' }])
+  expect(logout.output(READY)).toContainEqual({ command: '/logout' })
+  const login = new AgyAccountGuide('login')
+  expect(steps(login.output(TERMS))).toEqual(['setup'])
+  login.input('\r')
+  expect(steps(login.output(SIGNED_OUT + METHOD))).toEqual(['method'])
+})

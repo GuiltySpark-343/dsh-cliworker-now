@@ -804,6 +804,7 @@ export const en = {
   '隐藏原生终端': 'Hide native terminal',
   '需要时可在设置中重新登录。': 'You can sign in again from settings when needed.',
   'Antigravity 首次在此项目文件夹运行，需要你确认是否信任该文件夹。': 'Antigravity is running in this project folder for the first time and needs you to confirm whether to trust it.',
+  'Antigravity 首次运行，需要你在下方原生终端中完成初始设置（配色、服务条款与数据使用选项），插件不会替你选择。每步按回车确认后插件会继续。': 'Antigravity is running for the first time and needs you to finish its setup (color scheme, Terms of Service and data use options) in the native terminal below; the plugin never chooses for you. Press Enter to confirm each step and the plugin continues.',
   'Antigravity 首次在此项目文件夹运行，需要你确认是否信任该文件夹，确认后插件会自动退出登录。': 'Antigravity is running in this project folder for the first time and needs you to confirm whether to trust it. After you confirm, the plugin signs out automatically.',
   '确认登录': 'Confirm sign-in',
   '粘贴授权码（如页面显示）': 'Paste the authorization code (if shown)',

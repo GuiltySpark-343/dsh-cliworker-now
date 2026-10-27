@@ -2868,3 +2868,15 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
   - 收尾门禁 activeWorkers、账号 scope、owner、原生认证、观察器及本次计划任务均为 0。
   - 0 次模型调用、0 次登录或退出、0 次偏好修改。
 - 未验证：真实模型调用、真实中转端点，以及各 CLI 的实际登录、退出和切换账号（Windows 只打开了只读页面）；Windows 隔离 HOME/TEMP 全量失败的根因。
+
+## 2026-10-27 Windows 账号退出卡住修复（v0.8.4 发布前）
+
+- 用户反馈：Windows 上多个 CLI 的「退出」窗口卡住。用户授权后，用 Antigravity 做了一次真实退出复现。窗口停在「正在启动」约 13 秒，转入「正在退出」，最后报「未能确认已退出」；账号仍是已登录。
+- 根因一，Antigravity：Windows 上的 agy 首次打开终端时会进入初始设置，先选配色（Choose your color scheme），再勾选服务条款与数据使用。插件不认识这两屏，等屏幕静止后读到账号已登录，就输入了 `/logout` 和回车。这次回车只把向导推进到服务条款页，退出没有发生。修复：把配色与服务条款两屏连同已有的文件夹信任，作为只能由用户回答的步骤。窗口提示用户在原生终端里完成初始设置，并自动展开原生终端；插件不替用户选择，等用户回车后再继续退出。登录流程同样适用。
+- 根因二，Node 包装入口：Codex 的 npm `codex.js` 等 Node 包装脚本以 `stdio: 'inherit'` 启动原生程序。Electron 运行时下 fd 0 是 NUL，原生程序因此报 `stdin is not a terminal`：Codex 账号终端直接以退出码 1 结束，交互输入也无法送达。修复：在账号终端专用的 `windows-account-stdio.mjs` 中，把 `spawn`/`spawnSync` 继承来的 stdin 换成已重新打开的控制台输入（`CONIN$`）。任务进程与共享 Host 不受影响。
+- Windows 实测（x64，DSH Desktop，正常退出 Harness 后用原生安装器安装修复后的隔离包，702 个 lib 文件逐一匹配）：
+  - SSH 伪终端下，修复前包装脚本启动的子进程 `IsInputRedirected=True`，修复后为 `False`。
+  - Codex「账号终端」修复前报 `stdin is not a terminal`（退出码 1），修复后正常显示 Codex 主界面；未输入任何内容即关闭。
+  - Antigravity「退出」修复后约 6 秒停在初始设置提示，原生终端自动展开，插件没有输入任何按键。之后的设置与退出需由用户完成，结果待补。
+- macOS：`typecheck` 通过；全量 `pnpm test` 234 文件通过、3 跳过；4699 通过、0 失败、13 跳过。
+- 未验证：Codex、ZCode 等其他 CLI 在 Windows 上的真实退出（本次只授权了 Antigravity）。Qoder 的 `/logout` 同样依赖屏幕静止后输入，Windows 首次运行屏未实测。
