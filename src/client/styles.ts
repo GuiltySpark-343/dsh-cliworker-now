@@ -213,7 +213,7 @@ export const settingsStyles = `
 .cwn-cli-identity,.cwn-settings-cli-name,.cwn-cli-toggle,.cwn-settings-section-tools{display:flex;align-items:center;gap:10px}
 .cwn-cli-identity{justify-content:space-between;min-height:60px;padding:4px 0 0}
 .cwn-settings-cli-name{gap:14px}.cwn-settings-cli-name h2{margin:0;font-size:24px;line-height:32px;font-weight:600;letter-spacing:-.02em}.cwn-cli-subtitle{margin:4px 0 0;font-size:var(--dsw-font-xxs-12-font-size);line-height:18px;color:var(--dsw-alias-label-tertiary)}
-.cwn-cli-toggle-status{height:20px;overflow:auto;margin:4px 0 4px;font-size:var(--dsw-font-xxs-12-font-size);line-height:18px;color:var(--dsw-alias-label-tertiary)}
+.cwn-cli-identity+.cwn-settings-section{margin-top:28px}.cwn-cli-toggle-status{height:20px;overflow:auto;margin:4px 0 4px;font-size:var(--dsw-font-xxs-12-font-size);line-height:18px;color:var(--dsw-alias-label-tertiary)}
 .cwn-section-progress{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;flex:none}
 .cwn-settings-section{min-width:0}.cwn-settings-section+.cwn-settings-section{margin-top:0;padding-top:var(--cwn-settings-row-padding);border-top:var(--cwn-settings-border)}
 .cwn-settings-section-head,.cwn-account-terminal-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.cwn-settings-section-head{margin-bottom:var(--cwn-settings-header-gap);min-height:var(--cwn-settings-control-height)}
