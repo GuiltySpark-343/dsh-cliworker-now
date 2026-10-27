@@ -879,10 +879,20 @@ export const en = {
   '打开登录页面并授权。如果页面显示授权码，或浏览器未自动完成登录，请将授权码或最终重定向地址粘贴到下方。': 'Open the sign-in page and authorize. If the page shows a code, or the browser does not finish the sign-in, paste the code or the final redirect address below.',
   '打开验证页面，输入下方设备码并完成授权。只使用你自己发起登录时显示的设备码。': 'Open the verification page, enter the device code below and authorize. Only use a code from a sign-in you started yourself.',
   '粘贴此服务商的 API Key。提交后将由 Pi 保存，请勿分享原生终端中的密钥回显。': "Paste this provider's API key. Pi saves it after you submit; do not share the key echoed in the native terminal.",
-  '来自环境变量或配置文件，请在原配置中管理': 'From an environment variable or config file; manage it there',
+  '{cli} 原生目录': '{cli} native folder',
+  '直接运行 {cli} 时也会使用': 'Also used when you run {cli} directly',
+  '只在 CLI Worker 中使用': 'Used only by CLI Worker',
+  '来自环境变量或配置文件': 'From environment variables or config files',
+  '在原配置中管理': 'Manage in the original config',
+  '账号登录': 'Account sign-in',
+  '在本窗口中完成授权或填写 API Key，原生终端在后台运行。': 'Finish authorizing or enter the API key in this window; the native terminal runs in the background.',
+  '替换 {account}': 'Replace {account}',
+  '其他服务商': 'Other provider',
+  '在原生终端中选择': 'Choose in the native terminal',
+  '选择要登录的服务商': 'Choose a provider to sign in to',
   '其他配置': 'Other configuration',
-  'CLI 全局账号': 'CLI global accounts',
-  '插件账号': 'Plugin accounts',
+  '原生目录': 'Native folder',
+  '插件目录': 'Plugin folder',
   // @end
 } as const satisfies Record<string, string>
 

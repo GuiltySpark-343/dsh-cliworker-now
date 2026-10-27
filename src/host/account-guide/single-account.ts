@@ -182,5 +182,28 @@ export const MIMO_FLOW: FlowDefinition = {
       },
     ],
   },
-  logout: { steps: [notSignedIn('MiMo', 'notSignedIn', ['No credentials found'])] },
+  logout: {
+    steps: [
+      notSignedIn('MiMo', 'notSignedIn', ['No credentials found']),
+      {
+        // `mimo auth logout` takes no provider: it lists every credential, the first highlighted.
+        id: 'provider',
+        when: ['Remove credential', 'Select provider'],
+        guide: () => guideTexts('MiMo').loggingOut,
+        pick: (lines) => mimoLogoutRow(lines),
+      },
+      { id: 'removed', when: ['Logout successful'], guide: () => guideTexts('MiMo').loggingOut, confirms: 'logout' },
+    ],
+  },
+}
+
+/** The provider MiMo's own login stores (`auth.json` key `xiaomi`), listed as "Xiaomi (api)". */
+const MIMO_ROW = 'Xiaomi'
+/** The highlighted row (●) of MiMo 0.1.15's "Remove credential" list, once drawn in full. */
+export function mimoLogoutRow(lines: string[]): { row: string; target: boolean } | undefined {
+  for (let at = lines.length - 1; at >= 0; at--) {
+    const found = /●\s+(\S.*?)\s+\((\w+)\)/.exec(lines[at]!)
+    if (found) return { row: `${found[1]} (${found[2]})`, target: found[1] === MIMO_ROW }
+  }
+  return undefined
 }

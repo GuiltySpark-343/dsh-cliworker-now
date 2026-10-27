@@ -74,8 +74,8 @@ it.each(['pi', 'omp'] as const)(
     expect(
       await listPiOmpAccountSources(cli, f.input.stateDirectory, signal(), { nativeHome: f.root }),
     ).toEqual([
-      { id: 'native', label: 'CLI 全局账号' },
-      { id: 'plugin', label: '插件账号' },
+      { id: 'native', label: '原生目录' },
+      { id: 'plugin', label: '插件目录' },
     ])
     await expect(preparePiOmpAccountTerminal(f.input)).rejects.toThrow('请选择')
     expect(existsSync(join(f.input.stateDirectory, 'account-runtime'))).toBe(false)
@@ -217,7 +217,7 @@ it('Hermes logout retains the current global source and never creates a plugin m
   await writeFile(join(home, 'config.yaml'), 'auth:\n  adopt_external_logins: false\n')
   await writeFile(join(home, '.env'), 'OPENAI_API_KEY=synthetic-test-api\n')
   const config = { ...DEFAULT_CONFIG, stateDirectory: f.input.stateDirectory, hermesHome: home }
-  expect(await listHermesAccountSources(config, signal())).toEqual([{ id: 'native', label: 'CLI 全局账号' }])
+  expect(await listHermesAccountSources(config, signal())).toEqual([{ id: 'native', label: '原生目录' }])
   await expect(
     prepareHermesAccount(
       'logout',

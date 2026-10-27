@@ -17,6 +17,7 @@
 - [x] 2.1 单账号：Codex、Claude Code、Qoder/Qoder CN、MiMo、Grok —— 登录模板、自动退出、切换账号。
 - [x] 2.2 ZCode：「登录到」BigModel / Z.AI，账号窗口中两家合为一行一起退出。OpenCode：「登录到」常用服务商（API Key），每个服务商单独退出。
 - [x] 2.3 Hermes：「登录到」API Key 服务商，同服务商「添加另一个凭据 / 替换」（先确认新凭据再移除旧凭据），每条凭据单独退出。
+- [x] 2.5 2026-10-27 用户反馈修正：OMP 停用行归属统一（修复模型目录读取失败与已失效 xai 显示）；OMP/Pi OAuth 行显示可安全显示的邮箱；MiMo 退出选中 Xiaomi 行；`pick` 静止后转原生；账号窗口改卡片、位置组名改为「<CLI> 原生目录 / 插件目录」并加说明；「登录到」页收紧留白、改为卡片面板 + 右对齐操作。
 - [x] 2.4 Kimi、Pi、OMP：「登录到」下拉框（Kimi 按区域、Pi 16 家、OMP 10 项）与逐条退出（Kimi `provider remove` / `/logout` 中的 Kimi Code 行，Pi 单服务商退出，OMP `/logout` 按凭据编号选中）；OMP 同服务商添加/替换；Pi/OMP 账号行按原生目录 / 插件目录分组；授权后不退出的 Pi/OMP 在后台核对最长 15 分钟。
 
 ## 3. 自动检查

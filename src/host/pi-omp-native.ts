@@ -5,7 +5,7 @@ import { dirname, join, resolve, sep, parse, relative, toNamespacedPath } from '
 import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { parse as parseYaml } from 'yaml'
-import type { AccountIdentity } from './account-identity.ts'
+import { accountEmail, type AccountIdentity } from './account-identity.ts'
 import { authenticatedAccountLogins, providerLogin, usableNativeApiKey } from './account-login.ts'
 import type { AccountLogin, AccountSource } from '../shared/accounts.ts'
 import type { PiOmpCli } from './pi-omp-adapter.ts'
@@ -386,7 +386,7 @@ export async function readPiOmpLogoutSources(
           })
       result.push({
         id: (index === 0 ? 'native' : 'plugin') as AccountSource,
-        label: index === 0 ? 'CLI 全局账号' : '插件账号',
+        label: index === 0 ? '原生目录' : '插件目录',
         directory: source.sourceId,
         env: source.env,
         config: source.config ?? {},
@@ -411,28 +411,26 @@ export async function listPiOmpAccountSources(
 }
 /** The `disabled_cause` OMP's /logout writes when it soft-deletes a credential (OMP 16.4.4). */
 const OMP_SIGNED_OUT = 'deleted by user'
+/**
+ * A row the user signed out is gone; every other row, usable or disabled (e.g. a failed
+ * refresh), still owns its provider and shadows earlier locations. Listing, snapshots and
+ * the shared refresh store must all agree on this.
+ */
+const ownsProvider = (row: { disabled_cause?: unknown }) => row.disabled_cause !== OMP_SIGNED_OUT
 function mergeSources(sources: NativeSource[]) {
   const auth = Object.assign(Object.create(null), ...sources.map((s) => s.auth))
   const providers = Object.assign(Object.create(null), ...sources.map((s) => s.models.providers ?? {}))
   const env = Object.assign(Object.create(null), ...sources.map((s) => s.env)) as Record<string, string>
   const credentialProviders = new Map<string, any[]>()
-  const disabledOnly = new Map<string, any[]>()
   const cache = new Map<string, any>()
   for (const s of sources) {
-    // OMP signs a credential out by disabling its row: only usable rows override another location.
-    for (const provider of new Set(s.credentials.filter((row) => !row.disabled_cause).map((row) => row.provider)))
+    for (const provider of new Set(s.credentials.filter(ownsProvider).map((row) => row.provider)))
       credentialProviders.set(
         provider,
         s.credentials.filter((row) => row.provider === provider),
       )
     for (const row of s.modelCache) cache.set(row.provider_id, row)
   }
-  // A provider left with only disabled rows still shows them as expired, except rows the user signed out.
-  for (const s of sources)
-    for (const row of s.credentials)
-      if (!credentialProviders.has(row.provider) && row.disabled_cause !== OMP_SIGNED_OUT)
-        disabledOnly.set(row.provider, [...(disabledOnly.get(row.provider) ?? []), row])
-  for (const [provider, rows] of disabledOnly) credentialProviders.set(provider, rows)
   const kinds = new Set<string>()
   let expired = false
   for (const entry of Object.values(auth) as Record<string, any>[]) {
@@ -486,7 +484,7 @@ async function sharedOAuthStore(cli: PiOmpCli, sources: NativeSource[], options:
   for (const source of sources)
     for (const provider of cli === 'pi'
       ? Object.keys(source.auth)
-      : new Set(source.credentials.map((row) => row.provider)))
+      : new Set(source.credentials.filter(ownsProvider).map((row) => row.provider)))
       owners.set(provider, source)
   const credentials =
     cli === 'pi'
@@ -607,7 +605,7 @@ export async function snapshotPiOmpNative(
         const credentialOwners = new Map<string, NativeSource>()
         for (const source of sources) {
           for (const provider of Object.keys(source.auth)) authOwners.set(provider, source)
-          for (const row of source.credentials) if (!row.disabled_cause) credentialOwners.set(row.provider, source)
+          for (const row of source.credentials) if (ownsProvider(row)) credentialOwners.set(row.provider, source)
         }
         sources = sources.map((source) => ({
           ...source,
@@ -743,7 +741,7 @@ export async function snapshotPiOmpNative(
       ].includes(error.message)
     )
       throw error
-    throw new Error('无法安全读取 Pi/OMP 原生账号或模型配置，请在账号终端检查')
+    throw new Error('无法安全读取 Pi/OMP 原生账号或模型配置，请在账号终端检查', { cause: error })
   }
 }
 export async function inspectPiOmpNativeAccount(
@@ -767,12 +765,17 @@ export async function inspectPiOmpNativeAccount(
           : value
       /** A stored credential: `pi:<provider>:<source>`, `omp:<provider>:<source>.<row id>`. */
       type Stored = { source: AccountSource; entry: string }
-      const add = (provider: string, method: 'api' | 'oauth', stored?: Stored) => {
+      const add = (provider: string, method: 'api' | 'oauth', stored?: Stored, email?: unknown) => {
         const config = providers[provider]
-        const login = providerLogin(provider, method, {
-          baseUrl: ownValue(config?.baseUrl, true),
-          name: config?.name,
-        })
+        const accountLabel = accountEmail(email)
+        const login = {
+          ...providerLogin(provider, method, {
+            baseUrl: ownValue(config?.baseUrl, true),
+            name: config?.name,
+          }),
+          // Two logins of one provider are told apart by the account each belongs to.
+          ...(accountLabel ? { accountLabel } : {}),
+        }
         const id = stored && accountLoginId(cli, provider, stored.entry)
         logins.push(stored ? { ...login, ...(id ? { id } : {}), source: stored.source } : login)
       }
@@ -791,7 +794,7 @@ export async function inspectPiOmpNativeAccount(
           usableNativeApiKey(value.access) &&
           (value.expires >= Date.now() || usableNativeApiKey(value.refresh))
         )
-          add(provider, 'oauth', stored)
+          add(provider, 'oauth', stored, value.email)
         else invalidOAuth = true
       }
       // The credentials workers use: a later location overrides a provider of an earlier one.
@@ -803,7 +806,7 @@ export async function inspectPiOmpNativeAccount(
           if (!later(index, (next) => Object.hasOwn(next.auth, provider)))
             inspect(provider, value.type, value, undefined, { source, entry: source })
         for (const row of item.credentials)
-          if (!later(index, (next) => next.credentials.some((other) => other.provider === row.provider && !other.disabled_cause)))
+          if (!later(index, (next) => next.credentials.some((other) => other.provider === row.provider && ownsProvider(other))))
             inspect(row.provider, row.credential_type, JSON.parse(row.data), row.disabled_cause, {
               source,
               entry: `${source}.${row.native_rowid}`,

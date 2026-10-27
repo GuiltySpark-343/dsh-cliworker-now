@@ -69,6 +69,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   IconChevronDownOutlineRegular: () => createElement('svg'),
   IconLinkOutlineRegular: () => createElement('svg'),
   IconRefreshOutlineRegular: () => createElement('svg'),
+  IconPlusOutlineRegular: () => createElement('svg'),
   IconUserOutlineRegular: () => createElement('svg'),
   Menu: ({ anchor, open, items = [], onSelect }: any) =>
     createElement(
@@ -715,8 +716,8 @@ const scopedLogoutActions: AccountStatus['actions'] = [
     label: '退出登录',
     description: '模拟：只退出所选原生来源',
     sources: [
-      { id: 'native', label: 'CLI 全局账号' },
-      { id: 'plugin', label: '插件账号' },
+      { id: 'native', label: '原生目录' },
+      { id: 'plugin', label: '插件目录' },
     ],
   },
 ]
@@ -750,7 +751,6 @@ it.each([
     await t.click('添加账号')
     expect(t.button('其他服务商（在原生终端中选择）')).toBeUndefined()
     if (provider === 'zai') {
-      await t.click('登录到')
       await t.click(label)
     }
     expect(terminal.started).not.toHaveBeenCalled()
@@ -793,7 +793,7 @@ it.each(['native', 'plugin'] as const)(
     await t.click('退出登录')
     expect(t.r.root.findByProps({ 'aria-label': '选择退出账号来源' })).toBeDefined()
     expect(terminal.started).not.toHaveBeenCalled()
-    await t.click(source === 'native' ? 'CLI 全局账号' : '插件账号')
+    await t.click(source === 'native' ? '原生目录' : '插件目录')
     expect(terminal.started).toHaveBeenCalledExactlyOnceWith('antigravity', 'logout', source)
     expect(t.configure).not.toHaveBeenCalled()
   },
@@ -1708,9 +1708,10 @@ it('groups Pi logins by location, signs out each one where it is stored and leav
   await t.click('账号')
   const text = t.text()
   // Native location first, then the plugin's own, then keys from env or config files.
-  expect(text.indexOf('CLI 全局账号')).toBeLessThan(text.indexOf('插件账号'))
-  expect(text.indexOf('插件账号')).toBeLessThan(text.indexOf('其他配置'))
-  expect(text).toContain('来自环境变量或配置文件，请在原配置中管理')
+  expect(text.indexOf('原生目录')).toBeLessThan(text.indexOf('插件目录'))
+  expect(text.indexOf('插件目录')).toBeLessThan(text.indexOf('其他配置'))
+  expect(text).toContain('直接运行 Pi 时也会使用')
+  expect(text).toContain('在原配置中管理')
   const signOuts = t.r.root.findAllByType('button').filter((b) => b.children.includes('退出'))
   expect(signOuts).toHaveLength(2)
   // The second row is the plugin's DeepSeek key.
@@ -2802,13 +2803,13 @@ it('signs out one OpenCode provider only after its own inline confirmation', asy
   await t.click('账号')
   expect(t.text()).toContain('DeepSeek API 登录')
   expect(t.text()).toContain('OpenRouter API 登录')
-  const first = t.r.root.findAllByProps({ className: 'cwn-accounts-row' })[0]!
+  const first = t.r.root.findAllByProps({ className: 'cwn-accounts-card' })[0]!
   await act(async () => first.findAllByType('button').find((item) => item.children.includes('退出'))!.props.onClick())
   expect(terminal.started).not.toHaveBeenCalled()
   await t.click('取消')
   expect(t.button('确认退出')).toBeUndefined()
   await act(async () =>
-    t.r.root.findAllByProps({ className: 'cwn-accounts-row' })[0]!.findAllByType('button').find((item) => item.children.includes('退出'))!.props.onClick(),
+    t.r.root.findAllByProps({ className: 'cwn-accounts-card' })[0]!.findAllByType('button').find((item) => item.children.includes('退出'))!.props.onClick(),
   )
   await t.click('确认退出')
   expect(terminal.started).toHaveBeenCalledExactlyOnceWith('opencode', 'logout', { login: 'opencode:deepseek' })
@@ -2828,7 +2829,6 @@ it('warns before replacing a signed-in OpenCode provider and keeps the native pi
   await t.click('账号')
   await t.click('添加账号')
   expect(t.text()).toContain('DeepSeek 已登录，继续会替换它现有的凭据。')
-  await t.click('登录到')
   await t.click('其他服务商（在原生终端中选择）')
   await t.click('继续')
   expect(terminal.started).toHaveBeenCalledExactlyOnceWith('opencode', 'login')
@@ -2856,4 +2856,19 @@ it('lets the user add another Hermes key or replace a chosen one', async () => {
     provider: 'deepseek',
     replaces: 'hermes:deepseek:d4e5f6',
   })
+})
+it('names each OMP account of one provider by its email when replacing one', async () => {
+  const providers = [{ id: 'openai-codex', label: 'OpenAI', signedIn: true, multi: true }]
+  const logins = [
+    { providerLabel: 'OpenAI', authMethod: 'oauth' as const, accountLabel: 'first@example.invalid', id: 'omp:openai-codex:plugin.2', source: 'plugin' as const },
+    { providerLabel: 'OpenAI', authMethod: 'oauth' as const, accountLabel: 'second@example.invalid', id: 'omp:openai-codex:plugin.3', source: 'plugin' as const },
+  ]
+  const t = await setup({ accountStatus: pickedStatus('omp', logins, providers) })
+  await t.click('OMP 设置')
+  await t.click('账号')
+  // Each card shows its own account under the provider.
+  expect(t.text()).toContain('账号登录 · first@example.invalid')
+  await t.click('添加账号')
+  expect(t.text()).toContain('替换 first@example.invalid')
+  expect(t.text()).toContain('替换 second@example.invalid')
 })

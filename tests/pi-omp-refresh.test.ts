@@ -299,6 +299,35 @@ describe.each(['pi', 'omp'] as const)('%s own-source OAuth refresh (synthetic)',
   })
 })
 
+it.each([
+  ['a failed refresh', 'oauth refresh failed: synthetic invalid_grant', 'plugin'],
+  ['OMP /logout', 'deleted by user', 'native'],
+] as const)('an OMP plugin row disabled by %s keeps the shared store consistent (synthetic)', async (_case, cause, owner) => {
+  const f = await fixture('omp')
+  const plugin = join(f.accountRoot, 'accounts/omp/agent')
+  await mkdir(plugin, { recursive: true, mode: 0o700 })
+  const db = new DatabaseSync(join(plugin, 'agent.db'))
+  try {
+    db.exec('CREATE TABLE auth_credentials(id INTEGER PRIMARY KEY,provider TEXT,credential_type TEXT,data TEXT,disabled_cause TEXT)')
+    const { type: _type, ...data } = credential('plugin')
+    db.prepare('INSERT INTO auth_credentials VALUES(7,?,?,?,?)').run('fixture', 'oauth', JSON.stringify(data), cause)
+  } finally {
+    db.close()
+  }
+  // Listing, snapshot and the refresh store agree on which location owns the provider.
+  const native = await f.snapshot()
+  const cache = new DatabaseSync(join(native.directory, 'agent.db'), { readOnly: true })
+  try {
+    const rows = cache.prepare('SELECT data,disabled_cause FROM auth_credentials').all() as any[]
+    expect(rows.map((row) => [JSON.parse(row.data).access, row.disabled_cause])).toEqual(
+      owner === 'plugin' ? [['synthetic-access-plugin', cause]] : [['synthetic-access-old', null]],
+    )
+  } finally {
+    cache.close()
+  }
+  // A second read of the unchanged sources reuses the same store without calling it unsafe.
+  await expect(f.snapshot()).resolves.toMatchObject({ directory: native.directory })
+})
 it('Pi metadata refresh updates the same prepare receipt before its worker activation', async () => {
   const f = await fixture('pi')
   const launch = await preparePiOmp(

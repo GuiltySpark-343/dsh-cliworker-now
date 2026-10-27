@@ -2027,6 +2027,8 @@ describe('Kimi account window launches (synthetic terminal and status)', () => {
 
   it('signs out the Kimi Code login in the bare TUI after the user trusts the folder', async () => {
     fast()
+    // The list must stay quiet longer than the test takes to draw the moved-up frame.
+    AGY_GUIDE_TIMING.flowQuietMs = 2000
     const f = kimi()
     // Signed out only by the Enter typed on the Kimi Code row.
     holding(f, () =>

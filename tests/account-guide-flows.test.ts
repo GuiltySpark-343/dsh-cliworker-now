@@ -131,6 +131,36 @@ describe('guided login flows (synthetic screens)', () => {
     expect(guide.output(MIMO_MENU)).toEqual([])
   })
 
+  // Simulated screens shaped like MiMo 0.1.15's `auth logout` (isolated probe, 2026-10-27).
+  const mimoRemove = (rows: [string, boolean][]) =>
+    '┌  Remove credential\r\n│\r\n◆  Select provider\r\n' +
+    rows.map(([row, on]) => `│  ${on ? '●' : '○'}  ${row}\r\n`).join('') +
+    '└\r\n'
+  const writes = (events: GuideEvent[]) => events.flatMap((event) => ('write' in event ? [event.write] : []))
+
+  it('signs out of MiMo by pressing Enter only on the highlighted Xiaomi row', () => {
+    const guide = new FlowGuide(MIMO_FLOW, { action: 'logout' })
+    const first = guide.output(mimoRemove([['Xiaomi  (api)', true]]))
+    expect(writes(first)).toEqual(['\r'])
+    expect(guides(first)[0]).toMatchObject({ step: 'loggingOut' })
+  })
+
+  it('moves past other MiMo credentials and never presses Enter on them', () => {
+    const guide = new FlowGuide(MIMO_FLOW, { action: 'logout' })
+    expect(writes(guide.output(mimoRemove([['DeepSeek  (api)', true], ['Xiaomi  (api)', false]])))).toEqual(['\x1b[B'])
+    expect(writes(guide.output(mimoRemove([['DeepSeek  (api)', false], ['Xiaomi  (api)', true]])))).toEqual(['\r'])
+  })
+
+  it('hands a MiMo list without Xiaomi to the native terminal', () => {
+    const guide = new FlowGuide(MIMO_FLOW, { action: 'logout' })
+    expect(writes(guide.output(mimoRemove([['DeepSeek  (api)', true]])))).toEqual(['\x1b[B'])
+    // One row: the arrow redraws the same row, nothing else is pressed and the quiet list is handed over.
+    expect(writes(guide.output(mimoRemove([['DeepSeek  (api)', true]])))).toEqual([])
+    const quiet = guide.settled()
+    expect(writes(quiet)).toEqual([])
+    expect(guides(quiet)[0]).toMatchObject({ template: 'native' })
+  })
+
   it('asks for folder trust before a Qoder sign-out, then signs out a settled signed-in screen', () => {
     const guide = new FlowGuide(QODER_FLOW, { action: 'logout' })
     expect(guides(guide.output('Do you trust the files in this folder?\r\n❯ 1. Trust folder\r\n  2. Don\'t trust and exit'))[0]).toMatchObject({

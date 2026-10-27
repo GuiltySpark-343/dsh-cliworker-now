@@ -160,6 +160,14 @@ describe('Kimi account window (模拟画面)', () => {
     expect(writes(guide.output(MOVED_UP))).toEqual(['\r'])
   })
 
+  it('hands a list over when the moves up never land, pressing nothing else', () => {
+    const guide = trusted()
+    expect(writes(guide.output(picker([OAUTH, { ...DEEPSEEK, current: true }, MOONSHOT], 1)))).toEqual([UP])
+    const quiet = guide.settled()
+    expect(writes(quiet)).toEqual([])
+    expect(guides(quiet)[0]).toMatchObject({ template: 'native' })
+  })
+
   it('waits for a highlighted row cut by a read before pressing anything', () => {
     const guide = trusted()
     expect(writes(guide.output(picker([OAUTH, { ...DEEPSEEK, current: true }], 1)))).toEqual([UP])

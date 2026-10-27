@@ -2822,3 +2822,13 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 自动检查（合成画面与模拟凭据，均已标注）：`pi-account-window` 25 项、`omp-account-window` 25 项、`kimi-account-window` 17 项（均为新文件）；`kimi-accounts` 55 项（新增逐行登录）；`accounts` 新增 Kimi / Pi / OMP 参数与句柄校验；`pi-omp-native` 新增 OMP 软删除与有效凭据测试；`provider-login-status` 新增「deleted by user 视为未配置、其他禁用原因仍为失效」（全量首轮发现该回归后修复）；`settings-dialog` 新增 Pi 分组测试。
 - 全量：`vitest run` 233 个文件通过、3 个跳过，4681 项通过、13 项跳过；类型检查通过（DSH 0.2.1-rc.3）；OpenSpec 严格校验通过。
 - 未验证：真实授权成功与真实账号退出（Pi / OMP / Kimi）；Desktop 界面；Kimi `/logout` 分页（>8 行）；OMP Moonshot / MiniMax 登录画面；Copilot 企业版。已知风险：Kimi 的 40 次 ↑ 若未生效，窗口会停在「正在选择」，需显示原生终端处理（不会误按回车）。
+
+## 2026-10-27 账号窗口反馈修正：OMP 模型目录、过期账号、MiMo 退出与卡片布局（`add-cli-login-templates` 2.5，未发布）
+
+- 用户反馈（Desktop 截图）：OMP 账号窗口显示应已过期的 xai/openai 账号与不明的「CLI 全局账号」，OMP 模型列表和思考强度不显示；MiMo 退出无法完成；账号窗口与「登录到」页排版不佳。
+- 根因（只读核对真实数据，未输出凭据）：`~/.omp/agent` 为 OMP 自身目录，有 7–8 月留下的 xai-oauth 与 openai-codex（均已过期）；插件目录的 xai-oauth 因续期被拒（invalid_grant）已被 OMP 停用。上一轮让停用行不覆盖其他位置，但共享续期缓存的 `owners` 仍按全部行判断，两边归属不一致，快照抛出「无法安全保存账号续期」，模型目录读取失败；同一改动让原生目录里失效的 xai 重新出现在列表。修复：统一 `ownsProvider`（只有 `deleted by user` 不占有服务商）。
+- 真实数据复核（本机 OMP 16.4.4，读取模型目录，未调用模型）：修复前报错；修复后 13 个模型含思考强度；账号列表为插件目录两条 OpenAI（各带邮箱）、zai.cn API，以及配置中的 api.po1nt9.me，xai 不再显示。
+- MiMo 0.1.15（隔离目录、模拟凭据）：`auth logout` 显示 `Remove credential / Select provider / ● Xiaomi (api)`，原流程无此步骤而停住；按回车后显示 `Logout successful`，经符号链接的 `auth.json` 变为 `{}` 且链接保留。新增 `pick` 只在 Xiaomi 行回车。真实 MiMo 账号未退出。
+- 引擎：`pick` 步骤在画面静止后仍未找到目标即转原生终端（覆盖单行列表与 Kimi ↑ 未生效）。
+- 界面：账号卡片、位置组名与说明、正文上边距收紧；用户第二次反馈「登录到」页排版不协调后，查明浅色主题下 `bg-layer-1` 与弹窗底色相同，面板不可见、各块缩进不一，改为淡灰 `interactive-bg-hover` 卡片，服务商下拉框改为两列卡片单选，所有块贴齐同一内容边线（见 `doc/settings-ui-design.md`）。界面截图核对未完成：截图子 agent 截到了用户正在使用的 Word 窗口而非 Desktop，截图已删除，改由用户在 Desktop 中查看。
+- 自动检查：`pi-omp-refresh` 新增 2 项（续期失败停用行 / OMP 退出行下的快照与续期缓存一致；在上次提交版本上确认失败）；`account-guide-flows` 新增 MiMo 3 项；`kimi-account-window` 新增 ↑ 未生效 1 项；`settings-dialog` 新增同服务商邮箱区分 1 项并更新分组断言；`provider-login-status` 改为允许经过滤的邮箱、不含 accountId 与令牌。全量 `vitest run` 233 个文件通过、3 个跳过，4688 项通过、13 项跳过；类型检查通过。

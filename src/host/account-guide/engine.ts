@@ -330,6 +330,11 @@ export class FlowGuide implements AccountGuideDriver {
 
   settled(): GuideEvent[] {
     if (this.ctx.action === 'manage' || this.done || this.confirming || this.commandSent || this.identifying) return []
+    // A list that went quiet before its row was found cannot move on (one row, a lost key): hand it over.
+    if (this.steps[this.index]?.pick && !this.pickDone) {
+      this.pickDone = true
+      return this.show(this.texts.native)
+    }
     if (this.index >= 0) return []
     if (this.ctx.action === 'logout' && this.flow.logout?.command) {
       this.identifying = true

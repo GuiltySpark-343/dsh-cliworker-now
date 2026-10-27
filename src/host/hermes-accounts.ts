@@ -339,7 +339,7 @@ export async function listHermesAccountSources(config: RuntimeConfig, signal: Ab
     'hermes',
   )
   const id: AccountSource = effectiveHermesHome(config) === plugin ? 'plugin' : 'native'
-  return [{ id, label: id === 'plugin' ? '插件账号' : 'CLI 全局账号' }]
+  return [{ id, label: id === 'plugin' ? '插件目录' : '原生目录' }]
 }
 
 export async function prepareHermesAccount(

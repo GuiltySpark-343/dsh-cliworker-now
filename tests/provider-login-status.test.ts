@@ -73,11 +73,13 @@ describe('Pi and OMP own provider login projection', () => {
       verification: 'local',
       logins: [
         { providerLabel: 'zai.cn', authMethod: 'api' },
-        { providerLabel: 'OpenAI', authMethod: 'oauth' },
+        // Only a safe email tells two accounts of one provider apart; ids and tokens never leave.
+        { providerLabel: 'OpenAI', authMethod: 'oauth', accountLabel: 'private@example.test' },
       ],
     })
     expect(status.authMethod).toBeUndefined()
-    expect(JSON.stringify(status)).not.toMatch(/synthetic|private|accountId|@/)
+    expect(status.accountLabel).toBeUndefined()
+    expect(JSON.stringify(status)).not.toMatch(/synthetic|private-account|accountId/)
     expect(await readFile(path)).toEqual(before)
   })
   it('projects the merged source, never the superseded global account or an old worker', async () => {
