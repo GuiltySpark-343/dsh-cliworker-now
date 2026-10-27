@@ -39,5 +39,5 @@
 - [x] 6.1 `node scripts/build.mjs --typecheck-only` 通过。
 - [x] 6.2 关联单测：`state-layout`、`native-transport-truncation`、`run-log-retention`、`storage-torn-tail`、`core`、`worker-management`、`session-roster`、`dispatch-flow`、`cleanup-persistence`、`adapters`、`panel` 全部通过。
 - [x] 6.3 `node scripts/build.mjs` 与预览构建通过。
-- [ ] 6.4 安装到 profile 后真机验证：大输出轮次不再失败、面板出现“过程已截断”、项目 `.dsh` 下产生日志、原始日志对话框可读。
-- [ ] 6.5 未验证：官方 0.8.4 合并后的冲突处理与上游 PR；Windows 以外的日志目录权限行为。
+- [x] 6.4 安装到 profile 后真机验证（2026-10-28）：模板派遣创建 `任务验收Agent2`，任务含 2 MB 临时文件与 `exit 1` 检查命令；轮次 `completed`，结果 `OK 2097152 1`，诊断记录「本轮工具未成功：非零退出（exit 1）」，时间线与原始流写入项目 `.dsh/cliworker-now/logs/`（events 1.5 MB / raw 1.5 MB），全局目录只剩记录与账号绑定。
+- [ ] 6.5 未验证：官方 0.8.4 合并后的冲突处理与上游 PR；Windows 以外的日志目录权限行为；真实触顶（>16 MiB）的截断标记只在单测覆盖。
