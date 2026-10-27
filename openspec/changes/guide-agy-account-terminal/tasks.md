@@ -30,4 +30,3 @@
 - [x] 4.3 测试：`agy-account-guide` 新增首次设置三组用例（跳过配色、同意条款且不共享、勾选框已关、重画不重复回车、无法跟随转原生终端、未知向导步骤不读账号）；`accounts` 新增 Host 端到端写入顺序；`account-terminal` 新增条款窗口与键盘焦点用例。全量 234 文件、4702 项通过，13 跳过。
 - [x] 4.4 Windows 真实验收：用户授权的 Antigravity 真实退出。插件自动跳过配色并停在条款步骤；用户本人点「同意并继续」后，`onboarding.json` 变为 `onboardingComplete: true`，设置页显示「未登录」，无残留 agy 进程。
 - [ ] 4.5 macOS 不出现该向导（`onboarding.json` 已完成），未复测；登录流程中的条款步骤只有自动测试，未做真实验收。
-

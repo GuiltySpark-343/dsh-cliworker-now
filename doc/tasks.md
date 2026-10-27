@@ -2888,3 +2888,12 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
   - 第四版因配色页第二次重画被误判为「回到配色页」，转进了原生终端后备步骤。第五版（重画时继续等待）：约 8 秒自动跳过配色，停在条款步骤，「同意并继续」按钮出现。用户本人点击后，`onboarding.json` 变为 `onboardingComplete: true`，设置页显示「未登录」，无残留 agy 进程。用户选择的数据收集设置未单独读取核对。
 - macOS：`typecheck` 通过；全量 `pnpm test` 234 文件通过、3 跳过；4699 通过、0 失败、13 跳过。首次设置改动后：`typecheck` 通过；全量 234 文件通过、3 跳过，4702 通过、0 失败、13 跳过；之后的配色重画修正只重跑了关联的 3 个文件（228 项通过）；`pnpm spec validate guide-agy-account-terminal --strict` 通过。
 - 未验证：Codex、ZCode 等其他 CLI 在 Windows 上的真实退出（本次只授权了 Antigravity）。Qoder 的 `/logout` 同样依赖屏幕静止后输入，Windows 首次运行屏未实测。
+
+## 2026-10-27 v0.8.4 重新发布（标签移至退出修复提交）
+
+- 用户决定把 GitHub 上原指向 `7b7a6ed` 的 `v0.8.4` 标签移到包含 Windows 账号退出修复（`a7b8610`、`d4ff25d`）的提交，重新跑全量验收后创建 Release；npm 由用户 `npm login` 后发布。版本号不变。
+- macOS：`typecheck` 通过；全量 `pnpm test` **234 文件通过、3 跳过；4702 通过、0 失败、13 跳过**；`spec:check` 37/37；`git diff --check main` 通过（修正 2 个 OpenSpec 文件末尾空行）。
+- Windows 远程（run `e5093fe0`）：隔离 preview、冻结依赖、typecheck、Windows CI 文件 **111 通过、1 项 POSIX 跳过**、Host 加载均通过，success/cleanup.confirmed/cleanup.lockReleased 为 true。同一源码目录全量 vitest（隔离 HOME/TEMP，计划任务运行）**4614 通过、12 失败、53 跳过**；另 2 个文件因远端未上传 `scripts/` 无法加载。失败的 7 个读取器/模拟进程文件在正常用户环境串行重跑 **198/198 通过**，与此前各版同类，根因仍未定位。
+- 打包：正式构建的 `lib/index.js`（SHA256 `33165606…112b`）与 Windows 远程 preview、Windows DSH Desktop 实测的第五版预览包相同；702 个 lib 文件中只有 `lib/client.js(.map)` 的打包器 `#region` 路径注释不同。`scripts/package-release.mjs` 生成公开清单（与原 v0.8.4 清单一致），系统 npm `--ignore-scripts` 打包为 `dsh-cliworker-now-0.8.4.tgz`，912 个文件，18504186 字节，SHA256 `01b2a4a7…4da5`；扫描未发现私人路径、IP、`doc/local/` 或 `.test-data/`。官方 dsh 0.2.1-rc.3 隔离 profile `plugin add`：exit 0，版本 0.8.4，安装后的 Host 与正式构建逐字节相同。
+- Windows DSH Desktop：见上节，第五版预览包的 Antigravity 真实退出已由用户本人确认条款后完成。
+- 未验证：真实模型调用与中转端点；Windows 上 Codex、ZCode、Qoder 等其他 CLI 的真实退出，以及各 CLI 的真实登录与切换账号；agy 条款步骤后保存的数据收集设置未回读；Windows 隔离 HOME/TEMP 全量失败的根因。
