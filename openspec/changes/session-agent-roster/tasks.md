@@ -25,4 +25,5 @@
 - [x] 4.2 `pnpm typecheck` 通过；关联回归 9 个文件 325 项测试通过；全量 `pnpm test` 与改动前对比无新增失败（其余失败为 python 缺失与原生夹具环境问题）。
 - [x] 4.3 `pnpm build:preview` 通过；客户端用 mock 渲染截图核对布局（`work/roster-preview/panel.png`、`form.png`）。
 - [ ] 4.4 切换源码安装并重启后，用真实宿主截图验收面板与预设派遣。
+- [x] 4.6 真机派遣验收：安装包重启后按  派遣命中可用智能体，未弹选型卡，Worker 的 CLI/模型/强度/角色与条目一致，回复 OK，执行次数 1，条目回填 workerId（2026-10-27 实测，codex + ccs-opencode/deepseek-v4.1-flash）。
 - [ ] 4.5 同步 `doc/role-presets.md` 与 README 的会话级说明。
