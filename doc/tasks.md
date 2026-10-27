@@ -2611,7 +2611,7 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
   - 通过：同项目两个 ZCode 写任务（GLM-5.3-Flash · Low），`zcode-append-b` 显示「Running in an isolated copy」→「Isolated copy ready to merge」与 Merge/Discard；Merge 弹窗文案正确，结果「Wrote back 1 and deleted 0 files…」，列出 b.txt，副本目录已清理。Discard 弹窗文案正确，确认后状态行与按钮消失（无单独成功提示）。
   - 英文模式仍为中文：已有智能体预设名称与描述（已知限制）；插件设置问题卡标题与选项「ZCode 模型」「选择模型」（Host 生成，待补）；「输入你的答案」「跳过」「提交」及子会话内「处理失败」「已调用工具」「代码块」「允许编辑」为 Harness 原生控件，随 Harness 语言（中文）。未逐页检查全部 CLI 页；未打开并发下拉核对 1–8。
 - 落盘核对（本会话直接检查）：a.txt `alpha/one`、b.txt `beta/two`（合并写回）、c.txt `gamma/three`、d.txt `delta/four`。Worker 状态：a 完成（主目录）、b 完成且隔离 `released`、c `failed`（主目录，`ZCode 额外权限请求已拒绝`：Bash `echo >>` 被拒后改用 Edit 成功，运行仍判失败；该判定为 v0.8.1 起的既有 ZCode 行为）、d 完成且第二个副本 `ready` 残留。
-- **发现缺陷：隔离可被绕过。** d 的副本丢弃后，主 Agent 把「改动在隔离副本中」理解为失败，经 `cliworker_followup` 要求「必须在真实目录、不要在隔离副本中操作」；该轮 cwd 仍为新副本，但 ZCode Edit 直接写入 `/Users/leeyl/AI-Project/cliworker-isolation-test/d.txt` 并成功，副本内 d.txt 仍为 `delta`。隔离只靠给 CLI 的提示词，ZCode 原生权限允许写 cwd 外的绝对路径；并行时主目录可能被同时改写。主 Agent 收到的结果也未说明「改动待用户合并」。
+- **发现缺陷：隔离可被绕过。** d 的副本丢弃后，主 Agent 把「改动在隔离副本中」理解为失败，经 `cliworker_followup` 要求「必须在真实目录、不要在隔离副本中操作」；该轮 cwd 仍为新副本，但 ZCode Edit 直接写入 测试目录外层的 `cliworker-isolation-test/d.txt` 并成功，副本内 d.txt 仍为 `delta`。隔离只靠给 CLI 的提示词，ZCode 原生权限允许写 cwd 外的绝对路径；并行时主目录可能被同时改写。主 Agent 收到的结果也未说明「改动待用户合并」。
 - 未解决：首次派遣的 ZCode 设置问题卡在 26 秒内被回答（GLM-5.3-Flash · Low），Codex 称未提交，会话记录未见主 Agent 代答，来源未查明。测试目录、测试会话与 d 的残留副本保留待处理。
 
 ## 2026-10-25 主 Agent 合并隔离副本、设置说明精简与滚动条自动隐藏（`feat/general-settings`，未发布）
@@ -2857,3 +2857,14 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
   - 测试假设 POSIX：Antigravity 仅邮箱凭据（POSIX 文件路径；Windows 有独立用例）与 Qoder/Hermes 引导窗口 4 项（只测画面流程，Windows 启动解析另有用例）在 Windows 跳过；Pi PATH 解析测试改为同时隔离 `APPDATA`/`LOCALAPPDATA`/`PNPM_HOME`，不再读到这台机器已安装的 `pi.cmd`；Hermes 大小写测试按平台断言。
   - 修复后全量（隔离 HOME/TEMP）**4604 通过、16 失败、53 跳过**，上述文件均通过；失败落在另外 10 个读取器/模拟进程文件，另 2 个文件因远端未传 `scripts/` 而无法加载（测试环境所致）。这 10 个文件在正常用户环境串行重跑 **279/279 通过**。与 v0.8.2/v0.8.3 同类：隔离 HOME/TEMP 并行负载下的失败集合每轮不同，根因未定位。
 
+- 打包：正式构建与最终 Windows 远端 preview 出自同一提交，`lib/index.js` 与全部原生辅助文件逐字节相同（515 个文件），`lib/client.js` 只差打包器 region 注释。`npm pack --ignore-scripts` 生成 `dsh-cliworker-now-0.8.4.tgz`（912 个文件、18491692 字节，SHA256 `d7f6ba6f…326b`）；扫描未发现私人路径、IP、`doc/local/` 或 `.test-data/`，无 scripts/devDependencies。macOS 用官方 dsh 0.2.1-rc.3 隔离 profile `plugin add` 该 tgz：exit 0，版本 0.8.4。
+- Windows DSH Desktop：Harness 未运行，空闲门禁全为 0。原生安装器把正式 profile 从 0.8.1 升到 0.8.4：exit 0，702 个 lib 文件与 Host 哈希逐一匹配；另上传并核对 0.8.3 发布包作为回滚件（未使用）。随后正常启动，无调试参数。UIA 只读核对：
+  - 标题栏设置按钮直接打开「CLI Worker 设置」，四个通用选项齐全。
+  - 13 个 CLI 页均列出；Codex、Antigravity、ZCode 显示已登录，模型按钮可用。
+  - Claude Code 显示「Claude 自身配置 API 登录」，并提示原默认模型不可用、需重新选择；Kimi 提示登录凭据已过期，模型按钮禁用。这两项是这台机器的账号状态，不是插件故障。
+  - Hermes「账号」窗口列出 1 个登录及「在原生终端中退出」「添加账号」，Escape 可关闭。
+  - 设置最终已关闭。
+  - v5 观察 151.9 秒（03:20:32–03:23:04 UTC），完整覆盖前四段动作（03:20:54–03:23:02）：没有新增的 Harness 窗口，唯一事件是此前已打开、非 Harness 子孙的 Windows Terminal 获得前台。之后读取 Claude/Kimi/Hermes 的三段动作不在观察范围内。
+  - 收尾门禁 activeWorkers、账号 scope、owner、原生认证、观察器及本次计划任务均为 0。
+  - 0 次模型调用、0 次登录或退出、0 次偏好修改。
+- 未验证：真实模型调用、真实中转端点，以及各 CLI 的实际登录、退出和切换账号（Windows 只打开了只读页面）；Windows 隔离 HOME/TEMP 全量失败的根因。
