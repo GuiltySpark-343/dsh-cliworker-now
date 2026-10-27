@@ -1763,7 +1763,8 @@ describe('guided login windows of other CLIs (synthetic screens)', () => {
     await f.manager.stop('p', id)
   })
 
-  it('signs out of a settled Qoder TUI with /logout once the account reads as signed in', async () => {
+  // Screen flows only; Windows launch resolution for Qoder and Hermes has its own tests.
+  it.skipIf(process.platform === 'win32')('signs out of a settled Qoder TUI with /logout once the account reads as signed in', async () => {
     fast()
     const f = fixture()
     account(f, () => !vi.mocked(f.terminal.write).mock.calls.some(([data]) => data === '\r'))
@@ -1775,7 +1776,8 @@ describe('guided login windows of other CLIs (synthetic screens)', () => {
     expect(watched.steps()).toEqual(['loggingOut', 'loggedOut'])
   })
 
-  it('waits for the user to trust the Qoder folder before signing out', async () => {
+  // Screen flows only; Windows launch resolution for Qoder and Hermes has its own tests.
+  it.skipIf(process.platform === 'win32')('waits for the user to trust the Qoder folder before signing out', async () => {
     fast()
     const f = fixture()
     // Signed out only by the Enter that follows /logout.
@@ -1879,7 +1881,8 @@ describe('guided login windows of other CLIs (synthetic screens)', () => {
     expect(f.manager.isBusy('opencode')).toBe(false)
   })
 
-  it('adds a Hermes key as a new pool entry, leaving its label to Hermes', async () => {
+  // Screen flows only; Windows launch resolution for Qoder and Hermes has its own tests.
+  it.skipIf(process.platform === 'win32')('adds a Hermes key as a new pool entry, leaving its label to Hermes', async () => {
     fast()
     const f = fixture()
     let added = false
@@ -1899,7 +1902,8 @@ describe('guided login windows of other CLIs (synthetic screens)', () => {
     expect(watched.steps().at(-1)).toBe('signedIn')
   })
 
-  it('removes one Hermes pool entry by its id', async () => {
+  // Screen flows only; Windows launch resolution for Qoder and Hermes has its own tests.
+  it.skipIf(process.platform === 'win32')('removes one Hermes pool entry by its id', async () => {
     fast()
     const f = fixture()
     let removed = false

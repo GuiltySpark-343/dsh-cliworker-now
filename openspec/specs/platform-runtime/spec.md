@@ -230,3 +230,36 @@ Host SHALL 只在确认本次 Hermes 原生网关的实际进程、精确本机�
 #### Scenario: 显式损坏或跨版安装
 - **WHEN** 显式入口损坏、不可访问，或候选实际属于另一 CLI/品牌
 - **THEN** 保留该错误或拒绝候选，不静默替换显式入口、启动 GUI 或回退另一品牌。
+
+### Requirement: POSIX 账号终端关闭先结束 CLI
+在 macOS 与 Linux 上关闭仍在运行的原生账号终端时，插件 SHALL 先请求该终端的前台 CLI 退出（SIGTERM），最多等待配置的宽限时间，再由宿主终端清理确认整个范围退出；CLI 已退出时 MUST 不再发送任何信号。CLI 未在宽限时间内退出时仍执行原清理，无法确认时保持“清理失败、继续占用”的原语义。
+
+#### Scenario: 登录辅助进程成为僵尸
+- **WHEN** CLI 登录时派生的辅助进程已结束但未被 CLI 回收，用户随后关闭账号终端
+- **THEN** CLI 先退出、僵尸由系统回收，清理成功，状态为已关闭且解除占用
+
+#### Scenario: CLI 忽略 SIGTERM
+- **WHEN** CLI 在宽限时间内未退出
+- **THEN** 继续调用宿主清理，结果以清理是否确认为准
+
+#### Scenario: CLI 已自行退出
+- **WHEN** 用户在 CLI 中退出后终端随之结束
+- **THEN** 不向任何进程发送信号，只完成清理
+
+### Requirement: 同项目并行启动的派生状态
+同一项目的多个任务同时启动时，插件为其准备的共用派生状态文件和指向 CLI 自身登录的链接 SHALL 以完整文件原子替换，MUST NOT 因并行删除与重建而让任一启动失败或读到不完整内容；链接仍 MUST 只引用 CLI 自身当前登录，登出后不得复活旧引用。
+
+#### Scenario: Grok 同项目并行启动
+- **WHEN** 同一项目同时准备 5 个 Grok 任务
+- **THEN** 每个任务都得到完整配置和指向自身登录的引用，不出现 `EEXIST`，不残留临时文件
+
+### Requirement: Hermes 子进程的 IPv6 代理旁路
+插件启动 Hermes（账号终端、续期、任务运行）时 SHALL 把 `NO_PROXY` / `no_proxy` 中带括号、带端口或 CIDR 形式的 IPv6 条目改写为裸地址并去重；IPv4、域名、通配符及无需改写的值 MUST 保持继承，插件 MUST NOT 新增、删除或改变代理地址。
+
+#### Scenario: DSH 发布带括号的回环地址
+- **WHEN** 继承环境 `NO_PROXY=localhost,127.0.0.1,::1,.local,[::1]`
+- **THEN** Hermes 进程收到 `localhost,127.0.0.1,::1,.local`，Nous 凭据校验与续期不因代理旁路解析失败
+
+#### Scenario: 无需改写
+- **WHEN** 继承的 `NO_PROXY` 不含带括号或 CIDR 形式的 IPv6，或包含 `*`
+- **THEN** 插件不覆盖该变量

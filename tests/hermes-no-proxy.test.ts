@@ -7,10 +7,11 @@ afterEach(() => vi.unstubAllEnvs())
 const published = 'localhost,127.0.0.1,::1,.local,[::1]'
 
 it('hands Hermes the bare IPv6 bypass instead of the bracketed form, in both cases of the name', () => {
-  expect(hermesNoProxyEnvironment({ NO_PROXY: published, no_proxy: published })).toEqual({
-    NO_PROXY: 'localhost,127.0.0.1,::1,.local',
-    no_proxy: 'localhost,127.0.0.1,::1,.local',
-  })
+  const bare = 'localhost,127.0.0.1,::1,.local'
+  // Windows names ignore case, so one rewritten NO_PROXY covers both spellings there.
+  expect(hermesNoProxyEnvironment({ NO_PROXY: published, no_proxy: published })).toEqual(
+    process.platform === 'win32' ? { NO_PROXY: bare } : { NO_PROXY: bare, no_proxy: bare },
+  )
 })
 
 it('rewrites bracketed, ported and CIDR IPv6 entries but leaves IPv4 and domains alone', () => {
@@ -27,7 +28,8 @@ it('leaves clean, wildcard and missing values to the inherited environment', () 
 
 it('applies to every Hermes launch environment without changing the account home settings', () => {
   vi.stubEnv('NO_PROXY', published)
-  vi.stubEnv('no_proxy', '')
+  // On Windows this would clear NO_PROXY itself: variable names ignore case there.
+  if (process.platform !== 'win32') vi.stubEnv('no_proxy', '')
   const env = hermesAccountEnvironment('/simulation/hermes')
   expect(env.NO_PROXY).toBe('localhost,127.0.0.1,::1,.local')
   expect(env).not.toHaveProperty('no_proxy')

@@ -420,7 +420,8 @@ function agyEmailOnly(email: unknown, refresh = 'synthetic-refresh') {
   })
 }
 
-it('binds an Antigravity login that keeps only id_token_email, stable across case and rotation', async () => {
+// The POSIX token file; Windows reads its credential store (next test).
+it.skipIf(process.platform === 'win32')('binds an Antigravity login that keeps only id_token_email, stable across case and rotation', async () => {
   agyEmailOnly('Own@Example.test')
   const first = await run('antigravity')
   agyEmailOnly('own@example.test', 'synthetic-rotated-refresh')

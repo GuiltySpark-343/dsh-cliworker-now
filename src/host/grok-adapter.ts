@@ -41,6 +41,21 @@ function bridgePath() {
     if (existsSync(path)) return path
   throw new Error('Grok catalog bridge 未安装，请重新构建插件')
 }
+/**
+ * Windows refuses to replace a file while another start replaces or reads it
+ * (EPERM/EACCES/EBUSY); the next attempt succeeds once that handle closes.
+ */
+async function publish(from: string, to: string) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await rename(from, to)
+    } catch (e) {
+      if (process.platform !== 'win32' || attempt >= 20 || !record(e) || !['EPERM', 'EACCES', 'EBUSY'].includes(String(e.code)))
+        throw e
+      await new Promise((resolve) => setTimeout(resolve, 10 + attempt * 10))
+    }
+  }
+}
 async function state(stateDirectory: string, project?: string, readOnly?: { bridge: boolean }) {
   await mkdir(stateDirectory, { recursive: true, mode: 0o700 })
   if ((await lstat(stateDirectory)).isSymbolicLink()) throw new Error('Unsafe Grok state symlink')
@@ -72,7 +87,7 @@ async function state(stateDirectory: string, project?: string, readOnly?: { brid
   const configTemporary = temporary(configPath)
   try {
     await writeFile(configTemporary, grokConfig(readOnly), { mode: 0o600, flag: 'wx' })
-    await rename(configTemporary, configPath)
+    await publish(configTemporary, configPath)
   } finally {
     await rm(configTemporary, { force: true })
   }
@@ -91,7 +106,7 @@ async function state(stateDirectory: string, project?: string, readOnly?: { brid
       const link = temporary(target)
       try {
         await symlink(original, link)
-        await rename(link, target)
+        await publish(link, target)
       } finally {
         await rm(link, { force: true })
       }

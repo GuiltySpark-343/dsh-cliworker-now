@@ -168,4 +168,3 @@ it('continues an automatic sign-out only after the user answers the folder trust
   expect(settling.settled()).toEqual([{ identify: true }])
   expect(settling.identified('authenticated')).toContainEqual({ command: '/logout' })
 })
-

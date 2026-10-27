@@ -104,7 +104,8 @@ function bareIpv6(entry: string) {
  * Nous login checks and renewal. Hand Hermes the bare literal, as its own sanitizer does. */
 export function hermesNoProxyEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const result: Record<string, string> = {}
-  for (const key of ['NO_PROXY', 'no_proxy']) {
+  // Windows environment names ignore case: both spellings are the same variable.
+  for (const key of process.platform === 'win32' ? ['NO_PROXY'] : ['NO_PROXY', 'no_proxy']) {
     const entries = (env[key] ?? '').split(/[\s,]+/).filter(Boolean)
     if (!entries.length || entries.includes('*')) continue
     const rewritten: string[] = []

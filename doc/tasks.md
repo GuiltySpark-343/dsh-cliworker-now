@@ -2847,3 +2847,13 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 自动检查：`cli-account-binding` 改 4 项、新增 3 项；`codex-models` 新增 2 项；`settings-dialog` 新增 1 项。`core`、`worker-goals` 的 mock 补 `codexRouteEnvironment`。全量 `vitest run` 233 个文件通过、3 个跳过，4696 项通过、13 项跳过；类型检查通过；`openspec validate allow-codex-custom-route --strict` 通过。变更保持未归档，等待真实中转实测（任务 3.2）。
 - 未验证：真实中转站（无账号，需反馈用户实测）；DSH Desktop 中由终端设置的 `env_key` 变量是否被宿主进程继承；keyring 存储下中转密钥变化不会改变账号版本（已知边界）。
 
+## 2026-10-27 v0.8.4：发布验收
+
+- 范围（用户批准以 v0.8.4 发布到 GitHub 与 npm）：v0.8.3 之后 `feat/general-settings` 分支的全部改动——CLI Worker 通用设置页（界面语言、最高同时对话数、同目录写任务并行、调用前询问模型）、同目录写任务隔离副本与主 Agent 合并、换号后自动续接、插件绘制的登录/退出窗口与多账号「账号」窗口、权限被拒轮次标为未验证、Grok 只读规划模式、Hermes/OMP/ZCode/并行派遣修复，以及本日的切换账号卡片页、设置默认页与 Codex 第三方中转兼容。版本号与 Codex/ACP/MCP/Hermes 客户端标识改为 0.8.4。
+- OpenSpec：已完成的 `fix-account-terminal-zombie-close`、`fix-parallel-account-waits`、`fix-parallel-dispatch-admission`、`fix-hermes-bracketed-ipv6-no-proxy` 归档为 `2026-10-27-*`，`spec:check` 37/37。其余变更保留未归档，未勾选项均为真实账号、真实模型、DSH Desktop 实机或其他平台验证。
+- macOS：`typecheck` 通过；全量 `pnpm test` **233 文件通过、3 跳过；4696 通过、0 失败、13 跳过**（版本号与 Windows 修复后各重跑一次，结果相同）；`git diff --check main` 通过（修正 5 个文件末尾多余空行）。
+- Windows（x64，Node v24.15.0，pnpm 11.25.0；新地址经原固定主机公钥严格核对后登记）：`test:windows:remote` 隔离 preview、冻结依赖、typecheck、Windows CI 文件 **111 通过、1 项 POSIX 跳过**、包检查与 Host 加载均通过，success/cleanup.confirmed/cleanup.lockReleased 为 true。同一源码目录全量 vitest（隔离 HOME/USERPROFILE/TEMP）首轮 4608 通过、17 失败；在正常用户环境串行重跑仍有 8 项失败，逐一定位：
+  - 产品问题：同一项目并行启动 Grok 时，各启动以 rename 替换共享 `config.toml`，Windows 同时替换同一文件报 `EPERM`。改为 Windows 上遇 EPERM/EACCES/EBUSY 短暂重试（最多 20 次）。Hermes 的 `NO_PROXY` 改写在 Windows 只处理 `NO_PROXY`（Windows 环境变量名不区分大小写）。
+  - 测试假设 POSIX：Antigravity 仅邮箱凭据（POSIX 文件路径；Windows 有独立用例）与 Qoder/Hermes 引导窗口 4 项（只测画面流程，Windows 启动解析另有用例）在 Windows 跳过；Pi PATH 解析测试改为同时隔离 `APPDATA`/`LOCALAPPDATA`/`PNPM_HOME`，不再读到这台机器已安装的 `pi.cmd`；Hermes 大小写测试按平台断言。
+  - 修复后全量（隔离 HOME/TEMP）**4604 通过、16 失败、53 跳过**，上述文件均通过；失败落在另外 10 个读取器/模拟进程文件，另 2 个文件因远端未传 `scripts/` 而无法加载（测试环境所致）。这 10 个文件在正常用户环境串行重跑 **279/279 通过**。与 v0.8.2/v0.8.3 同类：隔离 HOME/TEMP 并行负载下的失败集合每轮不同，根因未定位。
+

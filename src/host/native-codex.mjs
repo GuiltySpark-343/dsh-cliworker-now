@@ -219,7 +219,7 @@ export async function runNativeCodex(config, io) {
   })
   try {
     io.signal?.throwIfAborted()
-    await peer.request('initialize', { clientInfo: { name: 'cli_worker_native', title: 'CLI Worker', version: '0.8.3' }, capabilities: { experimentalApi: false, requestAttestation: false, explicitGatewayOauth: true } })
+    await peer.request('initialize', { clientInfo: { name: 'cli_worker_native', title: 'CLI Worker', version: '0.8.4' }, capabilities: { experimentalApi: false, requestAttestation: false, explicitGatewayOauth: true } })
     await peer.send({ method: 'initialized', params: {} })
     const mode = config.mode === 'plan' ? 'read-only' : 'workspace-write'
     const options = { cwd: config.project, model: config.preference.model, approvalPolicy: 'never', sandbox: mode }
@@ -290,7 +290,7 @@ export async function forkNativeCodex(config, io) {
       return peer.send({ id: message.id, error: { code: -32601, message: '分支不接受交互请求' } })
   })
   try {
-    await peer.request('initialize', { clientInfo: { name: 'cli_worker_native', version: '0.8.3' }, capabilities: { experimentalApi: false } })
+    await peer.request('initialize', { clientInfo: { name: 'cli_worker_native', version: '0.8.4' }, capabilities: { experimentalApi: false } })
     await peer.send({ method: 'initialized', params: {} })
     if (config.forkOperation === 'delete') {
       // Codex exposes archive, not deletion. Keep an explicit orphan/archival receipt.

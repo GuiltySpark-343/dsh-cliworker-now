@@ -122,6 +122,10 @@ describe('distinct Pi and OMP entry identities', () => {
     const home = root()
     vi.stubEnv('HOME', home)
     vi.stubEnv('USERPROFILE', home)
+    // Windows also looks in the npm and pnpm global bins; keep this machine's installs out.
+    vi.stubEnv('APPDATA', join(home, 'AppData', 'Roaming'))
+    vi.stubEnv('LOCALAPPDATA', join(home, 'AppData', 'Local'))
+    vi.stubEnv('PNPM_HOME', join(home, 'pnpm'))
     const legacy = piPackage(
       join(home, '.local/share/cliworker-now/runtimes/pi-1.0.2/node_modules/@earendil-works/pi-coding-agent'),
       '1.0.2',
