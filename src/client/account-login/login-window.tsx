@@ -7,10 +7,11 @@ import {
   StateDot,
   writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { AccountAction, AccountGuide, AccountResponse } from '../../shared/accounts.ts'
+import type { AccountAction, AccountGuide, AccountResponse, AccountStatus } from '../../shared/accounts.ts'
 import { ACCOUNT_LOGIN_HOSTS, allowedLink } from '../../shared/account-links.ts'
 import { CLI_LABELS, type CliId } from '../../shared/types.ts'
 import { t, useT } from '../i18n.ts'
+import { BrandIcon } from '../icons.tsx'
 import { hostText } from '../operation-error.ts'
 
 const MAX_ANSWER_LENGTH = 4096
@@ -44,6 +45,68 @@ function Result({ tone, title, detail, children }: { tone: AccountGuide['tone'];
       <strong>{title}</strong>
       {detail && <p>{detail}</p>}
       {children && <div className="cwn-login-actions">{children}</div>}
+    </div>
+  )
+}
+
+function CurrentAccount({
+  cli,
+  account,
+  onSwitch,
+  onClose,
+}: {
+  cli: CliId
+  account?: AccountStatus
+  onSwitch?: () => void
+  onClose: () => void
+}) {
+  const name = CLI_LABELS[cli]
+  const only = account?.logins?.length === 1 ? account.logins[0] : undefined
+  const method = account?.authMethod ?? only?.authMethod
+  const email = account?.accountLabel ?? (only?.authMethod === 'oauth' ? only.accountLabel : undefined)
+  const meta = [method === 'api' ? 'API Key' : method ? t('账号登录') : undefined, email]
+    .filter(Boolean)
+    .join(' · ')
+  return (
+    <div className="cwn-accounts-window" role="status" aria-live="polite">
+      <div className="cwn-accounts-lead">
+        <strong>{t('当前已登录 {cli}', { cli: name })}</strong>
+        <span>
+          {onSwitch
+            ? t('切换账号会先退出当前账号，确认退出后再登录新账号。')
+            : t('如需切换账号，请先退出登录。')}
+        </span>
+      </div>
+      <ul className="cwn-accounts-list" aria-label={t('当前账号')}>
+        <li className="cwn-accounts-card">
+          <div className="cwn-accounts-card-main">
+            <span className="cwn-accounts-mark" aria-hidden="true">
+              <BrandIcon cli={cli} size={20} />
+            </span>
+            <div className="cwn-accounts-row-text">
+              <strong>{only?.providerLabel ?? name}</strong>
+              <span>{meta}</span>
+            </div>
+            <span className="cwn-accounts-state">{t('已登录')}</span>
+          </div>
+        </li>
+      </ul>
+      <div className="cwn-accounts-actions">
+        {onSwitch ? (
+          <>
+            <Button variant="ghost" size="md" onClick={onClose}>
+              {t('关闭')}
+            </Button>
+            <Button variant="primary" size="md" onClick={onSwitch}>
+              {t('切换账号')}
+            </Button>
+          </>
+        ) : (
+          <Button variant="primary" size="md" onClick={onClose}>
+            {t('关闭')}
+          </Button>
+        )}
+      </div>
     </div>
   )
 }
@@ -195,6 +258,7 @@ export function LoginWindow({
   onRestart,
   onDone,
   onSwitchAccount,
+  account,
 }: {
   cli: CliId
   action: AccountAction
@@ -210,6 +274,8 @@ export function LoginWindow({
   onRestart: () => void
   onDone: () => void
   onSwitchAccount?: () => void
+  /** The account a single-account CLI holds, shown before switching. */
+  account?: AccountStatus
 }) {
   useT()
   const [submitted, setSubmitted] = useState(false)
@@ -253,6 +319,10 @@ export function LoginWindow({
     </div>
   )
 
+  // Nothing runs yet: the current account as a card, like the 「账号」 window.
+  if (step === 'alreadySignedIn')
+    return <CurrentAccount cli={cli} account={account} onSwitch={onSwitchAccount} onClose={onDone} />
+
   if (guide?.template === 'result') {
     const detail =
       step === 'signedIn'
@@ -265,18 +335,9 @@ export function LoginWindow({
         <Button variant="outline" size="md" onClick={onRestart}>
           {t('重试')}
         </Button>
-      ) : step === 'alreadySignedIn' && onSwitchAccount ? (
-        <>
-          <Button variant="primary" size="md" onClick={onSwitchAccount}>
-            {t('切换账号')}
-          </Button>
-          <Button variant="ghost" size="md" onClick={onDone}>
-            {t('关闭')}
-          </Button>
-        </>
       ) : (
         <Button variant="primary" size="md" onClick={onDone}>
-          {step === 'alreadySignedIn' ? t('关闭') : t('完成')}
+          {t('完成')}
         </Button>
       )
     return frame(

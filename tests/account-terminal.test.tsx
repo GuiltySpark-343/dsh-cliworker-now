@@ -7,6 +7,7 @@ import type {
   AccountAction,
   AccountFrame,
   AccountSource,
+  AccountStatus,
   ZCodeLoginProvider,
 } from '../src/shared/accounts.ts'
 import type { CliId } from '../src/shared/types.ts'
@@ -220,10 +221,11 @@ async function setup(initiallyOpen = true) {
     source?: AccountSource,
     provider?: ZCodeLoginProvider | string,
     signedIn?: boolean,
-    extra: { login?: string; replaces?: string } = {},
+    extra: { login?: string; replaces?: string; account?: AccountStatus } = {},
   ) => (
     <AccountTerminal
       signedIn={signedIn}
+      account={extra.account}
       login={extra.login}
       replaces={extra.replaces}
       api={api}
@@ -250,7 +252,7 @@ async function setup(initiallyOpen = true) {
     source?: AccountSource,
     provider?: ZCodeLoginProvider | string,
     signedIn?: boolean,
-    extra: { login?: string; replaces?: string } = {},
+    extra: { login?: string; replaces?: string; account?: AccountStatus } = {},
   ) => {
     await act(async () => {
       renderer.update(render(cli, action, source, provider, signedIn, extra))
@@ -1322,6 +1324,28 @@ it('offers to switch a signed-in single-account CLI and signs out before the new
   })
   await vi.waitFor(() => expect(f.accountStart).toHaveBeenLastCalledWith('parent', 'codex', 'login', expect.any(AbortSignal)))
   expect(f.accountStart.mock.calls.map((call) => call[2])).toEqual(['logout', 'login'])
+})
+
+it('shows the signed-in account as a card before switching', async () => {
+  const f = await setup(false)
+  // Simulated account status; no real credential.
+  const account = {
+    cli: 'mimo',
+    state: 'authenticated',
+    authMethod: 'api',
+    accountLabel: 'user@example.com',
+  } as AccountStatus
+  await f.update('mimo', 'login', undefined, undefined, true, { account })
+  const text = (className: string) => {
+    const node = f.renderer.root.findByProps({ className })
+    return node.findAll((item) => typeof item.props.children === 'string').map((item) => item.props.children).join('|')
+  }
+  expect(text('cwn-accounts-row-text')).toContain('API Key · user@example.com')
+  expect(f.renderer.root.findByProps({ className: 'cwn-accounts-state' }).props.children).toBe('已登录')
+  // Nothing runs on this page, so there is no native terminal to show.
+  expect(f.renderer.root.findAllByProps({ className: 'cwn-login-foot' })).toEqual([])
+  expect(f.renderer.root.findAllByType('button').map((button) => button.children.join(''))).toEqual(['关闭', '切换账号'])
+  expect(f.accountStart).not.toHaveBeenCalled()
 })
 
 it('does not start a login after a sign-out that was not confirmed', async () => {

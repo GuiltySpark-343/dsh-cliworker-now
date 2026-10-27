@@ -890,6 +890,8 @@ export const en = {
   '其他服务商': 'Other provider',
   '在原生终端中选择': 'Choose in the native terminal',
   '选择要登录的服务商': 'Choose a provider to sign in to',
+  '切换账号会先退出当前账号，确认退出后再登录新账号。': 'Switching first signs out of the current account, then signs in to the new one once the sign-out is confirmed.',
+  '如需切换账号，请先退出登录。': 'To switch accounts, sign out first.',
   '其他配置': 'Other configuration',
   '原生目录': 'Native folder',
   '插件目录': 'Plugin folder',

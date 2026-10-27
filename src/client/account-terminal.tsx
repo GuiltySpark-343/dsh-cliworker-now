@@ -8,6 +8,7 @@ import type {
   AccountGuide,
   AccountResponse,
   AccountSource,
+  AccountStatus,
   ZCodeLoginProvider,
 } from '../shared/accounts.ts'
 import { GUIDED_ACCOUNT_CLIS, SINGLE_ACCOUNT_CLIS } from '../shared/account-links.ts'
@@ -116,6 +117,7 @@ export function AccountTerminal({
   login: requestedLogin,
   replaces,
   signedIn = false,
+  account,
   onClose,
   onFinished,
   closeControl,
@@ -133,6 +135,8 @@ export function AccountTerminal({
   replaces?: string
   /** The CLI already holds an account; a single-account login first offers to switch. */
   signedIn?: boolean
+  /** The signed-in account the switch page shows. */
+  account?: AccountStatus
   onClose: () => void
   onFinished: () => void
   closeControl?: AccountCloseControl
@@ -666,6 +670,7 @@ export function AccountTerminal({
           onRestart={() => void close(true)}
           onDone={() => (holding ? callbacks.current.onClose() : void close())}
           onSwitchAccount={SINGLE_ACCOUNT_CLIS.has(cli) ? switchAccount : undefined}
+          account={account}
         />
       )}
       {(phase === 'loading' || phase === 'stopping') && (!guided || phase === 'stopping') && (
