@@ -15,6 +15,8 @@ export type GuideEvent =
   /** An automatic sign-out command the user asked for by clicking「退出」. */
   | { command: string }
   | { confirm: 'login' | 'logout' }
+  /** Read the native account in the background while the user authorizes elsewhere. */
+  | { watch: 'login' }
   | { identify: true }
   | { finish: true }
 
@@ -73,6 +75,8 @@ export interface FlowContext {
   mode?: AccountLoginMode
   /** The one login (`AccountLogin.id`) this sign-out removes. */
   login?: string
+  /** The provider a login is stored under when the CLI files it elsewhere (OMP's device login). */
+  stores?: string
   bracketedPaste: boolean
 }
 
@@ -94,10 +98,24 @@ export interface FlowStep {
   auto?: (screen: ScreenView, ctx: FlowContext) => string | undefined
   /** Reaching this step is itself a sign that the change may have taken effect. */
   confirms?: AccountChange
+  /**
+   * The CLI waits for a browser or device authorization and keeps running after it:
+   * read the account in the background until it signs in, while the step still takes answers.
+   */
+  watches?: 'login'
   /** Enter typed in the visible terminal after content submits this step. */
   typedConfirms?: AccountChange
   /** The step is a final answer of the CLI (e.g. nothing to sign out); the window closes. */
   ends?: boolean
+  /**
+   * A native list in which the plugin finds the entry the user chose in the window.
+   * Reads lines drawn since the last key; returns the highlighted row's own key and
+   * whether it is that entry. Enter is pressed only on a match, the down arrow otherwise;
+   * a highlighted row seen twice means the entry is not listed and the user takes over.
+   */
+  pick?: (lines: string[], ctx: FlowContext) => { row: string; target: boolean } | undefined
+  /** What Enter on the picked row changes; logout by default. */
+  pickConfirms?: AccountChange
 }
 
 export interface FlowDefinition {
@@ -124,6 +142,8 @@ export interface FlowDefinition {
 
 export const GUIDE_SIZE = { cols: 200, rows: 60 }
 const DEVICE_CODE = /^[A-Z0-9]{3,12}(?:-[A-Z0-9]{3,12})?$/i
+const PICK_LIMIT = 40
+const DOWN = '\x1b[B'
 
 /** Plugin texts shared by every CLI; a flow only adds its own steps. */
 export function guideTexts(name: string) {
@@ -170,6 +190,11 @@ export class FlowGuide implements AccountGuideDriver {
   private confirming = false
   private done = false
   private bracketed = false
+  private drawn = ''
+  private picked = new Set<string>()
+  private lastPicked?: string
+  private pickDone = false
+  private watching = false
 
   constructor(
     private readonly flow: FlowDefinition,
@@ -203,6 +228,7 @@ export class FlowGuide implements AccountGuideDriver {
     this.screen = (this.screen + compact(stripped)).slice(-SCREEN_LIMIT)
     this.plain = (this.plain + stripped).slice(-SCREEN_LIMIT)
     this.readLinks(text)
+    this.drawn = (this.drawn + text).slice(-RAW_LIMIT)
     if (this.commandSent) {
       this.afterCommand = (this.afterCommand + compact(stripped)).slice(-SCREEN_LIMIT)
       return []
@@ -225,7 +251,7 @@ export class FlowGuide implements AccountGuideDriver {
       const matched = typeof step.when === 'function' ? step.when(screen, context) : screen.has(...step.when)
       if (!matched) continue
       const guide = step.guide(screen, context)
-      if (i === this.index && sameGuide(guide, this.shown)) return []
+      if (i === this.index && sameGuide(guide, this.shown)) return step.pick ? this.pick(step) : []
       if (i !== this.index) this.typed = false
       this.index = i
       if (step.ends) return this.end(guide)
@@ -238,9 +264,35 @@ export class FlowGuide implements AccountGuideDriver {
         }
       }
       if (step.confirms) events.push(...this.startConfirm(step.confirms))
+      if (step.watches && !this.watching) {
+        this.watching = true
+        events.push({ watch: step.watches })
+      }
+      if (step.pick) events.push(...this.pick(step))
       return events
     }
     return []
+  }
+
+  /** One key per drawn screen: Enter on the chosen row, the down arrow on any other. */
+  private pick(step: FlowStep): GuideEvent[] {
+    if (this.pickDone || !step.pick) return []
+    const lines = this.drawn.split(/\r\n|\r|\n/).map((line) => line.replace(CONTROL, ' '))
+    const found = step.pick(lines, this.context)
+    // The row highlighted before the last key may still be on screen until the key lands.
+    if (!found || found.row === this.lastPicked) return []
+    if (found.target) {
+      this.pickDone = true
+      return [{ write: '\r' }, ...this.startConfirm(step.pickConfirms ?? 'logout')]
+    }
+    if (this.picked.has(found.row) || this.picked.size >= PICK_LIMIT) {
+      this.pickDone = true
+      return this.show(this.texts.native)
+    }
+    this.picked.add(found.row)
+    this.lastPicked = found.row
+    this.drawn = ''
+    return [{ write: DOWN }]
   }
 
   input(data: string): GuideEvent[] {
@@ -304,10 +356,12 @@ export class FlowGuide implements AccountGuideDriver {
   }
 
   confirmed(change: AccountChange): GuideEvent[] {
+    if (this.done) return []
     return this.end(change === 'login' ? this.texts.signedIn : this.texts.loggedOut)
   }
 
   unconfirmed(change: AccountChange): GuideEvent[] {
+    if (this.done) return []
     this.confirming = false
     this.typed = false
     if (change === 'logout') return this.show(this.texts.logoutUnconfirmed)
@@ -332,10 +386,11 @@ export class FlowGuide implements AccountGuideDriver {
     if (change === 'logout' && login)
       return !!after && after.state !== 'unavailable' && after.state !== 'unknown' && !after.logins?.some((item) => item.id === login)
     if (change === 'login' && provider && this.flow.targets) {
+      const stored = this.ctx.stores ?? provider
       const held = (evidence: AccountEvidence | undefined) =>
         new Set(
           (evidence?.logins ?? []).flatMap((item) =>
-            item.id && parseAccountLoginId(item.id)?.provider === provider ? [item.id] : [],
+            item.id && parseAccountLoginId(item.id)?.provider === stored ? [item.id] : [],
           ),
         )
       const now = held(after),

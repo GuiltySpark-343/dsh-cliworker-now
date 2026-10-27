@@ -2810,3 +2810,15 @@ OpenSpec 变更 `harden-host-lifecycle-durability`。来源为 4 个 Codex gpt-6
 - 自动检查（合成画面与模拟凭据，均已标注）：`account-guide-flows` 20 项（新文件）；`accounts` 新增 18 项（单账号流程、OpenCode / Hermes 指定服务商与单条退出、目标仍在时不报成功、目标不存在时拒绝）；`account-terminal` 新增 5 项（切换账号先退后登、退出未确认不登录、单条退出参数、Hermes 替换顺序、旧 Host 提示）；`settings-dialog` 改写 18 项并新增 3 项（账号窗口、行内确认、替换警示、添加 / 替换单选）；`cli-settings` 新增 `accountStartWith` 参数测试。修复了切换账号时登录被启动两次的问题（测试发现）。
 - 全量：`vitest run` 230 个文件通过、3 个跳过，4602 项通过、13 项跳过（首轮 3 项失败：词条键须含中文、Gateway 新参数，已修）；类型检查通过（DSH 0.2.1-rc.3）。
 - 未验证：Desktop 中各 CLI 的真实登录 / 退出 / 切换账号；OpenCode / Hermes 真实 API Key 登录与单条退出；Kimi、Pi、OMP 的「登录到」与逐条退出尚未实现。
+
+## 2026-10-27 Kimi、Pi、OMP 的「登录到」与逐条退出（OpenSpec `add-cli-login-templates` 0.3、2.4，`feat/general-settings`，未发布）
+
+- 实现由三个子 agent 分别完成（Pi、OMP、Kimi），主会话审阅后补了引擎的后台授权核对（`watches`）、OMP 软删除行不覆盖其他位置，以及 Kimi 链接白名单与词条。
+- 真实画面探测（隔离 HOME / 临时目录，模拟凭据，不提交任何授权码、密钥或网址；原始输出含一次性码，仅留在会话临时目录）：
+  - Pi 1.0.4：`pi-login.mjs logout deepseek` 只移除 deepseek，其他服务商保留；`login <服务商>` 进入登录方式菜单（账号 / API Key）。
+  - OMP 16.4.4：`/logout <服务商>` 列表每行带唯一 `#<rowid>`，选择时只局部重绘；按编号选中的那一行被软删除（`node:sqlite` 核对 `disabled_cause='deleted by user'`，其余行不变）。`/login <服务商>` 显示浏览器 / 设备 / 密钥画面。
+  - Kimi Code：`kimi provider remove <键>` 只删目标；`/logout` 列表不循环，到边界即停，Kimi Code 恒为首行；`kimi login --region` 显示设备码与 www.kimi.com / www.kimi.ai 页面。
+  - **影响真实安装**：探测期间 Kimi 自带的自动更新把真实的 `~/.kimi-code/bin/kimi` 从 2.1.1（188155456 字节，10-08）升级为 2.3.3（189806656 字节，10-27 08:54）；更新器写入自身安装路径，不受隔离 HOME 影响（原生开关为 `KIMI_CODE_NO_AUTO_UPDATE`）。`~/.kimi-code` 的配置、凭据、会话文件时间未变。另外 Kimi TUI 把模拟的 moonshot 密钥发到了 api.moonshot.cn（返回 Invalid Authentication）。
+- 自动检查（合成画面与模拟凭据，均已标注）：`pi-account-window` 25 项、`omp-account-window` 25 项、`kimi-account-window` 17 项（均为新文件）；`kimi-accounts` 55 项（新增逐行登录）；`accounts` 新增 Kimi / Pi / OMP 参数与句柄校验；`pi-omp-native` 新增 OMP 软删除与有效凭据测试；`provider-login-status` 新增「deleted by user 视为未配置、其他禁用原因仍为失效」（全量首轮发现该回归后修复）；`settings-dialog` 新增 Pi 分组测试。
+- 全量：`vitest run` 233 个文件通过、3 个跳过，4681 项通过、13 项跳过；类型检查通过（DSH 0.2.1-rc.3）；OpenSpec 严格校验通过。
+- 未验证：真实授权成功与真实账号退出（Pi / OMP / Kimi）；Desktop 界面；Kimi `/logout` 分页（>8 行）；OMP Moonshot / MiniMax 登录画面；Copilot 企业版。已知风险：Kimi 的 40 次 ↑ 若未生效，窗口会停在「正在选择」，需显示原生终端处理（不会误按回车）。

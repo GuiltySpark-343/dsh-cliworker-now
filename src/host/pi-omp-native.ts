@@ -9,6 +9,7 @@ import type { AccountIdentity } from './account-identity.ts'
 import { authenticatedAccountLogins, providerLogin, usableNativeApiKey } from './account-login.ts'
 import type { AccountLogin, AccountSource } from '../shared/accounts.ts'
 import type { PiOmpCli } from './pi-omp-adapter.ts'
+import { accountLoginId } from '../shared/account-links.ts'
 import { acquireOwnAccountLease, releaseOwnAccountLease, OWN_ACCOUNT_BUSY } from './own-account-lease.mjs'
 import {
   refreshFingerprint,
@@ -408,20 +409,30 @@ export async function listPiOmpAccountSources(
     label,
   }))
 }
+/** The `disabled_cause` OMP's /logout writes when it soft-deletes a credential (OMP 16.4.4). */
+const OMP_SIGNED_OUT = 'deleted by user'
 function mergeSources(sources: NativeSource[]) {
   const auth = Object.assign(Object.create(null), ...sources.map((s) => s.auth))
   const providers = Object.assign(Object.create(null), ...sources.map((s) => s.models.providers ?? {}))
   const env = Object.assign(Object.create(null), ...sources.map((s) => s.env)) as Record<string, string>
   const credentialProviders = new Map<string, any[]>()
+  const disabledOnly = new Map<string, any[]>()
   const cache = new Map<string, any>()
   for (const s of sources) {
-    for (const provider of new Set(s.credentials.map((row) => row.provider)))
+    // OMP signs a credential out by disabling its row: only usable rows override another location.
+    for (const provider of new Set(s.credentials.filter((row) => !row.disabled_cause).map((row) => row.provider)))
       credentialProviders.set(
         provider,
         s.credentials.filter((row) => row.provider === provider),
       )
     for (const row of s.modelCache) cache.set(row.provider_id, row)
   }
+  // A provider left with only disabled rows still shows them as expired, except rows the user signed out.
+  for (const s of sources)
+    for (const row of s.credentials)
+      if (!credentialProviders.has(row.provider) && row.disabled_cause !== OMP_SIGNED_OUT)
+        disabledOnly.set(row.provider, [...(disabledOnly.get(row.provider) ?? []), row])
+  for (const [provider, rows] of disabledOnly) credentialProviders.set(provider, rows)
   const kinds = new Set<string>()
   let expired = false
   for (const entry of Object.values(auth) as Record<string, any>[]) {
@@ -596,7 +607,7 @@ export async function snapshotPiOmpNative(
         const credentialOwners = new Map<string, NativeSource>()
         for (const source of sources) {
           for (const provider of Object.keys(source.auth)) authOwners.set(provider, source)
-          for (const row of source.credentials) credentialOwners.set(row.provider, source)
+          for (const row of source.credentials) if (!row.disabled_cause) credentialOwners.set(row.provider, source)
         }
         sources = sources.map((source) => ({
           ...source,
@@ -754,32 +765,50 @@ export async function inspectPiOmpNativeAccount(
           : Object.values(knownProviderEnvironment).includes(value))
           ? env[value]
           : value
-      const add = (provider: string, method: 'api' | 'oauth') => {
+      /** A stored credential: `pi:<provider>:<source>`, `omp:<provider>:<source>.<row id>`. */
+      type Stored = { source: AccountSource; entry: string }
+      const add = (provider: string, method: 'api' | 'oauth', stored?: Stored) => {
         const config = providers[provider]
-        logins.push(
-          providerLogin(provider, method, {
-            baseUrl: ownValue(config?.baseUrl, true),
-            name: config?.name,
-          }),
-        )
+        const login = providerLogin(provider, method, {
+          baseUrl: ownValue(config?.baseUrl, true),
+          name: config?.name,
+        })
+        const id = stored && accountLoginId(cli, provider, stored.entry)
+        logins.push(stored ? { ...login, ...(id ? { id } : {}), source: stored.source } : login)
       }
       let invalidOAuth = false
-      const inspect = (provider: string, type: string, value: Record<string, any>, disabled?: unknown) => {
+      const inspect = (
+        provider: string,
+        type: string,
+        value: Record<string, any>,
+        disabled: unknown,
+        stored: Stored,
+      ) => {
         if (credentialState(type, value, disabled) !== 'configured') return
         if (type === 'api' || type === 'api_key') {
-          if (usableNativeApiKey(ownValue(value.key ?? value.apiKey))) add(provider, 'api')
+          if (usableNativeApiKey(ownValue(value.key ?? value.apiKey))) add(provider, 'api', stored)
         } else if (
           usableNativeApiKey(value.access) &&
           (value.expires >= Date.now() || usableNativeApiKey(value.refresh))
         )
-          add(provider, 'oauth')
+          add(provider, 'oauth', stored)
         else invalidOAuth = true
       }
-      for (const [provider, value] of Object.entries(auth) as [string, Record<string, any>][])
-        inspect(provider, value.type, value)
-      for (const [provider, rows] of credentialProviders)
-        for (const row of rows)
-          inspect(provider, row.credential_type, JSON.parse(row.data), row.disabled_cause)
+      // The credentials workers use: a later location overrides a provider of an earlier one.
+      // Each keeps the location it is stored in, where it is signed out on its own.
+      const later = (index: number, has: (item: NativeSource) => boolean) => sources.slice(index + 1).some(has)
+      for (const [index, item] of sources.entries()) {
+        const source: AccountSource = index === 0 ? 'native' : 'plugin'
+        for (const [provider, value] of Object.entries(item.auth) as [string, Record<string, any>][])
+          if (!later(index, (next) => Object.hasOwn(next.auth, provider)))
+            inspect(provider, value.type, value, undefined, { source, entry: source })
+        for (const row of item.credentials)
+          if (!later(index, (next) => next.credentials.some((other) => other.provider === row.provider && !other.disabled_cause)))
+            inspect(row.provider, row.credential_type, JSON.parse(row.data), row.disabled_cause, {
+              source,
+              entry: `${source}.${row.native_rowid}`,
+            })
+      }
       for (const [provider, value] of Object.entries(providers) as [string, Record<string, any>][]) {
         if (usableNativeApiKey(ownValue(value.apiKey, true))) add(provider, 'api')
       }

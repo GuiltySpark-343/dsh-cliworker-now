@@ -210,7 +210,7 @@ describe('removable login handles (simulated stores)', () => {
     ])
     expect(providers?.find((item) => item.id === 'deepseek')?.signedIn).toBe(true)
     expect(providers?.find((item) => item.id === 'openrouter')?.signedIn).toBeUndefined()
-    expect(loginProviders('kimi', [])).toBeUndefined()
+    expect(loginProviders('grok', [])).toBeUndefined()
   })
 })
 

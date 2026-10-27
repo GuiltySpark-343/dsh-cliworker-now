@@ -2,7 +2,10 @@ import { constants } from 'node:fs'
 import { lstat, mkdir, mkdtemp, open, realpath, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
+import type { AccountLogin } from '../shared/accounts.ts'
+import { accountLoginId } from '../shared/account-links.ts'
 import type { AccountIdentity } from './account-identity.ts'
+import { providerLogin } from './account-login.ts'
 import { safePiOmpAncestors } from './pi-omp-native.ts'
 
 const object = (value: unknown): value is Record<string, any> =>
@@ -15,6 +18,8 @@ const unavailable = (): AccountIdentity => ({
   verification: 'local',
   summary: 'Kimi 登录状态读取失败，请检查配置',
 })
+/** The account window's id provider for the managed Kimi Code OAuth login (`kimi:kimi-code`). */
+export const KIMI_CODE_LOGIN = 'kimi-code'
 export const KIMI_MANAGE_LOGIN =
   '已登录 Kimi。若出现 Trust 提示，请自行确认此空账号目录；切换账号输入 /logout，再输入 /login。'
 
@@ -182,12 +187,21 @@ export async function readKimiAccount(
     signal.throwIfAborted()
     const config: unknown = JSON.parse(raw)
     if (!object(config) || !object(config.providers)) return unavailable()
-    const providers = Object.values(config.providers).filter(object)
-    const api = providers.some(
-      (provider) => !provider.oauth && (literal(provider.apiKey) || literal(provider.env?.KIMI_API_KEY)),
-    )
+    // One row per own API provider with a literal key, in the order of Kimi's /logout list.
+    const apiLogins: AccountLogin[] = Object.entries(config.providers)
+      .filter(
+        ([, provider]) =>
+          object(provider) && !provider.oauth && (literal(provider.apiKey) || literal(provider.env?.KIMI_API_KEY)),
+      )
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, provider]) => {
+        // `kimi:kimi-code` is the managed OAuth login; an API provider of that name is not removable here.
+        const id = key === KIMI_CODE_LOGIN ? undefined : accountLoginId('kimi', key)
+        return { ...providerLogin(key, 'api', { baseUrl: provider.baseUrl }), ...(id ? { id } : {}) }
+      })
+    const api = apiLogins.length > 0
     const configured: AccountIdentity = api
-      ? { state: 'configured', verification: 'local', authMethod: 'api', summary: '已配置 Kimi API' }
+      ? { state: 'configured', verification: 'local', authMethod: 'api', summary: '已配置 Kimi API', logins: apiLogins }
       : { state: 'unconfigured', verification: 'local', summary: '尚未登录 Kimi' }
     const provider = config.providers['managed:kimi-code']
     if (!object(provider) || provider.oauth === undefined) return configured
@@ -219,12 +233,19 @@ export async function readKimiAccount(
         ? configured
         : { state: 'unauthenticated', verification: 'local', summary: 'Kimi 登录已过期，请重新登录' }
     const accountLabel = kimiAccountLabel(token.access_token)
+    const oauthLogin: AccountLogin = {
+      providerLabel: 'Kimi Code',
+      authMethod: 'oauth',
+      ...(accountLabel ? { accountLabel } : {}),
+      id: `kimi:${KIMI_CODE_LOGIN}`,
+    }
     return {
       state: 'authenticated',
       authMethod: 'oauth',
       verification: 'local',
       summary: '已登录 Kimi',
       ...(accountLabel ? { accountLabel } : {}),
+      logins: [oauthLogin, ...apiLogins],
     }
   } catch {
     signal.throwIfAborted()

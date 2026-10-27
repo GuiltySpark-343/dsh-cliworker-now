@@ -146,6 +146,10 @@ describe('Pi and OMP own provider login projection', () => {
     database(path, [{ provider: 'openai-codex', type: 'oauth', data: oauth(), disabled: 'revoked' }])
     expect((await f.status()).state).toBe('unauthenticated')
     await rm(path)
+    // OMP's own /logout soft-deletes the row; that is signed out, not expired.
+    database(path, [{ provider: 'openai-codex', type: 'oauth', data: oauth(), disabled: 'deleted by user' }])
+    expect((await f.status()).state).toBe('unconfigured')
+    await rm(path)
     database(path, [{ provider: 'zai-coding-cn', type: 'api_key', data: { key: 'synthetic-own-key' } }])
     expect(await f.status()).toMatchObject({
       state: 'authenticated',

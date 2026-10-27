@@ -76,7 +76,7 @@ Host 校验它属于当前步骤，再由流程定义翻译成按键写入。这
 
 - ZCode：help 能力探测。
 - OpenCode：模型目录 + `auth list`。
-- Pi / OMP / Hermes：固定表，并以真实菜单校验。
+- Pi / OMP / Hermes / Kimi：固定表，并以真实菜单校验。Kimi 只有 Kimi Code 的两个区域（`--region mainland-cn|global`）；OMP 的 `openai-codex-device` 写入 `openai-codex`（`stores`）。
 
 Client 选择后调用 `accountStartWith(session, cli, action, { provider, mode })`，替代 `accountStartForProvider`（保留兼容）。Host 定位服务商时，优先用 CLI 自身参数（`zcode login <p>`、`opencode auth login -p <id>`、`mimo auth login -p`）。没有参数的，由引擎在原生菜单中选中该项（筛选输入或方向键），这是用户在下拉框中明确选择后的代操作。定位失败时停在原生菜单，提示用户手动选择。
 
@@ -101,6 +101,8 @@ Client 选择后调用 `accountStartWith(session, cli, action, { provider, mode 
   - 行内「退出」会先确认，再调用 `accountStartWith(..., { action: 'logout', login: id })`。
   - Host 把它解析成该 CLI 的单项退出方式（映射表），在隐藏终端中按流程定义自动完成。
   - 确认标准是目标条目从原生状态中消失，或凭据数减少。
+- **原生列表选择（`pick`）**：OMP 的 `/logout` 与 Kimi 的 Kimi Code 退出只能在原生列表中选。引擎每次只按一次 ↓，读取高亮行；只有高亮行能核对为目标（OMP 行的 `#<rowid>`、Kimi 的 Kimi Code 行）才按回车，重复行或超过 40 行即转原生终端。Kimi 列表不循环且 Kimi Code 恒为首行，故先按 40 次 ↑ 再核对。
+- **列出范围**：Pi/OMP 只列任务实际使用的凭据，后加载位置覆盖同一服务商；OMP 被禁用的行不覆盖，`deleted by user`（OMP 自身退出）视为不存在，其他禁用原因显示失效。
 - **不支持单项退出的 CLI**：该行显示「在原生终端中退出」，并展开终端。
 - **兼容**：来源按钮（`accountStartForSource`）保留兼容，新 Client 不再使用。
 
@@ -108,6 +110,7 @@ Client 选择后调用 `accountStartWith(session, cli, action, { provider, mode 
 
 登录和退出都以原生账号状态确认，与 Antigravity 相同：每 1.5 秒查询一次，登录最长 60 秒，退出最长 20 秒。多服务商时比较前后快照，只认目标的变化。
 
+- Pi、OMP 授权后不退出：流程步骤带 `watches: 'login'`，Host 在等待授权时每 3 秒核对一次，最长 15 分钟。
 - 超时：显示未确认，并给出「重新开始」和「显示原生终端」。
 - 屏幕上的成功文字只用来提前开始核对，不作为依据。
 
@@ -129,5 +132,6 @@ Client 选择后调用 `accountStartWith(session, cli, action, { provider, mode 
 
 - **原生画面变更**：CLI 升级后画面可能变化，导致无法识别。D8 的后备保证不卡住；每个流程定义带版本说明和合成画面测试。
 - **代选菜单**：在原生菜单中代选服务商，可能因列表顺序变化而选错。本次不做代选：只用 CLI 自身的服务商参数（OpenCode `-p`、Hermes `auth add <p>`）定位；没有参数的服务商在原生终端中由用户选择。
+- **Kimi ↑ 键丢失**：若 40 次 ↑ 未生效，高亮行一直不是 Kimi Code，窗口会停在「正在选择」，由用户显示原生终端处理；插件不会在其他行按回车。
 - **逐个退出能力差异大**：某些 CLI 只能在菜单中删除，按 D6 降级处理。
 - **回退办法**：流程定义可按 CLI 关闭，关闭后回到原生终端（现行为）。

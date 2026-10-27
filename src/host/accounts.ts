@@ -8,7 +8,7 @@ import {
   type GuideEvent,
 } from './account-guide/engine.ts'
 import { createAccountGuide } from './account-guide/flows.ts'
-import { isLoginProvider, loginProviders } from './account-guide/providers.ts'
+import { isLoginProvider, loginProviders, providerStores } from './account-guide/providers.ts'
 import { parseAccountLoginId } from '../shared/account-links.ts'
 import {
   readClaudeOwnRoute,
@@ -62,7 +62,7 @@ import { prepareHermesAccount, readHermesAccount, listHermesAccountSources } fro
 import { listPiOmpAccountSources } from './pi-omp-native.ts'
 import { verifyHermesExecutable, HermesExecutableError } from './hermes-installation.ts'
 import { preparePiOmpAccountTerminal } from './pi-omp-accounts.ts'
-import { readKimiAccount, KIMI_MANAGE_LOGIN, prepareKimiAccountDirectory } from './kimi-accounts.ts'
+import { readKimiAccount, KIMI_CODE_LOGIN, KIMI_MANAGE_LOGIN, prepareKimiAccountDirectory } from './kimi-accounts.ts'
 import { readMimoAccount } from './mimo-configuration.ts'
 import { prepareMimoAccountTerminal } from './first-party-account-context.ts'
 import { spawnAccountTerminal, WindowsAccountTerminalError } from './windows-account-terminal.ts'
@@ -93,6 +93,9 @@ export const AGY_GUIDE_TIMING = {
   confirmEnterMs: 1500,
   /** Other CLIs' guided windows: a screen this still with no known step goes to the native terminal. */
   flowQuietMs: 8000,
+  /** How long a waiting browser/device authorization is watched, and how often. */
+  authorizeWatchMs: 15 * 60_000,
+  watchPollMs: 3000,
 }
 // A guided answer's Enter follows its pasted value after the input box takes it.
 const ANSWER_ENTER_MS = 300
@@ -530,11 +533,13 @@ export class AccountManager {
           installed,
           ...status,
           actions: this.backend.spawnTerminal
-            ? actionsFor(cli, this.config).map((item) =>
-                cli === 'kimi' && item.id === 'login' && status.state === 'authenticated'
-                  ? { ...item, label: '管理登录', description: '在原生终端管理 Kimi 登录' }
-                  : item,
-              )
+            ? actionsFor(cli, this.config).map((item) => {
+                if (cli !== 'kimi' || item.id !== 'login') return item
+                const providers = loginProviders(cli, status.logins)
+                return status.state === 'authenticated'
+                  ? { ...item, label: '管理登录', description: '在原生终端管理 Kimi 登录', providers }
+                  : { ...item, providers }
+              })
             : [],
         }
       } finally {
@@ -676,18 +681,26 @@ export class AccountManager {
       (action !== 'login' ||
         source !== undefined ||
         login !== undefined ||
-        !(cli === 'zcode' ? ['bigmodel', 'zai'].includes(provider) : (cli === 'opencode' || cli === 'hermes') && isLoginProvider(cli, provider)))
+        !(cli === 'zcode' ? ['bigmodel', 'zai'].includes(provider) : isLoginProvider(cli, provider)))
     )
       throw new Error(cli === 'zcode' ? '不支持的 ZCode 授权来源' : '不支持的登录服务商')
-    // One login of the account window: an OpenCode provider, or a Hermes pool entry.
+    // One login of the account window: an OpenCode or Kimi provider, a Hermes pool entry,
+    // a Pi provider in one location, or one OMP credential row in one location.
     const target = login === undefined ? undefined : parseAccountLoginId(login)
+    const entry = target?.entry
     if (
       login !== undefined &&
       (action !== 'logout' ||
         source !== undefined ||
         !target ||
         target.cli !== cli ||
-        !(cli === 'opencode' ? target.entry === undefined : cli === 'hermes' && target.entry !== undefined))
+        !(cli === 'opencode' || cli === 'kimi'
+          ? entry === undefined
+          : cli === 'hermes'
+            ? entry !== undefined
+            : cli === 'pi'
+              ? entry === 'native' || entry === 'plugin'
+              : cli === 'omp' && !!entry && /^(?:native|plugin)\.[1-9][0-9]{0,15}$/.test(entry)))
     )
       throw new Error('不支持单独退出该账号')
     if (!parent || parent.length > 512) throw new Error('无效的父会话')
@@ -771,7 +784,15 @@ export class AccountManager {
         launch.argv = [executable, ...QODER_METADATA_ARGUMENTS.filter((value) => value !== '--acp'), ...argumentsFor(cli, action)]
         launch.env = qoderEnvironment(cli)
       } else if (cli === 'kimi') {
-        if (action === 'login') {
+        if (login) await this.assertLogin(cli, cwd, login, startup)
+        const target = login ? parseAccountLoginId(login) : undefined
+        if (provider) {
+          // A Kimi Code region picked in the window: Kimi's own device login for it.
+          launch.argv = [executable, 'login', '--region', provider === 'kimi-code-cn' ? 'mainland-cn' : 'global']
+        } else if (target && target.provider !== KIMI_CODE_LOGIN) {
+          // One API provider: Kimi's own non-interactive removal, the same call as /logout.
+          launch.argv = [executable, 'provider', 'remove', target.provider]
+        } else if (action === 'login') {
           const current = await this.readStatus(cli, cwd, startup)
           startup.throwIfAborted()
           if (current.state === 'authenticated' && current.authMethod === 'oauth') {
@@ -810,10 +831,13 @@ export class AccountManager {
         launch = prepared
         instruction = prepared.instruction
       } else if (cli === 'pi' || cli === 'omp') {
+        if (login) await this.assertLogin(cli, cwd, login, startup)
         const prepared = await preparePiOmpAccountTerminal({
           cli,
           action,
           source,
+          provider,
+          login,
           executable,
           project: cwd,
           stateDirectory:
@@ -850,7 +874,11 @@ export class AccountManager {
         release = prepared.cleanup
       }
       startup.throwIfAborted()
-      const guide = createAccountGuide(cli, action, { provider, login })
+      const guide = createAccountGuide(cli, action, {
+        provider,
+        login,
+        stores: provider ? providerStores(cli, provider) : undefined,
+      })
       allocation = spawnAccountTerminal(this.backend, {
         ...launch,
         ...(guide ? guide.size : { rows: 24, cols: 80 }),
@@ -1094,6 +1122,7 @@ export class AccountManager {
       else if ('write' in event) void this.autoWrite(session, event.write)
       else if ('command' in event) void this.logOut(session, event.command)
       else if ('identify' in event) void this.identifyScreen(session)
+      else if ('watch' in event) void this.watchAccount(session)
       else void this.confirmAccount(session, event.confirm)
     }
   }
@@ -1181,6 +1210,27 @@ export class AccountManager {
       return
     }
     await this.confirmAccount(session, 'logout')
+  }
+
+  /** A browser or device authorization the CLI waits for without exiting: read the account until it signs in. */
+  private async watchAccount(session: AccountSession) {
+    const signal = session.guideControl!.signal
+    const until = Date.now() + AGY_GUIDE_TIMING.authorizeWatchMs
+    const guide = session.guide!
+    try {
+      const before = await session.before
+      while (Date.now() < until && session.state === 'running' && !session.stopping) {
+        await sleep(AGY_GUIDE_TIMING.watchPollMs, undefined, { signal })
+        const after = await this.evidence(session, signal).catch(() => undefined)
+        signal.throwIfAborted()
+        if (guide.proves('login', before, after, session.exitCode)) {
+          this.guided(session, guide.confirmed('login'))
+          return
+        }
+      }
+    } catch {
+      // Closing the window aborts it; the login stays the user's to finish.
+    }
   }
 
   /** The native account state, not terminal text, decides that a login or logout took effect. */

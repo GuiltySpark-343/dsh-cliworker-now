@@ -47,6 +47,9 @@ async function fixture() {
   }
 }
 
+// The managed Kimi Code OAuth login as one removable row of the account window.
+const OAUTH_ROW = { providerLabel: 'Kimi Code', authMethod: 'oauth', id: 'kimi:kimi-code' } as const
+
 function syntheticJwt(claims: unknown) {
   return [
     Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url'),
@@ -110,6 +113,7 @@ it.each(['current', 'refreshable', 'native-no-expiry'] as const)(
       authMethod: 'oauth',
       verification: 'local',
       summary: '已登录 Kimi',
+      logins: [OAUTH_ROW],
     })
     expect(JSON.stringify(value)).not.toMatch(/synthetic-|token|credentials|\.json/)
     expect(await readFile(f.path)).toEqual(before)
@@ -135,8 +139,8 @@ it.each(['current', 'refreshable', 'native-no-expiry'] as const)(
       verification: 'local',
       summary: '已登录 Kimi',
       accountLabel: 'Kimi ID · …123abc',
+      logins: [{ ...OAUTH_ROW, accountLabel: 'Kimi ID · …123abc' }],
     })
-    expect(value).not.toHaveProperty('logins')
     for (const secret of [id, accessToken, f.token.refresh_token, 'synthetic-signature'])
       expect(JSON.stringify(value)).not.toContain(secret)
     expect(await readFile(f.path)).toEqual(before)
@@ -176,6 +180,7 @@ it.each([
     authMethod: 'oauth',
     verification: 'local',
     summary: '已登录 Kimi',
+    logins: [OAUTH_ROW],
   })
 })
 
@@ -294,4 +299,81 @@ it('keeps unknown storage unknown and propagates cancellation', async () => {
   const controller = new AbortController()
   controller.abort(new Error('Synthetic cancelled'))
   await expect(f.read(f.config, controller.signal)).rejects.toThrow('Synthetic cancelled')
+})
+
+// Synthetic `kimi provider list --json` shapes: the managed OAuth entry plus own API providers.
+const apiProviders = {
+  'moonshot-cn': { type: 'kimi', baseUrl: 'https://api.moonshot.cn/v1', apiKey: 'synthetic-moonshot-key' },
+  deepseek: { type: 'openai', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'synthetic-deepseek-key' },
+}
+
+it('lists the Kimi Code login and each own API provider as removable rows, in /logout order', async () => {
+  const f = await fixture()
+  const id = 'synthetic-account-123abc'
+  await f.set({ ...f.token, access_token: syntheticJwt({ iss: 'kimi-auth', sub: id }) })
+  const value = await f.read({ providers: { ...apiProviders, ...f.config.providers }, models: {} })
+  expect(value).toEqual({
+    state: 'authenticated',
+    authMethod: 'oauth',
+    verification: 'local',
+    summary: '已登录 Kimi',
+    accountLabel: 'Kimi ID · …123abc',
+    logins: [
+      { ...OAUTH_ROW, accountLabel: 'Kimi ID · …123abc' },
+      { providerLabel: 'DeepSeek', authMethod: 'api', id: 'kimi:deepseek' },
+      { providerLabel: 'Moonshot', authMethod: 'api', id: 'kimi:moonshot-cn' },
+    ],
+  })
+  for (const secret of ['synthetic-moonshot-key', 'synthetic-deepseek-key', id, 'api.deepseek.com/v1'])
+    expect(JSON.stringify(value)).not.toContain(secret)
+})
+
+it('keeps API-only Kimi configured while listing its API rows, and never a managed row', async () => {
+  const f = await fixture()
+  const value = await f.read({ providers: { ...apiProviders, ...f.config.providers }, models: {} })
+  expect(value).toEqual({
+    state: 'configured',
+    verification: 'local',
+    authMethod: 'api',
+    summary: '已配置 Kimi API',
+    logins: [
+      { providerLabel: 'DeepSeek', authMethod: 'api', id: 'kimi:deepseek' },
+      { providerLabel: 'Moonshot', authMethod: 'api', id: 'kimi:moonshot-cn' },
+    ],
+  })
+  // A revoked managed token stays out of the rows; the API rows remain.
+  await f.set({ access_token: '', refresh_token: 'synthetic-old-refresh', expires_at: 0 })
+  expect((await f.read({ providers: { ...apiProviders, ...f.config.providers } })).logins?.map((row) => row.id)).toEqual([
+    'kimi:deepseek',
+    'kimi:moonshot-cn',
+  ])
+})
+
+it('gives no removal id to a provider key the window cannot address, nor to referenced keys', async () => {
+  const f = await fixture()
+  const value = await f.read({
+    providers: {
+      // Named like the managed login: removing it here would be ambiguous.
+      'kimi-code': { type: 'kimi', baseUrl: 'https://api.moonshot.cn/v1', apiKey: 'synthetic-key-a' },
+      'Upper Case': { type: 'openai', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'synthetic-key-b' },
+      env: { type: 'kimi', env: { KIMI_API_KEY: 'synthetic-key-c' } },
+      referenced: { type: 'openai', apiKey: '$OPENAI_API_KEY' },
+      oauth: { type: 'kimi', apiKey: 'synthetic-key-d', oauth: { storage: 'file', key: 'oauth/other' } },
+    },
+  })
+  expect(value.state).toBe('configured')
+  expect(value.logins).toEqual([
+    { providerLabel: 'DeepSeek', authMethod: 'api' },
+    { providerLabel: 'env', authMethod: 'api', id: 'kimi:env' },
+    { providerLabel: 'Moonshot', authMethod: 'api' },
+  ])
+  expect(JSON.stringify(value)).not.toMatch(/synthetic-key|referenced|oauth\//)
+})
+
+it('lists no rows when nothing is signed in, or the status cannot be read', async () => {
+  const f = await fixture()
+  expect(await f.read()).not.toHaveProperty('logins')
+  f.config.providers['managed:kimi-code'].oauth.storage = 'keyring'
+  expect(await f.read({ providers: { ...apiProviders, ...f.config.providers } })).not.toHaveProperty('logins')
+  expect(await readKimiAccount('not json', new AbortController().signal, { home: f.home })).not.toHaveProperty('logins')
 })

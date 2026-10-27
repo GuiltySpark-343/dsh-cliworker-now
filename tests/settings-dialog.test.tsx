@@ -1674,7 +1674,8 @@ it.each(['omp', 'pi', 'hermes'] as const)(
       accountStatus: vi.fn(async (_parent, id: CliId) =>
         status(id, {
           state: 'authenticated',
-          logins: [{ providerLabel: 'OpenAI', authMethod: 'oauth' }],
+          // A stored login without its own handle: its CLI's menu, in its own location.
+          logins: [{ providerLabel: 'OpenAI', authMethod: 'oauth', source: 'native' }],
           actions: accountActions,
         }),
       ),
@@ -1685,10 +1686,38 @@ it.each(['omp', 'pi', 'hermes'] as const)(
     expect(t.text()).toContain('OpenAI账号登录')
     expect(terminal.started).not.toHaveBeenCalled()
     await t.click('在原生终端中退出')
-    expect(terminal.started).toHaveBeenCalledExactlyOnceWith(cli, 'logout')
+    expect(terminal.started).toHaveBeenCalledExactlyOnceWith(cli, 'logout', 'native')
     expect(t.configure).not.toHaveBeenCalled()
   },
 )
+it('groups Pi logins by location, signs out each one where it is stored and leaves config keys alone', async () => {
+  const t = await setup({
+    accountStatus: vi.fn(async (_parent, id: CliId) =>
+      status(id, {
+        state: 'authenticated',
+        logins: [
+          { providerLabel: 'DeepSeek', authMethod: 'api', id: 'pi:deepseek:plugin', source: 'plugin' },
+          { providerLabel: 'Anthropic', authMethod: 'oauth', id: 'pi:anthropic:native', source: 'native' },
+          { providerLabel: 'OpenRouter', authMethod: 'api' },
+        ],
+        actions: accountActions,
+      }),
+    ),
+  })
+  await t.click('Pi 设置')
+  await t.click('账号')
+  const text = t.text()
+  // Native location first, then the plugin's own, then keys from env or config files.
+  expect(text.indexOf('CLI 全局账号')).toBeLessThan(text.indexOf('插件账号'))
+  expect(text.indexOf('插件账号')).toBeLessThan(text.indexOf('其他配置'))
+  expect(text).toContain('来自环境变量或配置文件，请在原配置中管理')
+  const signOuts = t.r.root.findAllByType('button').filter((b) => b.children.includes('退出'))
+  expect(signOuts).toHaveLength(2)
+  // The second row is the plugin's DeepSeek key.
+  await act(async () => signOuts[1]!.props.onClick())
+  await t.click('确认退出')
+  expect(terminal.started).toHaveBeenCalledExactlyOnceWith('pi', 'logout', { login: 'pi:deepseek:plugin' })
+})
 it.each([
   { identity: 'fixture@example.invalid', visible: true },
   { identity: 'Bearer SYNTHETIC_SECRET', visible: false },

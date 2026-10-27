@@ -13,6 +13,12 @@ export const ACCOUNT_LOGIN_HOSTS: Partial<Record<CliId, readonly string[]>> = {
   grok: ['accounts.x.ai', 'auth.x.ai'],
   zcode: ['.bigmodel.cn', '.z.ai'],
   mimo: ['platform.xiaomimimo.com'],
+  // Hosts seen in Pi 1.0.4 provider logins (2026-10-27).
+  pi: ['claude.ai', 'auth.openai.com', 'github.com', 'www.kimi.com', 'openrouter.ai', 'accounts.x.ai'],
+  // Hosts seen in OMP 16.4.4 /login screens (2026-10-27).
+  omp: ['claude.ai', 'auth.openai.com', 'www.kimi.com', 'github.com'],
+  // Device pages of `kimi login --region mainland-cn|global` (Kimi Code 2.3.3, 2026-10-27).
+  kimi: ['www.kimi.com', 'www.kimi.ai'],
 }
 
 /** An https address on one of `hosts`, without user info; trailing punctuation is not part of it. */

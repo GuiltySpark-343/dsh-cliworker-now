@@ -1164,4 +1164,11 @@ OpenSpec 变更 `add-cli-login-templates`（用户 2026-10-26 要求：其他 CL
 - 「登录到」服务商表是固定表，逐项对照已安装版本：OpenCode 1.19.0 的 models.dev 目录 id，Hermes `auth add` 的 Known providers。表外服务商和 OAuth 仍走原生菜单。
 - Hermes「替换」由 Client 串联：先添加并确认新凭据，再按旧句柄单独退出；退出未确认则保留结果页。单账号「切换账号」同样串联：先退出并确认，再登录。
 - 画面静止 8 秒仍未命中任何步骤时显示原生终端后备，此后不再自动写入。OpenCode 首次读取服务商目录约 15 秒，为它单设等待步骤，避免误入后备。
-- 未做：Kimi、Pi、OMP 的「登录到」与逐条退出（Kimi 画面未捕获，Pi/OMP 非空退出菜单未捕获）；Qoder 已登录 TUI 的 `/logout` 画面未实测，依赖静止后的原生状态判断。真实账号验收尚未执行。
+- 未做：Qoder 已登录 TUI 的 `/logout` 画面未实测，依赖静止后的原生状态判断。真实账号验收尚未执行。
+
+Kimi、Pi、OMP 接入（同日，用户要求「继续做 Kimi、Pi、OMP 的「登录到」下拉框和逐条退出」）：
+
+- 登录句柄：`pi:<服务商>:native|plugin`、`omp:<服务商>:<native|plugin>.<auth_credentials rowid>`、`kimi:<服务商键>`（`kimi:kimi-code` 为托管 OAuth 登录）。服务商表项可带 `stores`，表示实际写入的服务商（OMP `openai-codex-device` → `openai-codex`，Kimi 两个区域 → `kimi-code`），确认按它核对。
+- Pi 没有单服务商退出命令，插件自带的 `pi-login.mjs` 调用 Pi 运行时的 `modelRuntime.logout(provider)`；登录以 `login <服务商>` 进入 Pi 自身的流程。
+- 引擎新增 `pick`：用于只能在原生列表里选的退出（OMP `/logout`、Kimi Code）。每次按一次 ↓ 读高亮行，只有能核对为目标的行才按回车；重复或超过 40 行转原生终端。新增 `watches: 'login'`：Pi、OMP 授权后不退出，Host 每 3 秒核对、最长 15 分钟。
+- Pi/OMP 账号行只列任务实际使用的凭据，并带 `source` 分组；OMP 自身退出写入 `disabled_cause='deleted by user'` 保留行，此类行不覆盖其他位置、不显示失效，其他禁用原因仍显示失效。

@@ -3,6 +3,9 @@ import type { CliId } from '../../shared/types.ts'
 import { AgyAccountGuide } from '../agy-account-guide.ts'
 import { FlowGuide, type AccountGuideDriver, type FlowDefinition } from './engine.ts'
 import { HERMES_FLOW, OPENCODE_FLOW } from './multi-account.ts'
+import { KIMI_FLOW } from './kimi-flow.ts'
+import { OMP_FLOW } from './omp-flow.ts'
+import { PI_FLOW } from './pi-flow.ts'
 import { CLAUDE_FLOW, CODEX_FLOW, GROK_FLOW, MIMO_FLOW, QODERCN_FLOW, QODER_FLOW, ZCODE_FLOW } from './single-account.ts'
 
 /** CLIs whose login/logout window the plugin draws; every other CLI keeps its native terminal. */
@@ -16,6 +19,15 @@ const FLOWS: Partial<Record<CliId, FlowDefinition>> = {
   mimo: MIMO_FLOW,
 }
 
+/** CLIs that keep several logins: guided only for a provider picked, or one login removed, in the account window. */
+const MULTI_FLOWS: Partial<Record<CliId, FlowDefinition>> = {
+  opencode: OPENCODE_FLOW,
+  hermes: HERMES_FLOW,
+  pi: PI_FLOW,
+  omp: OMP_FLOW,
+  kimi: KIMI_FLOW,
+}
+
 export function accountFlow(cli: CliId): FlowDefinition | undefined {
   return FLOWS[cli]
 }
@@ -23,14 +35,15 @@ export function accountFlow(cli: CliId): FlowDefinition | undefined {
 export function createAccountGuide(
   cli: CliId,
   action: AccountAction,
-  options: { provider?: string; mode?: AccountLoginMode; login?: string } = {},
+  options: { provider?: string; mode?: AccountLoginMode; login?: string; stores?: string } = {},
 ): AccountGuideDriver | undefined {
   if (action === 'manage') return undefined
   if (cli === 'antigravity') return new AgyAccountGuide(action)
   // A provider picked in the window, or one login to remove; the native pickers stay native.
-  if (cli === 'opencode' || cli === 'hermes') {
+  const several = MULTI_FLOWS[cli]
+  if (several) {
     if (action === 'login' ? !options.provider : !options.login) return undefined
-    return new FlowGuide(cli === 'opencode' ? OPENCODE_FLOW : HERMES_FLOW, { action, ...options })
+    return new FlowGuide(several, { action, ...options })
   }
   const flow = FLOWS[cli]
   if (!flow || (action === 'login' ? !flow.login : !flow.logout)) return undefined

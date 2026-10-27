@@ -334,3 +334,24 @@ it('discards only the known Host-only OMP route and excludes remote auth brokers
     JSON.parse(await readFile(join(f.worker, 'models.yml'), 'utf8')).providers['cliworker-zai-cn'],
   ).toEqual(legacy)
 })
+it('gives each OMP credential its own location handle, and a signed-out row hides no other location (synthetic)', async () => {
+  const f = await fixture('omp')
+  const future = Date.now() + 3_600_000
+  credentialDB(join(f.global, 'agent.db'), 'anthropic', { access: 'SYNTHETIC_ACCESS', refresh: 'SYNTHETIC_REFRESH', expires: future })
+  // OMP's /logout disables the row instead of deleting it.
+  credentialDB(join(f.account, 'agent.db'), 'anthropic', { access: 'SYNTHETIC_OLD', refresh: 'SYNTHETIC_OLD', expires: future }, 'deleted by user')
+  const status = await f.status()
+  expect(status.state).toBe('authenticated')
+  expect(status.logins).toEqual([expect.objectContaining({ id: 'omp:anthropic:native.1', source: 'native', authMethod: 'oauth' })])
+})
+it('lists the Pi credential workers use, where it is stored (synthetic)', async () => {
+  const f = await fixture('pi')
+  await save(f.global, 'auth.json', { deepseek: { type: 'api_key', key: 'SYNTHETIC_GLOBAL_KEY' }, openrouter: { type: 'api_key', key: 'SYNTHETIC_GLOBAL_OR' } })
+  await save(f.account, 'auth.json', { deepseek: { type: 'api_key', key: 'SYNTHETIC_PLUGIN_KEY' } })
+  const status = await f.status()
+  expect(status.logins?.map((login) => [login.id, login.source])).toEqual([
+    ['pi:openrouter:native', 'native'],
+    ['pi:deepseek:plugin', 'plugin'],
+  ])
+  expect(JSON.stringify(status)).not.toContain('SYNTHETIC_')
+})

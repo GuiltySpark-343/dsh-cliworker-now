@@ -1948,3 +1948,128 @@ describe('guided login windows of other CLIs (synthetic screens)', () => {
     await f.manager.stop('p', id)
   })
 })
+
+describe('Kimi account window launches (synthetic terminal and status)', () => {
+  const timing = { ...AGY_GUIDE_TIMING }
+  afterEach(() => Object.assign(AGY_GUIDE_TIMING, timing))
+  const fast = () =>
+    Object.assign(AGY_GUIDE_TIMING, {
+      commandDelayMs: 1,
+      pollMs: 5,
+      loginConfirmMs: 150,
+      logoutConfirmMs: 150,
+      confirmEnterMs: 5,
+      flowQuietMs: 5,
+      settleCapMs: 50,
+    })
+  const frames = (f: ReturnType<typeof fixture>, id: string) => {
+    const seen: { guide?: { step: string; link?: string; code?: string }; status?: string }[] = []
+    void (async () => {
+      for await (const frame of f.manager.watch('p', id, f.signal)) seen.push(frame)
+    })().catch(() => undefined)
+    return { seen, steps: () => seen.flatMap((frame) => (frame.guide ? [frame.guide.step] : [])) }
+  }
+  const row = (id: string) => ({
+    providerLabel: id === 'kimi:kimi-code' ? 'Kimi Code' : id.split(':')[1]!,
+    authMethod: id === 'kimi:kimi-code' ? ('oauth' as const) : ('api' as const),
+    id,
+  })
+  const holding = (f: ReturnType<typeof fixture>, held: () => string[]) =>
+    vi.spyOn(f.manager as any, 'readStatus').mockImplementation(async () =>
+      held().length
+        ? { state: held().includes('kimi:kimi-code') ? 'authenticated' : 'configured', verification: 'local', summary: '', logins: held().map(row), actions: [] }
+        : { state: 'unconfigured', verification: 'local', summary: '', actions: [] },
+    )
+  const launched = (f: ReturnType<typeof fixture>) => vi.mocked(f.backend.spawnTerminal!).mock.calls[0]![0]
+  const kimi = () => fixture({ kimiExecutable: '/synthetic/kimi' })
+
+  it.each([
+    ['kimi-code-cn', 'mainland-cn'],
+    ['kimi-code-global', 'global'],
+  ])('signs in to the picked region %s with Kimi\'s own device login, typing nothing', async (provider, region) => {
+    fast()
+    const f = kimi()
+    let signedIn = false
+    holding(f, () => (signedIn ? ['kimi:kimi-code'] : []))
+    const { id } = await f.manager.start('p', 'kimi', 'login', f.cwd, f.signal, undefined, provider)
+    expect(launched(f).argv).toEqual(['/synthetic/kimi', 'login', '--region', region])
+    expect(launched(f).cwd).not.toBe(f.cwd)
+    const watched = frames(f, id)
+    // Simulated code; the real one is a one-time value of the Kimi device login.
+    f.output.write(
+      'Opening browser for Kimi device login: https://www.kimi.com/code/authorize_device?user_code=SYNT-HETC\r\n' +
+        'If the browser did not open, paste the URL above and enter code: SYNT-HETC\r\nWaiting for authorization to complete…\r\n',
+    )
+    await vi.waitFor(() => expect(watched.steps().at(-1)).toBe('device'))
+    expect(watched.seen.at(-1)!.guide!.code).toBe('SYNT-HETC')
+    signedIn = true
+    f.result.resolve({ exitCode: 0, signal: null })
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed' }))
+    expect(watched.steps().at(-1)).toBe('signedIn')
+    expect(f.terminal.write).not.toHaveBeenCalled()
+  })
+
+  it('removes one API provider with `provider remove` and confirms only its own removal', async () => {
+    fast()
+    const f = kimi()
+    let removed = false
+    holding(f, () => (removed ? ['kimi:kimi-code', 'kimi:moonshot-cn'] : ['kimi:kimi-code', 'kimi:deepseek', 'kimi:moonshot-cn']))
+    const { id } = await f.manager.start('p', 'kimi', 'logout', f.cwd, f.signal, undefined, undefined, 'kimi:deepseek')
+    expect(launched(f).argv).toEqual(['/synthetic/kimi', 'provider', 'remove', 'deepseek'])
+    const watched = frames(f, id)
+    f.output.write('Removed provider "deepseek".\r\n')
+    removed = true
+    f.result.resolve({ exitCode: 0, signal: null })
+    await vi.waitFor(() => expect(watched.seen.at(-1)).toMatchObject({ status: 'closed' }))
+    expect(watched.steps().at(-1)).toBe('loggedOut')
+    expect(f.terminal.write).not.toHaveBeenCalled()
+  })
+
+  it('signs out the Kimi Code login in the bare TUI after the user trusts the folder', async () => {
+    fast()
+    const f = kimi()
+    // Signed out only by the Enter typed on the Kimi Code row.
+    holding(f, () =>
+      vi.mocked(f.terminal.write).mock.calls.some(([data], index) => data === '\r' && index > 0)
+        ? ['kimi:deepseek']
+        : ['kimi:kimi-code', 'kimi:deepseek'],
+    )
+    const { id } = await f.manager.start('p', 'kimi', 'logout', f.cwd, f.signal, undefined, undefined, 'kimi:kimi-code')
+    expect(launched(f).argv).toEqual(['/synthetic/kimi'])
+    expect(launched(f).cwd).not.toBe(f.cwd)
+    const watched = frames(f, id)
+    f.output.write(' \x1b[38;5;32m\x1b[1m Trust this folder?\x1b[22m\x1b[39m\r\r\n \x1b[38;5;32m  ❯ \x1b[39mTrust and continue\r\r\n')
+    await vi.waitFor(() => expect(watched.steps().at(-1)).toBe('trust'))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(f.terminal.write).not.toHaveBeenCalled()
+    await f.manager.respond('p', id, { confirm: 'trust' })
+    f.output.write('\x1b[2K   Welcome to Kimi Code!\r\r\n\x1b[2K   context: 0%')
+    await vi.waitFor(() => expect(f.terminal.write).toHaveBeenCalledWith('/logout\r'))
+    const end = '\x1b[0m\x1b]8;;\x07\r\r\n'
+    f.output.write(
+      `\x1b[2K \x1b[38;5;32m\x1b[1m Select a provider to log out\x1b[22m\x1b[39m${end}` +
+        `\x1b[2K \x1b[38;5;240m ↑↓ navigate · Enter select · Esc cancel\x1b[39m${end}` +
+        `\x1b[2K \x1b[38;5;238m    \x1b[39m\x1b[38;5;234mKimi Code\x1b[39m${end}\x1b[2K \x1b[38;5;240m    OAuth login\x1b[39m${end}` +
+        `\x1b[2K \x1b[38;5;32m  ❯ \x1b[39m\x1b[38;5;32m\x1b[1mdeepseek\x1b[22m\x1b[39m \x1b[38;5;29m← current\x1b[39m${end}` +
+        `\x1b[2K \x1b[38;5;240m    https://api.deepseek.com/v1\x1b[39m${end}\x1b[2K \x1b[38;5;32m${'─'.repeat(198)}\x1b[39m${end}`,
+    )
+    await vi.waitFor(() => expect(f.terminal.write).toHaveBeenCalledWith('\x1b[A'.repeat(40)))
+    expect(f.terminal.write).toHaveBeenCalledTimes(3)
+    f.output.write(
+      `\x1b[9A\r\x1b[2K \x1b[38;5;32m  ❯ \x1b[39m\x1b[38;5;32m\x1b[1mKimi Code\x1b[22m\x1b[39m${end}` +
+        `\x1b[2K \x1b[38;5;240m    OAuth login\x1b[39m${end}\x1b[2K \x1b[38;5;238m    \x1b[39m\x1b[38;5;234mdeepseek\x1b[39m \x1b[38;5;29m← current\x1b[39m\x1b[0m\x1b]8;;\x07`,
+    )
+    await vi.waitFor(() => expect(watched.steps().at(-1)).toBe('loggedOut'))
+    expect(vi.mocked(f.terminal.write).mock.calls.map(([data]) => data)).toEqual(['\r', '/logout\r', '\x1b[A'.repeat(40), '\r'])
+  })
+
+  it('refuses a Kimi login the status no longer holds, before any terminal', async () => {
+    fast()
+    const f = kimi()
+    holding(f, () => ['kimi:moonshot-cn'])
+    await expect(
+      f.manager.start('p', 'kimi', 'logout', f.cwd, f.signal, undefined, undefined, 'kimi:deepseek'),
+    ).rejects.toThrow('该账号已不存在，请刷新后重试')
+    expect(f.backend.spawnTerminal).not.toHaveBeenCalled()
+  })
+})

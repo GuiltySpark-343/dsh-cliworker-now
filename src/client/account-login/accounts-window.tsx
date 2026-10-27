@@ -21,6 +21,8 @@ type Request = {
   title: string
 }
 
+const order = (source?: AccountSource) => (source === 'native' ? 0 : source === 'plugin' ? 1 : 2)
+
 const loginText = (login: AccountLogin) =>
   login.authMethod === 'api'
     ? t('{provider} API 登录', { provider: login.providerLabel })
@@ -49,7 +51,8 @@ export function AccountsWindow({
 }) {
   useT()
   const name = CLI_LABELS[cli]
-  const logins = status?.state === 'authenticated' ? (status.logins ?? []) : []
+  // Kimi reports API providers as configured, not verified; their rows are still signed out one by one.
+  const logins = status?.state === 'authenticated' || status?.state === 'configured' ? (status.logins ?? []) : []
   // A signed-in CLI that reports no separate logins still has one row to sign out.
   const whole = !logins.length && status?.state === 'authenticated'
   const rows: AccountLogin[] = whole
@@ -122,62 +125,92 @@ export function AccountsWindow({
     if (login.id)
       return setRequest({ action: 'logout', login: login.id, title: t('退出 {account}', { account: loginText(login) }) })
     if (GUIDED_ACCOUNT_CLIS.has(cli)) return setRequest({ action: 'logout', title: t('退出 {cli}', { cli: name }) })
-    // No single-login removal in this CLI: its own menu, for the one current source.
+    // No single-login removal for this row: the CLI's own menu, in the row's own location.
+    const source = login.source ?? (sources.length === 1 ? sources[0]!.id : undefined)
     setRequest({
       action: 'logout',
-      source: sources.length === 1 ? sources[0]!.id : undefined,
+      ...(source ? { source } : {}),
       title: t('在原生终端中退出 {cli}', { cli: name }),
     })
   }
-  const native = !GUIDED_ACCOUNT_CLIS.has(cli) && sources.length > 1
+  // A key from an environment variable or a config file is not a stored login: nothing to sign out here.
+  const configOnly = (login: AccountLogin) =>
+    !login.id && !login.source && !whole && (cli === 'pi' || cli === 'omp')
+  const row = ({ login, index }: { login: AccountLogin; index: number }) => {
+    const removable = !!login.id || GUIDED_ACCOUNT_CLIS.has(cli)
+    return (
+      <li key={login.id ?? `${login.source ?? ''}-${login.providerLabel}-${index}`} className="cwn-accounts-row" data-confirming={confirming === index}>
+        <div className="cwn-accounts-row-main">
+          <div className="cwn-accounts-row-text">
+            <strong>{whole ? t('当前账号') : loginText(login)}</strong>
+            {login.authMethod === 'oauth' && login.accountLabel && <span>{login.accountLabel}</span>}
+            {configOnly(login) && <span>{t('来自环境变量或配置文件，请在原配置中管理')}</span>}
+          </div>
+          {confirming !== index &&
+            !configOnly(login) &&
+            (removable ? (
+              <Button variant="ghost" size="md" onClick={() => setConfirming(index)}>
+                {t('退出')}
+              </Button>
+            ) : (
+              !native && (
+                <Button variant="ghost" size="md" onClick={() => signOut(login)}>
+                  {t('在原生终端中退出')}
+                </Button>
+              )
+            ))}
+        </div>
+        {confirming === index && (
+          <div className="cwn-accounts-confirm" role="group" aria-label={t('确认退出')}>
+            <span>
+              {cli === 'zcode' && !login.id
+                ? t('BigModel 和 Z.AI 的登录会一起退出。')
+                : t('退出后会删除这条凭据，其他账号保留。')}
+            </span>
+            <div className="cwn-login-actions">
+              <Button variant="primary" size="md" onClick={() => signOut(login)}>
+                {t('确认退出')}
+              </Button>
+              <Button variant="ghost" size="md" onClick={() => setConfirming(undefined)}>
+                {t('取消')}
+              </Button>
+            </div>
+          </div>
+        )}
+      </li>
+    )
+  }
+  // Older Hosts give no location per row: one native button per location instead.
+  const native = !GUIDED_ACCOUNT_CLIS.has(cli) && sources.length > 1 && !rows.some((login) => login.source)
+  const sourceLabel = (id: AccountSource) =>
+    hostText(sources.find((item) => item.id === id)?.label ?? (id === 'native' ? 'CLI 全局账号' : '插件账号'))
+  // Logins kept in several locations are listed under each one.
+  const groups: { source?: AccountSource; rows: { login: AccountLogin; index: number }[] }[] = []
+  rows.forEach((login, index) => {
+    const group = groups.find((item) => item.source === login.source)
+    if (group) group.rows.push({ login, index })
+    else groups.push({ source: login.source, rows: [{ login, index }] })
+  })
+  groups.sort((a, b) => order(a.source) - order(b.source))
+  const grouped = groups.some((group) => group.source)
 
   return (
     <div className="cwn-accounts-window">
       {rows.length ? (
-        <ul className="cwn-accounts-list" aria-label={t('{cli} 已登录账号', { cli: name })}>
-          {rows.map((login, index) => {
-            const removable = !!login.id || GUIDED_ACCOUNT_CLIS.has(cli)
-            return (
-              <li key={login.id ?? `${login.providerLabel}-${index}`} className="cwn-accounts-row" data-confirming={confirming === index}>
-                <div className="cwn-accounts-row-main">
-                  <div className="cwn-accounts-row-text">
-                    <strong>{whole ? t('当前账号') : loginText(login)}</strong>
-                    {login.authMethod === 'oauth' && login.accountLabel && <span>{login.accountLabel}</span>}
-                  </div>
-                  {confirming !== index &&
-                    (removable ? (
-                      <Button variant="ghost" size="md" onClick={() => setConfirming(index)}>
-                        {t('退出')}
-                      </Button>
-                    ) : (
-                      !native && (
-                        <Button variant="ghost" size="md" onClick={() => signOut(login)}>
-                          {t('在原生终端中退出')}
-                        </Button>
-                      )
-                    ))}
-                </div>
-                {confirming === index && (
-                  <div className="cwn-accounts-confirm" role="group" aria-label={t('确认退出')}>
-                    <span>
-                      {cli === 'zcode' && !login.id
-                        ? t('BigModel 和 Z.AI 的登录会一起退出。')
-                        : t('退出后会删除这条凭据，其他账号保留。')}
-                    </span>
-                    <div className="cwn-login-actions">
-                      <Button variant="primary" size="md" onClick={() => signOut(login)}>
-                        {t('确认退出')}
-                      </Button>
-                      <Button variant="ghost" size="md" onClick={() => setConfirming(undefined)}>
-                        {t('取消')}
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </li>
-            )
-          })}
-        </ul>
+        grouped ? (
+          groups.map((group) => (
+            <section key={group.source ?? 'other'} className="cwn-accounts-group">
+              <h4 className="cwn-accounts-group-title">{group.source ? sourceLabel(group.source) : t('其他配置')}</h4>
+              <ul className="cwn-accounts-list" aria-label={group.source ? sourceLabel(group.source) : t('其他配置')}>
+                {group.rows.map(row)}
+              </ul>
+            </section>
+          ))
+        ) : (
+          <ul className="cwn-accounts-list" aria-label={t('{cli} 已登录账号', { cli: name })}>
+            {groups.flatMap((group) => group.rows).map(row)}
+          </ul>
+        )
       ) : (
         <p className="cwn-accounts-empty">{t('尚未登录 {cli} 的任何账号。', { cli: name })}</p>
       )}

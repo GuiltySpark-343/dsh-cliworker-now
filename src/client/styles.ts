@@ -269,6 +269,7 @@ export const settingsStyles = `
 .cwn-accounts-row-text{display:flex;flex-direction:column;min-width:0}.cwn-accounts-row-text strong{font-weight:500;overflow-wrap:anywhere}.cwn-accounts-row-text span{color:var(--dsw-alias-label-tertiary);font-size:var(--dsw-font-xxs-12-font-size);line-height:18px;overflow-wrap:anywhere}
 .cwn-accounts-confirm{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 12px;color:var(--dsw-alias-label-secondary)}
 .cwn-accounts-empty{color:var(--dsw-alias-label-secondary)}
+.cwn-accounts-group{display:flex;flex-direction:column;gap:6px}.cwn-accounts-group-title{margin:0;color:var(--dsw-alias-label-secondary);font-size:var(--dsw-font-xxs-12-font-size);line-height:18px;font-weight:500}
 .cwn-accounts-native{display:flex;flex-direction:column;gap:8px}
 .cwn-accounts-foot{display:flex;align-items:center;gap:12px}
 .cwn-accounts-field{display:flex;flex-direction:column;gap:6px}.cwn-accounts-field>span{color:var(--dsw-alias-label-secondary)}

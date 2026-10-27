@@ -1,5 +1,7 @@
 // Pi 1.0.2 / 1.0.4 native UI compatibility entry. No initial prompt, injected keystrokes,
 // model request, or subscription validation: open its own provider login menu.
+// `login <provider>` opens that provider's own login (Pi's /login <provider>);
+// `logout <auth> <provider>` removes that stored credential with Pi's own API, no UI.
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { inspectPiInstallation } from './pi-installation.mjs'
@@ -10,6 +12,8 @@ try {
   const action = process.argv[3] ?? 'login'
   if (!['login', 'logout'].includes(action)) throw new Error('Invalid account action')
   if (!executable) throw new Error('Missing Pi entry')
+  const provider = process.argv[action === 'logout' ? 5 : 4]
+  if (provider !== undefined && !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(provider)) throw new Error('Invalid provider')
   const { dist } = inspectPiInstallation(executable)
   const {
     createAgentSessionServices,
@@ -69,9 +73,15 @@ try {
     { cwd, agentDir, sessionManager: SessionManager.inMemory(cwd) },
   )
   const ui = new InteractiveMode(runtime)
+  if (action === 'logout' && provider) {
+    // The same call as Pi's /logout selector, for the one provider chosen in the plugin window.
+    await runtime.session.modelRuntime.logout(provider, { signal: AbortSignal.timeout(15_000) })
+    process.stdout.write('已移除该服务商的凭据。\n')
+    process.exit(0)
+  }
   await ui.init()
   if (action === 'logout') await ui.showOAuthSelector('logout')
-  else await ui.handleLoginCommand()
+  else await ui.handleLoginCommand(provider)
   await ui.run()
 } catch {
   // Native errors can contain authentication data. Keep this boundary generic.

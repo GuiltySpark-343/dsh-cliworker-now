@@ -2,7 +2,7 @@
 
 - [x] 0.1 静态源码调研 12 个 CLI 的登录/退出流程（`scratchpad/login-research.md`）。
 - [x] 0.2 隔离目录真实 PTY 探测（不碰真实账号，只按回车/方向键，不提交授权码或密钥），回填映射表与 `doc/tasks.md`：Codex、Claude Code、Qoder / Qoder CN、MiMo、ZCode、Grok、OpenCode、Pi、OMP、Hermes。OpenCode 与 Hermes 的单条退出用隔离目录中的模拟凭据实测。
-- [ ] 0.3 仍未捕获：Kimi 全部画面（Codex 沙箱内 EMFILE / DNS 失败）；Qoder 已登录 TUI 与 `/logout` 画面；Pi / OMP / Kimi 非空的退出菜单。
+- [x] 0.3 2026-10-27 在隔离目录补测 Kimi（2.1.1 与自动升级后的 2.3.3）设备码登录、`provider remove`、`/logout` 列表；Pi 1.0.4 单服务商退出；OMP 16.4.4 `/login`、`/logout` 非空列表与软删除（模拟凭据）。仍未捕获：Qoder 已登录 TUI 与 `/logout` 画面、Kimi `/logout` 分页（>8 行）、OMP Moonshot / MiniMax 登录画面、Copilot 企业版。
 
 ## 1. 实现：引擎、协议与模板（阶段 A）
 
@@ -17,7 +17,7 @@
 - [x] 2.1 单账号：Codex、Claude Code、Qoder/Qoder CN、MiMo、Grok —— 登录模板、自动退出、切换账号。
 - [x] 2.2 ZCode：「登录到」BigModel / Z.AI，账号窗口中两家合为一行一起退出。OpenCode：「登录到」常用服务商（API Key），每个服务商单独退出。
 - [x] 2.3 Hermes：「登录到」API Key 服务商，同服务商「添加另一个凭据 / 替换」（先确认新凭据再移除旧凭据），每条凭据单独退出。
-- [ ] 2.4 Kimi、Pi、OMP：账号窗口已列出账号，添加和退出仍进入原生终端菜单；「登录到」与逐条退出待 0.3 的画面实测后再做。OMP 同服务商添加/替换、Pi/OMP 账号行按原生目录 / 插件目录分组同样待做（目前只在列表下方按来源提供原生退出入口）。
+- [x] 2.4 Kimi、Pi、OMP：「登录到」下拉框（Kimi 按区域、Pi 16 家、OMP 10 项）与逐条退出（Kimi `provider remove` / `/logout` 中的 Kimi Code 行，Pi 单服务商退出，OMP `/logout` 按凭据编号选中）；OMP 同服务商添加/替换；Pi/OMP 账号行按原生目录 / 插件目录分组；授权后不退出的 Pi/OMP 在后台核对最长 15 分钟。
 
 ## 3. 自动检查
 

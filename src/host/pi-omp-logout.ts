@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readPiOmpLogoutSources, safePiOmpAncestors } from './pi-omp-native.ts'
 import { projectDirectory } from './process.ts'
+import { parseAccountLoginId } from '../shared/account-links.ts'
 import { ompConfigurationEnvironment } from './pi-omp-environment.mjs'
 import type { PiOmpAccountTerminalInput, PiOmpAccountTerminalLaunch } from './pi-omp-accounts.ts'
 
@@ -19,8 +20,12 @@ export async function preparePiOmpLogout(
     signal ?? new AbortController().signal,
     { nativeHome: input.nativeHome },
   )
-  const source = input.source
-    ? sources.find((item) => item.id === input.source)
+  // One login of the account window names its own location: `native`, or `plugin.<row>`.
+  const target = input.login ? parseAccountLoginId(input.login) : undefined
+  if (input.login && (!target || target.cli !== cli || !target.entry)) throw new Error('不支持单独退出该账号')
+  const place = target?.entry?.split('.')[0] ?? input.source
+  const source = place
+    ? sources.find((item) => item.id === place)
     : sources.length === 1
       ? sources[0]
       : undefined
@@ -85,6 +90,7 @@ export async function preparePiOmpLogout(
         input.executable,
         'logout',
         auth,
+        ...(target ? [target.provider] : []),
       ]
       env.PI_OFFLINE = '1'
       env.PI_TELEMETRY = '0'
