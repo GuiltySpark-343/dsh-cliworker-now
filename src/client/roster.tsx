@@ -57,9 +57,7 @@ const usable = (reply: CatalogReply | undefined): ModelChoice[] =>
 function applyCatalog(draft: Draft, reply: CatalogReply | undefined): Draft {
   const choices = usable(reply)
   const preferred = reply?.preference
-  const target =
-    choices.find((model) => model.id === preferred?.model) ??
-    choices[0]
+  const target = choices.find((model) => model.id === preferred?.model) ?? choices[0]
   if (!target) return { ...draft, model: '' }
   const effort =
     preferred?.effort && target.efforts?.includes(preferred.effort)
@@ -76,18 +74,25 @@ function statusOf(entry: RosterEntry, workers: Worker[], archived: Worker[]) {
   if (live) return { key: live.status as WorkerStatus | 'idle' | 'archived', worker: live }
   if (match(archived)) return { key: 'archived' as const, worker: undefined }
   return { key: 'idle' as const, worker: undefined }
-}/** Session-scoped roster: configuration only; the Worker exists after the first dispatch. */
-export function RosterPane({
+}
+
+/**
+ * Session-scoped roster, shown as the fifth view next to the worker status filters.
+ * Entries are configuration only; their Worker appears after the first dispatch.
+ */
+export function RosterList({
   api,
   sessionId,
   workers,
   archived,
+  query,
   onOpenWorker,
 }: {
   api: API
   sessionId: string
   workers: Worker[]
   archived: Worker[]
+  query: string
   onOpenWorker: (id: string) => void
 }) {
   const [entries, setEntries] = useState<RosterEntry[]>([])
@@ -267,77 +272,118 @@ export function RosterPane({
   const draftArchived = current
     ? archived.some((worker) => worker.id === current.workerId || workerName(worker) === current.title)
     : false
+  const term = query.trim().toLocaleLowerCase()
+  const visible = entries.filter(
+    (entry) =>
+      !term ||
+      `${entry.title} ${entry.model} ${entry.role.name} ${CLI_LABELS[entry.cli]}`
+        .toLocaleLowerCase()
+        .includes(term),
+  )
+  const groups = (CLI_IDS as readonly CliId[])
+    .map((cli) => ({ cli, rows: visible.filter((entry) => entry.cli === cli) }))
+    .filter((group) => group.rows.length > 0)
 
   return (
-    <aside className="cwn-roster" aria-label="可用智能体">
-      <div className="cwn-roster-head">
-        <span>可用智能体</span>
-        <span className="cwn-roster-count" role="status" aria-label={loading ? '正在载入可用智能体' : undefined}>
-          {loading ? <StateDot state="ongoing" size={10} /> : entries.length}
+    <>
+      <div className="cwn-roster-bar">
+        <span className="cwn-roster-summary" role="status">
+          {loading ? '正在载入可用智能体…' : `${entries.length} 个可用智能体`}
+          {!loading && term ? ` · 匹配 ${visible.length}` : ''}
         </span>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          aria-label="新增可用智能体"
+          disabled={loading || !presets.length}
+          onClick={() => {
+            setPicking(true)
+            setNotice('')
+            setError('')
+          }}
+        >
+          ＋ 新增
+        </Button>
       </div>
-      <div className="cwn-roster-list" aria-busy={loading}>
-        {entries.map((entry) => {
-          const state = statusOf(entry, workers, archived)
-          return (
-            <div className="cwn-roster-item" key={entry.id}>
-              <button
-                type="button"
-                className="cwn-roster-open"
-                aria-label={`${entry.title}：${STATUS[state.key]}`}
-                onClick={() => {
-                  if (state.worker && state.key !== 'archived') onOpenWorker(state.worker.id)
-                  else openEntry(entry)
-                }}
-              >
-                <span className="cwn-roster-title">
-                  <span className={`cwn-dot ${state.key}`} aria-hidden="true" />
-                  <strong>{entry.title}</strong>
-                </span>
-                <span className="cwn-roster-meta">
-                  <BrandIcon cli={entry.cli} size={11} />
-                  <span>{displayModelName({ cli: entry.cli, model: entry.model, effort: entry.effort })}</span>
-                </span>
-                <span className="cwn-roster-state">
-                  {STATUS[state.key]} · {effortLabel(entry.effort)}
-                </span>
-              </button>
-              <Tooltip label="编辑可用智能体" side="bottom" portal>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="cwn-roster-edit"
-                  aria-label={`编辑 ${entry.title}`}
-                  onClick={() => openEntry(entry)}
-                >
-                  <Glyph name="more" />
-                </Button>
-              </Tooltip>
-            </div>
-          )
-        })}
-        {!loading && !entries.length && (
-          <p className="cwn-roster-empty">
-            {presets.length ? '还没有可用智能体。点下面新增，从角色卡片建一个。' : '先去「智能体设置」建一张角色卡片。'}
+      {!loading && !entries.length && (
+        <div className="cwn-empty">
+          <h3>还没有可用智能体</h3>
+          <p>
+            {presets.length
+              ? '点「＋ 新增」选一张角色卡片，为它钉住 CLI、模型和思考强度。'
+              : '先去「智能体设置」建一张角色卡片，再回来创建。'}
           </p>
-        )}
-      </div>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="cwn-roster-add"
-        aria-label="新增可用智能体"
-        disabled={loading || !presets.length}
-        onClick={() => {
-          setPicking(true)
-          setNotice('')
-          setError('')
-        }}
-      >
-        ＋ 新增
-      </Button>
+        </div>
+      )}
+      {groups.map((group) => (
+        <section className="cwn-cli-group" key={group.cli} aria-label={`${CLI_LABELS[group.cli]} 可用智能体`}>
+          <div className="cwn-cli-heading">
+            <BrandIcon cli={group.cli} />
+            <strong>{CLI_LABELS[group.cli]}</strong>
+            <span>{group.rows.length} 个</span>
+          </div>
+          <div className="cwn-cli-rows" data-expanded="true">
+            <div className="cwn-cli-rows-inner">
+              {group.rows.map((entry) => {
+                const state = statusOf(entry, workers, archived)
+                return (
+                  <div className="cwn-roster-row" key={entry.id}>
+                    <button
+                      type="button"
+                      className="cwn-roster-open"
+                      aria-label={`${entry.title}：${STATUS[state.key]}`}
+                      onClick={() => {
+                        if (state.worker && state.key !== 'archived') onOpenWorker(state.worker.id)
+                        else openEntry(entry)
+                      }}
+                    >
+                      <span className="cwn-worker-line">
+                        <span className="cwn-worker-title">{entry.title}</span>
+                        <span className={`cwn-worker-status ${state.key}`}>
+                          <span className={`cwn-dot ${state.key}`} />
+                          {STATUS[state.key]}
+                        </span>
+                      </span>
+                      <span className="cwn-worker-meta">
+                        <span className="cwn-worker-model">
+                          {displayModelName({ cli: entry.cli, model: entry.model, effort: entry.effort })}
+                        </span>
+                        <span className="cwn-meta-divider">·</span>
+                        <span>{effortLabel(entry.effort)}</span>
+                        {entry.roleSource === 'custom' && (
+                          <>
+                            <span className="cwn-meta-divider">·</span>
+                            <span>自定义提示词</span>
+                          </>
+                        )}
+                      </span>
+                    </button>
+                    <Tooltip label="编辑可用智能体" side="bottom" portal>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="cwn-roster-edit"
+                        aria-label={`编辑 ${entry.title}`}
+                        onClick={() => openEntry(entry)}
+                      >
+                        <Glyph name="more" />
+                      </Button>
+                    </Tooltip>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </section>
+      ))}
+      {!loading && entries.length > 0 && !visible.length && (
+        <div className="cwn-empty">
+          <h3>没有匹配的可用智能体</h3>
+          <p>换个关键词，或清空搜索。</p>
+        </div>
+      )}
       {(error || notice) && (
         <p className="cwn-roster-feedback" role={error ? 'alert' : 'status'}>
           {error || notice}
@@ -397,7 +443,7 @@ export function RosterPane({
                 onChange={(event) => setDraft({ ...draft, title: event.target.value })}
               />
             </label>
-            <div className="cwn-roster-row">
+            <div className="cwn-roster-row-fields">
               <label>
                 <span>CLI</span>
                 <select
@@ -533,6 +579,6 @@ export function RosterPane({
           </form>
         )}
       </Modal>
-    </aside>
+    </>
   )
 }

@@ -32,7 +32,7 @@ import { CopyText } from './copy-text.tsx'
 import { BrandIcon, Glyph } from './icons.tsx'
 import { WorkerModelMenu } from './worker-model-menu.tsx'
 import { SettingsDialog } from './settings-dialog.tsx'
-import { RosterPane } from './roster.tsx'
+import { RosterList } from './roster.tsx'
 import { RenameWorker } from './rename-worker.tsx'
 import { WorkerCard, type WorkerManagementAction } from './worker-card.tsx'
 import { RUNNING_MESSAGE_LABELS } from '../shared/running-message.ts'
@@ -606,21 +606,13 @@ function SessionPanel({
       />
       {!selected && (
         <div className="cwn-overview">
-          <div className="cwn-overview-top">
-            <RosterPane
-              api={api}
-              sessionId={sessionId}
-              workers={snapshot.workers}
-              archived={snapshot.archivedWorkers ?? []}
-              onOpenWorker={openWorker}
-            />
-            <div className="cwn-overview-controls">
+          <div className="cwn-overview-controls">
             <Input
               className="cwn-search"
               icon={<Glyph name="search" />}
               type="search"
               aria-label="筛选子 Agent"
-              placeholder="搜索智能体、话题或模型…"
+              placeholder={filter === 'roster' ? '搜索可用智能体…' : '搜索智能体、话题或模型…'}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -632,6 +624,7 @@ function SessionPanel({
                     ['active', '进行中'],
                     ['completed', '已完成'],
                     ['attention', '异常'],
+                    ['roster', '可用智能体'],
                   ] as const
                 ).map(([id, label]) => (
                   <Button
@@ -649,20 +642,21 @@ function SessionPanel({
                   </Button>
                 ))}
               </div>
-              <Tooltip label={showArchived ? '返回列表' : '已删除'} side="bottom" portal>
-                <Button
-                  type="button"
-                  size="md"
-                  variant="ghost"
-                  className="cwn-archive-toggle"
-                  aria-label={showArchived ? '返回列表' : '已删除'}
-                  aria-pressed={showArchived}
-                  onClick={() => setShowArchived((shown) => !shown)}
-                >
-                  <IconTrashOutlineRegular />
-                </Button>
-              </Tooltip>
-            </div>
+              {filter !== 'roster' && (
+                <Tooltip label={showArchived ? '返回列表' : '已删除'} side="bottom" portal>
+                  <Button
+                    type="button"
+                    size="md"
+                    variant="ghost"
+                    className="cwn-archive-toggle"
+                    aria-label={showArchived ? '返回列表' : '已删除'}
+                    aria-pressed={showArchived}
+                    onClick={() => setShowArchived((shown) => !shown)}
+                  >
+                    <IconTrashOutlineRegular />
+                  </Button>
+                </Tooltip>
+              )}
             </div>
           </div>
           <div
@@ -706,6 +700,15 @@ function SessionPanel({
                   </article>
                 ))}
               </div>
+            ) : filter === 'roster' ? (
+              <RosterList
+                api={api}
+                sessionId={sessionId}
+                workers={snapshot.workers}
+                archived={snapshot.archivedWorkers ?? []}
+                query={query}
+                onOpenWorker={openWorker}
+              />
             ) : (
               <nav aria-label="子 Agent">
                 {([...CLI_IDS, 'harness'] as const).map((cli) => {
