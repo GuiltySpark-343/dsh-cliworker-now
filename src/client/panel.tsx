@@ -707,7 +707,6 @@ function SessionPanel({
                 workers={snapshot.workers}
                 archived={snapshot.archivedWorkers ?? []}
                 query={query}
-                onOpenWorker={openWorker}
               />
             ) : (
               <nav aria-label="子 Agent">

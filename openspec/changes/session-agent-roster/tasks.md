@@ -27,3 +27,14 @@
 - [ ] 4.4 用真实宿主截图验收面板（需要宿主启动令牌；静态预览已核对）。
 - [ ] 4.5 同步 `doc/role-presets.md` 与 README 的会话级说明。
 - [x] 4.6 真机派遣验收：安装包重启后按 `agent_name` 派遣命中可用智能体，未弹选型卡，Worker 的 CLI/模型/强度/角色与条目一致，回复 OK，执行次数 1，条目回填 workerId（2026-10-27 实测，codex + ccs-opencode/deepseek-v4.1-flash）。
+
+## 5. 模板语义改造（同日调整）
+
+- [x] 5.1 `RosterEntry` 改为模板：去掉 `workerId` 绑定；`Worker` 增加可选 `templateId`。
+- [x] 5.2 `cliworker_start` 新增 `template` 参数，每次派遣创建新的带编号实例；不再按 `agent_name` 绑定模板。
+- [x] 5.3 实例编号由 Host 分配（模板1、模板2…），取最小空闲序号；`cliworker_status` 返回模板的实例数与名称。
+- [x] 5.4 删除 Worker 释放名称（标题唯一性与编号只统计未删除 Worker）。
+- [x] 5.5 删除 Worker 时释放其 DSH 显示子会话，并在启动时补放历史已删除记录，避免继续计为子智能体。
+- [x] 5.6 单测：模板派遣、编号分配与名称释放（`tests/role-dispatch.test.ts`、`tests/roster-numbering.test.ts`、`tests/session-roster.test.ts`）。
+- [ ] 5.7 真机复验：重启后按模板派遣两次得到两个编号实例；删除一个后编号可复用；子智能体数量回落。
+- [ ] 5.8 面板文案与预览同步（模板 / 已创建 N 个）。

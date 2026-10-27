@@ -108,7 +108,6 @@ const rosterEntrySchema = z.object({
   cli: z.enum(CLI_IDS),
   model: z.string().min(1).max(200),
   effort: z.enum(EFFORTS),
-  workerId: z.uuid().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 })
@@ -118,7 +117,6 @@ const rosterEntryInputSchema = rosterEntrySchema
     parentSessionId: true,
     project: true,
     title: true,
-    workerId: true,
     createdAt: true,
     updatedAt: true,
   })
@@ -157,6 +155,8 @@ const workerSchema = z.object({
   parallelWrite: z.boolean().optional(),
   // Local patch: started turns; older records omit it and read as zero.
   runCount: z.number().int().nonnegative().optional(),
+  // Local patch: roster template that created this Worker.
+  templateId: z.string().min(1).max(100).optional(),
   conversationId: z.string().optional(),
   // Bad optional telemetry must not make an otherwise valid conversation unreadable.
   conversationTelemetry: conversationTelemetrySchema.optional().catch(undefined),
@@ -582,6 +582,8 @@ export class WorkerStorage {
     const names = this.roster(parent).map((entry) => entry.title.toLocaleLowerCase())
     for (const worker of this.workers.values()) {
       if (worker.parentSessionId !== parent) continue
+      // Deleted Workers release their names; only live ones reserve anything.
+      if (worker.archivedAt) continue
       names.push(workerName(worker).toLocaleLowerCase())
       for (const alias of worker.nameAliases ?? []) names.push(alias.toLocaleLowerCase())
     }
@@ -650,7 +652,6 @@ export class WorkerStorage {
       cli: value.cli,
       model: value.model,
       effort: value.effort,
-      ...(previous?.workerId ? { workerId: previous.workerId } : {}),
       createdAt: previous?.createdAt ?? now,
       updatedAt: now,
     }
@@ -664,18 +665,6 @@ export class WorkerStorage {
     const entries = this.roster(parent)
     if (!entries.some((entry) => entry.id === id)) throw new Error('此可用智能体已被删除')
     this.writeRoster(parent, entries.filter((entry) => entry.id !== id))
-  }
-  /** Records the Worker created by the entry's first dispatch; later edits keep it. */
-  bindRosterWorker(parent: string, id: string, workerId: string): void {
-    z.uuid().parse(workerId)
-    const entries = this.roster(parent)
-    const found = entries.find((entry) => entry.id === id)
-    if (!found) throw new Error('此可用智能体已被删除')
-    if (found.workerId === workerId) return
-    this.writeRoster(
-      parent,
-      entries.map((entry) => (entry.id === id ? { ...entry, workerId } : entry)),
-    )
   }
   setCliEnabled(cli: CliId, enabled: boolean): CliSettings {
     if (isRetiredCli(cli)) throw new Error(RETIRED_HARNESS_NOTICE)

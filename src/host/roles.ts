@@ -80,7 +80,8 @@ export async function askRolePreset(
 export function availableAgentName(workers: Iterable<Worker>, parent: string, base: string): string {
   const names = new Set(
     [...workers]
-      .filter((worker) => worker.parentSessionId === parent)
+      // Local patch: deleting a Worker releases its name; only live ones reserve it.
+      .filter((worker) => worker.parentSessionId === parent && !worker.archivedAt)
       .flatMap((worker) => [workerName(worker), ...(worker.nameAliases ?? [])])
       .map((name) => name.toLocaleLowerCase()),
   )
@@ -88,6 +89,29 @@ export function availableAgentName(workers: Iterable<Worker>, parent: string, ba
   let number = 1
   while (names.has(`${stem}-${number}`.toLocaleLowerCase())) number++
   return `${stem}-${number}`
+}
+
+/**
+ * Local patch: one template can create many agents. Instances are named
+ * `<template><n>`, skipping live names only, so deleted agents free their slot.
+ */
+export function availableNumberedName(
+  workers: Iterable<Worker>,
+  parent: string,
+  base: string,
+): string {
+  const names = new Set(
+    [...workers]
+      .filter((worker) => worker.parentSessionId === parent && !worker.archivedAt)
+      .flatMap((worker) => [workerName(worker), ...(worker.nameAliases ?? [])])
+      .map((name) => name.toLocaleLowerCase()),
+  )
+  const stem = agentNameSchema.parse(base).slice(0, 48)
+  for (let number = 1; number <= 999; number++) {
+    const name = `${stem}${number}`
+    if (!names.has(name.toLocaleLowerCase())) return name
+  }
+  throw new Error('同一模板创建的智能体数量已达上限')
 }
 
 /** Role is prepended only for a fresh CLI conversation. Timeline keeps the task verbatim. */

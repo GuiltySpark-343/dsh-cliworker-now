@@ -1000,6 +1000,26 @@ export class HarnessConversationBridge implements HarnessConversationApi {
     return record && structuredClone(record)
   }
 
+  /**
+   * Local patch: release the display child Session behind a deleted Worker so it
+   * stops counting as a subagent. Durable logs are archived when the Host exposes it.
+   */
+  async release(worker: Worker): Promise<'released' | 'none'> {
+    const binding = worker.harnessConversation
+    if (!binding) return 'none'
+    const record = this.records.get(binding.sessionId)
+    if (!record || record.workerId !== worker.id) return 'none'
+    const parent = this.ctx.agents.get(record.parentSessionId as Agent['id'])
+    if (parent) await this.drainChildren(parent, [SessionId(record.sessionId)])
+    await this.deps.unbind(record)
+    this.records.delete(record.sessionId)
+    const workspaces = this.ctx.get('workspaces') as
+      | { archiveSession?(id: ReturnType<typeof SessionId>): Promise<unknown> }
+      | undefined
+    if (workspaces?.archiveSession) await workspaces.archiveSession(SessionId(record.sessionId))
+    return 'released'
+  }
+
   async repairDisplay(
     parent: Agent,
     worker: Worker,

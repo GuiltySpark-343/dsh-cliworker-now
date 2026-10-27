@@ -4,16 +4,17 @@
 
 | 模块 | 职责 | 不做什么 |
 | --- | --- | --- |
-| `src/shared/types.ts` | `RosterEntry` 协议、`Worker.runCount` | 不存 CLI 私有数据 |
-| `src/host/storage.ts` | 按会话读写 roster、标题唯一性与序号分配、Worker 执行次数落盘 | 不探测模型、不启动进程 |
-| `src/host/settings-catalog-cache.ts` | 新增只读 `saved()`，把已落盘的目录交出去 | 不刷新、不查询账号 |
-| `src/host/index.ts` | roster Remote、派遣绑定、`cliworker_status` 投影、提示词分段 | 不绕过既有 `querySelection` 校验 |
-| `src/host/runtime.ts` | 每轮开始累加 `runCount` | 不改运行与清理语义 |
-| `src/client/panel.tsx`、`src/client/roster-pane.tsx` | 面板顶部区域、创建表单、状态展示 | 不伪造运行状态 |
+| `src/shared/types.ts` | `RosterEntry`（模板）协议、`Worker.templateId` / `runCount` | 不存 CLI 私有数据 |
+| `src/host/storage.ts` | 按会话读写模板、标题唯一性与序号分配 | 不探测模型、不启动进程 |
+| `src/host/roles.ts` | 模板实例编号（`模板1`、`模板2`…）与名称释放 | 不决定派给哪个模板 |
+| `src/host/settings-catalog-cache.ts` | 只读 `saved()`，把已落盘的目录交出去 | 不刷新、不查询账号 |
+| `src/host/index.ts` | 模板 Remote、`template` 派遣、状态投影、提示词、删除时释放子会话 | 不绕过既有 `querySelection` 校验 |
+| `src/host/runtime.ts` | 创建实例时按模板编号命名、累加执行次数 | 不改运行与清理语义 |
+| `src/client/roster.tsx` | 模板列表、创建/编辑表单、已创建实例数 | 不伪造运行状态 |
 
-## 存储
+## 数据模型
 
-`~/.dsh/cliworker-now/roster-<sha256(会话ID)>.json`：
+模板（`RosterEntry`）只描述“用哪个 CLI、哪个模型、什么强度、什么角色提示词”，**不绑定任何 Worker**：
 
 ```json
 {
@@ -24,14 +25,13 @@
       "id": "uuid",
       "parentSessionId": "会话ID",
       "project": "D:/workplace/xxx",
-      "title": "项目执行者2",
+      "title": "任务验收Agent",
       "presetId": "角色卡片ID",
       "roleSource": "preset",
-      "role": { "presetId": "角色卡片ID", "name": "项目执行者", "summary": "…", "prompt": "…" },
+      "role": { "presetId": "…", "name": "任务验收Agent", "summary": "…", "prompt": "…" },
       "cli": "codex",
       "model": "模型ID",
-      "effort": "high",
-      "workerId": "首次派遣后回填",
+      "effort": "max",
       "createdAt": "…",
       "updatedAt": "…"
     }
@@ -39,35 +39,37 @@
 }
 ```
 
-- 一个会话一个文件，最多 64 条；标题在会话内唯一（大小写不敏感），并与该会话已有 Worker 名称互斥。
-- `roleSource: "preset"` 表示派遣时读取卡片当前提示词；读不到（卡片被删）回退到 `role.prompt` 快照。`"custom"` 直接使用快照。
-- `workerId` 在首次派遣成功后回填；Worker 被归档后仍保留，用于展示“对话已删除”而不是静默重建。
+- 一个会话一个文件（`roster-<sha256(会话)>.json`），最多 64 个模板。
+- 模板名称在会话内唯一，并且不能与本会话**未删除**的 Worker 名称相同。
+- Worker 记录新增可选的 `templateId`，用于统计该模板创建了哪些实例；旧 Worker 没有这个字段时按“名称前缀 + 数字”回退识别。
 
 ## 派遣
 
-1. 父 Agent 调用 `cliworker_start`，`agent_name` 命中本会话某条 roster。
-2. 校验：`cli` 必须等于条目钉住的 CLI；不接受同一次调用再传 `model`/`effort`/`role`（这些已在条目里固定）。冲突直接报错，不静默覆盖。
-3. 校验：条目已有 Worker 且未归档 → 报错并提示改用 `cliworker_followup`；Worker 已归档 → 报错提示恢复或另建条目。
-4. `chooseDispatch` 走“固定配置”分支：只用已加载的模型目录解析条目里的模型与强度，**不弹任何问题卡**；模型不存在或该模型不支持该强度时，报错带条目名与可选值。
-5. 之后仍走既有 `querySelection` 授权校验与项目/CLI 变更检查；不通过即失败，不降级。
-6. 派遣成功把 `workerId` 回填到条目。
+1. 主对话调用 `cliworker_start`，传 `template: "任务验收Agent"`。
+2. 插件按名称解析模板；`cli` 必须与模板一致，且不得同时传 `model`/`effort`/`role`（冲突直接拒绝）。
+3. `chooseDispatch` 走“固定配置”分支：不弹任何问题卡，模型/强度失效时报错并指出模板名。
+4. 创建 Worker 时由 Host 分配实例名：取当前会话内该模板未被占用的最小序号（`任务验收Agent1`、`任务验收Agent2`…）。已删除（归档）的 Worker 不占名称，序号可以复用。
+5. 之后仍走既有 `querySelection` 授权校验；失败即失败，不降级。
+6. 每次调用都创建新实例；模板可以反复使用。
 
-没有命中 roster 时，`cliworker_start` 的行为与现有版本完全一致。
+## 名称释放与子会话释放
+
+- **名称**：`checkAgentName` 与编号分配都只统计未归档的 Worker；删除后名称立即可用。
+- **DSH 子会话**：删除 Worker 时先释放它的显示子会话（`drainChildren` + `workspaces.archiveSession`），再归档 Worker；释放失败不阻断删除。插件启动时对历史上已归档但仍持有子会话的 Worker 做一次同样的释放，避免继续被计为子智能体。
 
 ## 模型清单
 
 `rosterCatalog(sessionId, cli)` 只读 `SettingsCatalogCache.saved(project, cli)`：
 
-- 有存档 → 返回 `{ catalog, preference }`，其中 `preference` 是该项目该 CLI 已保存的默认模型/强度，用作表单默认值。
-- 无存档 → 返回 `{ missing: true }`，客户端提示去「设置 → CLI 连接」完成一次探测，不代替用户探测。
-- 存档里的账号身份与当前不一致时仍可展示（标“上次探测”），因为真正派遣会重新校验；校验失败按普通错误呈现。
+- 有存档 → 返回 `{ catalog, preference }`，`preference` 是该项目该 CLI 已保存的默认模型/强度。
+- 无存档 → 返回 `{ missing: true }`，客户端提示去「设置 → CLI 连接」探测，不代替用户探测。
 
 ## 提示词
 
-注册一个 `systemPrompt` 分段（order 81，`interpolate: false`），文本函数按 `AssembleContext.agent.id` 读取该会话 roster：
+注册 `systemPrompt` 分段（order 81，`interpolate: false`），按 `AssembleContext.agent.id` 读取该会话模板：
 
-- 无条目 → 空字符串（分段被丢弃）。
-- 有条目 → 一句存在性提示 + 指向 `cliworker_status`，不列名单。这样每轮开销固定且极小，名单增减不会造成大段前缀变动。
+- 无模板 → 空字符串（分段被丢弃）。
+- 有模板 → 一句存在性提示，说明用 `template` 参数派遣、可重复创建、续聊用 `cliworker_followup`；不列清单。
 
 ## 状态投影
 
@@ -75,29 +77,32 @@
 
 ```json
 {
-  "roster": [{ "title": "项目执行者1", "cli": "codex", "model": "…", "effort": "high", "role": "项目执行者", "workerId": "…", "status": "idle" }],
-  "workers": [{ "workerId": "…", "agentName": "项目执行者1", "title": "…", "cli": "codex", "status": "completed", "runs": 3, "lastResult": "…" }],
+  "roster": [{ "title": "任务验收Agent", "cli": "codex", "model": "…", "effort": "max",
+               "role": "任务验收Agent", "roleSource": "preset",
+               "created": 2, "workers": ["任务验收Agent1", "任务验收Agent2"] }],
+  "workers": [{ "workerId": "…", "agentName": "任务验收Agent1", "status": "completed", "runs": 3 }],
+  "archived": [],
   "counts": { "running": 1, "idle": 2 }
 }
 ```
 
-`status` 由 `workerId`/名称与当前 Worker 快照连接得出，不额外读事件日志。
-
 ## 取舍
 
-- **不做自动续聊**：同名第二次 `cliworker_start` 报错并提示 `cliworker_followup`，保持“start 新建、followup 续聊”的既有分工，父 Agent 按工作流自己决定何时续聊。
-- **不做探测**：会话级选择完全建立在设置页的探测结果上，避免一次打开面板就拉起多个 CLI 子进程。
-- **不写全量名单进提示词**：每次派遣多一次 `cliworker_status` 调用，换取稳定的提示词前缀和更小的上下文占用。
-- **不自动改配置**：模型失效、CLI 停用、账号变化一律显式报错，由用户在条目里重选。
+- **模板而不是实例**：模板与 Worker 解耦后，同一角色可以按需创建多个并行实例，删除也不影响模板。
+- **编号由 Host 分配**：避免主 Agent 自己拼名字造成冲突；已删除名称可复用，编号用最小空闲值。
+- **不做探测**：会话级选择完全建立在设置页的探测结果上。
+- **不写全量清单进提示词**：每次派遣多一次 `cliworker_status` 调用，换取稳定前缀。
+- **删除即释放**：删除 Worker 同时释放显示子会话，避免“已删除但还在子智能体列表里”。
 
 ## 生命周期与回滚
 
-- 删除 roster 条目不删除、不停止其 Worker；删除 Worker 也不删除条目。
-- roster 文件独立于 Worker 记录，删除全部 roster 文件即回到当前行为，无需迁移。
-- `runCount` 是可选字段，旧 Worker 记录按 0 读取；写入失败不影响运行。
+- 删除模板不删除、不停止它创建的 Worker；删除 Worker 也不影响模板。
+- 模板文件独立于 Worker 记录，删除全部模板文件即回到未引入该功能的行为。
+- `templateId`、`runCount` 都是可选字段，旧记录按缺省处理。
+- 子会话释放失败只记录日志，不阻断删除；下次启动会重试历史记录。
 
 ## 风险
 
-- 模型目录是“上次探测”的快照，CLI 升级后可能过期；靠派遣校验报错 + 条目内重选消化。
-- 面板顶部区域在窄容器下空间紧张，需要容器查询降级为上下堆叠。
-- 提示词分段按会话读取文件，增加了每次组装的一次小文件读取；用内存缓存 + 写入失效控制。
+- 模型目录是“上次探测”的快照，CLI 升级后可能过期；靠派遣校验报错 + 模板内重选消化。
+- 编号按“未删除 Worker”计算，归档记录会保留旧名字；列表里可能出现同名（一个已删除、一个在用），历史记录不混淆。
+- 启动时批量释放历史子会话会增加一次启动开销；数量大时在后台逐条执行。

@@ -428,6 +428,7 @@ export class CliWorkerService extends TypertRemoteService {
         },
       })
       this.harnessConversation = bridge
+      this.releaseArchivedHarnessSessions()
       const removeModelGuard = installHarnessModelGuard(scope)
       const removePreparation = this.runtime.setHarnessPreparation(async (worker, signal, input) => {
         const parent = await this.parent(worker.parentSessionId)
@@ -662,7 +663,7 @@ export class CliWorkerService extends TypertRemoteService {
             } catch {
               return ''
             }
-            return '本会话已配置可用智能体（角色 + CLI + 模型 + 思考强度的固定组合）。派遣前先调用 cliworker_status 查看清单、各自对应的 Worker 状态与执行次数；按 agent_name 派遣，续聊用 cliworker_followup。'
+            return '本会话已配置可用智能体模板（角色 + CLI + 模型 + 思考强度的固定组合）。派遣前先调用 cliworker_status 查看模板与已有实例；派遣时用 cliworker_start 的 template 参数，宿主会自动创建带编号的新实例（同一模板可多次创建），续聊用 cliworker_followup。'
           },
         }),
       'cliworker:roster',
@@ -1360,7 +1361,7 @@ export class CliWorkerService extends TypertRemoteService {
         this.ctx.tools.register(
           defineTool({
             name: 'cliworker_start',
-            description: `用户明确要求“调用 agy cli”或“用 glm cli 完成任务”时，调用本工具打开 CLI Worker 的选型流程。只需提供 CLI、任务标题和任务内容；模型、思考强度与角色由插件收集，完成选型前不会启动任务，不要把它们当作调用本工具的前置输入。${CLI_NAME_GUIDANCE}。泛称 qoder 在双版本均安装时先通过原生询问选择版本。Host 在首次选择模型、思考强度与角色，或同项目新对话确认是否沿用时提问；同对话后续不重复。不要提前自行提问或增加确认，不代答。返回后台 job、worker ID 和 agentName。已有智能体续聊用 cliworker_followup；除泛称 qoder 的双版本选择外，其他歧义返回简短候选错误，不启动、不额外发问题卡。`,
+            description: `用户明确要求“调用 agy cli”或“用 glm cli 完成任务”时，调用本工具打开 CLI Worker 的选型流程。只需提供 CLI、任务标题和任务内容；模型、思考强度与角色由插件收集，完成选型前不会启动任务，不要把它们当作调用本工具的前置输入。${CLI_NAME_GUIDANCE}。泛称 qoder 在双版本均安装时先通过原生询问选择版本。Host 在首次选择模型、思考强度与角色，或同项目新对话确认是否沿用时提问；同对话后续不重复。不要提前自行提问或增加确认，不代答。返回后台 job、worker ID 和 agentName。若用户已在本会话配置可用智能体模板，传 template 即可创建带编号的新实例（同一模板可重复创建），不再弹选型卡。已有智能体续聊用 cliworker_followup；除泛称 qoder 的双版本选择外，其他歧义返回简短候选错误，不启动、不额外发问题卡。`,
             parameters: {
               cli: {
                 type: 'string',
@@ -1394,6 +1395,11 @@ export class CliWorkerService extends TypertRemoteService {
                 description:
                   'Optional reasoning effort for this worker (must be supported by the chosen model). Omit to reuse the saved selection.',
               },
+              template: {
+                type: 'string',
+                description:
+                  'Session roster template name. Creates a NEW numbered agent from it (template1, template2, …) with the pinned CLI/model/effort/role and opens no selection card. Repeat the call to create more instances. Omit for the normal selection flow.',
+              },
               parallel_write: {
                 type: 'boolean',
                 description:
@@ -1419,36 +1425,32 @@ export class CliWorkerService extends TypertRemoteService {
                 cli = await this.chooseQoderVariant(exec.agent, exec.signal, args.cli)
               const agentName =
                 args.agent_name === undefined ? undefined : agentNameSchema.parse(args.agent_name)
-              // Local patch: a session roster entry fixes CLI/model/effort/role, so this
-              // dispatch opens no question card and refuses conflicting arguments.
-              const roster =
-                agentName === undefined ? undefined : this.rosterEntry(exec.agent.id, agentName)
-              if (roster) {
-                if (roster.cli !== cli)
+              // Local patch: a roster template fixes CLI/model/effort/role. The leader
+              // dispatches the template itself; the Host allocates a numbered instance,
+              // so one template can create many agents over time.
+              const templateName = typeof args.template === 'string' ? args.template.trim() : ''
+              const template = templateName ? this.rosterEntry(exec.agent.id, templateName) : undefined
+              if (templateName && !template)
+                throw new Error(
+                  `本会话没有名为「${templateName}」的可用智能体；先用 cliworker_status 查看可用模板`,
+                )
+              if (template) {
+                if (template.cli !== cli)
                   throw new Error(
-                    `可用智能体「${roster.title}」固定使用 ${CLI_LABELS[roster.cli]}，不能改用 ${CLI_LABELS[cli]}；需要其他 CLI 请另建一个可用智能体`,
+                    `可用智能体模板「${template.title}」固定使用 ${CLI_LABELS[template.cli]}，不能改用 ${CLI_LABELS[cli]}；需要其他 CLI 请另建一个模板`,
                   )
                 if (args.model !== undefined || args.effort !== undefined || args.role !== undefined)
                   throw new Error(
-                    `可用智能体「${roster.title}」的 CLI、模型、思考强度与角色都已固定；如需临时调整，请换一个 agent_name 或先编辑该可用智能体`,
-                  )
-                const bound = roster.workerId
-                  ? this.runtime.storage.workers.get(roster.workerId)
-                  : undefined
-                if (bound)
-                  throw new Error(
-                    bound.archivedAt
-                      ? `可用智能体「${roster.title}」的对话已删除；请恢复该对话，或在可用智能体里另建一个`
-                      : `可用智能体「${roster.title}」已经创建过（${bound.id}）；继续用它请调用 cliworker_followup`,
+                    `可用智能体模板「${template.title}」的模型、思考强度与角色都已固定；如需临时调整，请先编辑该模板`,
                   )
               }
               if (cli === 'kimi' && args.read_only) throw new Error('Kimi 非交互模式不支持只读派遣')
               // Local patch: only pass overrides when the caller actually set one (or a
-              // preset/roster supplied one), so the stock three-argument call shape is kept.
-              const overrideModel = roster?.model ?? args.model ?? namedPreset?.model
-              const overrideEffort = roster?.effort ?? args.effort ?? namedPreset?.effort
+              // preset/template supplied one), so the stock three-argument call shape is kept.
+              const overrideModel = template?.model ?? args.model ?? namedPreset?.model
+              const overrideEffort = template?.effort ?? args.effort ?? namedPreset?.effort
               const hasOverride =
-                roster !== undefined ||
+                template !== undefined ||
                 overrideModel !== undefined ||
                 overrideEffort !== undefined ||
                 args.role !== undefined
@@ -1457,17 +1459,17 @@ export class CliWorkerService extends TypertRemoteService {
                 ? await this.chooseDispatch(exec.agent, dispatchSignal, cli, {
                     model: overrideModel,
                     effort: overrideEffort,
-                    ...(roster
+                    ...(template
                       ? {
-                          roleSnapshot: this.rosterRole(roster),
+                          roleSnapshot: this.rosterRole(template),
                           pinned: true,
-                          label: roster.title,
+                          label: template.title,
                         }
                       : { role: args.role }),
                   })
                 : await this.chooseDispatch(exec.agent, dispatchSignal, cli)
               exec.signal.throwIfAborted()
-              const result = await this.launch(
+              return this.launch(
                 exec.agent,
                 args.title,
                 args.prompt,
@@ -1476,21 +1478,17 @@ export class CliWorkerService extends TypertRemoteService {
                 undefined,
                 {
                   agentName,
+                  ...(template
+                    ? {
+                        templateId: template.id,
+                        ...(agentName === undefined ? { templateTitle: template.title } : {}),
+                      }
+                    : {}),
                   role: setup.role ?? undefined,
                   ...(args.parallel_write === true ? { parallelWrite: true } : {}),
                 },
                 AbortSignal.any([exec.signal, this.disposed.signal]),
               )
-              if (roster) {
-                try {
-                  const receipt = JSON.parse(result) as { workerId?: string }
-                  if (receipt.workerId)
-                    this.runtime.storage.bindRosterWorker(exec.agent.id, roster.id, receipt.workerId)
-                } catch {
-                  /* 回填失败不影响已启动的任务；条目仍可按名称对应它的 Worker。 */
-                }
-              }
-              return result
             },
           }),
         ),
@@ -1521,14 +1519,17 @@ export class CliWorkerService extends TypertRemoteService {
               const live = snapshot.workers
               const archived = snapshot.archivedWorkers ?? []
               const all = [...live, ...archived]
-              const byId = new Map(all.map((worker) => [worker.id, worker]))
-              const byName = new Map(
-                all.map((worker) => [workerName(worker).toLocaleLowerCase(), worker]),
-              )
+              // A template owns many instances. Count by template id, and fall back to
+              // the numbered name prefix for Workers created before templates existed.
+              const instances = (entry: { id: string; title: string }) =>
+                all.filter((worker) => {
+                  if (worker.templateId === entry.id) return true
+                  if (worker.templateId) return false
+                  const name = workerName(worker)
+                  return name.startsWith(entry.title) && /^\d+$/.test(name.slice(entry.title.length))
+                })
               const roster = this.runtime.storage.roster(parent).map((entry) => {
-                const worker =
-                  (entry.workerId ? byId.get(entry.workerId) : undefined) ??
-                  byName.get(entry.title.toLocaleLowerCase())
+                const created = instances(entry)
                 return {
                   title: entry.title,
                   cli: entry.cli,
@@ -1536,9 +1537,8 @@ export class CliWorkerService extends TypertRemoteService {
                   effort: entry.effort,
                   role: entry.role.name,
                   roleSource: entry.roleSource,
-                  workerId: worker?.id ?? entry.workerId,
-                  status: worker ? (worker.archivedAt ? 'archived' : worker.status) : 'idle',
-                  runs: worker?.runCount ?? 0,
+                  created: created.length,
+                  workers: created.map((worker) => workerName(worker)),
                 }
               })
               const brief = (worker: Worker) => ({
@@ -1980,10 +1980,51 @@ export class CliWorkerService extends TypertRemoteService {
     try {
       await this.parent(parentSessionId)
       signal.throwIfAborted()
+      await this.releaseDeletedHarnessSession(parentSessionId, workerId)
+      signal.throwIfAborted()
       this.runtime.deleteWorker(parentSessionId, workerId)
     } catch (error) {
       throw failure(error)
     }
+  }
+  /**
+   * Local patch: a deleted Worker must stop counting as a DSH subagent. Release its
+   * display child session first; a failed release never blocks the deletion itself.
+   */
+  private async releaseDeletedHarnessSession(parentSessionId: string, workerId: string): Promise<void> {
+    const bridge = this.harnessConversation
+    if (!bridge) return
+    const worker = this.runtime.storage.workers.get(workerId)
+    if (!worker || worker.parentSessionId !== parentSessionId || !worker.harnessConversation) return
+    try {
+      const outcome = await bridge.release(worker)
+      if (outcome !== 'released') return
+      delete worker.harnessConversation
+      this.runtime.storage.save(worker)
+    } catch (error) {
+      this.ctx.logger?.warn?.(`释放 CLI 子会话失败：${String(error)}`)
+    }
+  }
+  /**
+   * Local patch: Workers deleted before this rule existed still hold a child session.
+   * Release them once after the bridge is ready so the session stops listing them.
+   */
+  private releaseArchivedHarnessSessions(): void {
+    const bridge = this.harnessConversation
+    if (!bridge) return
+    void (async () => {
+      for (const worker of [...this.runtime.storage.workers.values()]) {
+        if (!worker.archivedAt || !worker.harnessConversation) continue
+        try {
+          const outcome = await bridge.release(worker)
+          if (outcome !== 'released') continue
+          delete worker.harnessConversation
+          this.runtime.storage.save(worker)
+        } catch {
+          /* 单个历史会话释放失败不影响其他记录。 */
+        }
+      }
+    })()
   }
   /** @param parentSessionId - Owning parent. @param workerId - Deleted Worker identity. @param signal - Mutation lifetime. @returns Completion with the original ID and history. */
   @Remote('restoreWorker')

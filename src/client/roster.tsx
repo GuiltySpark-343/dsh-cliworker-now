@@ -13,7 +13,6 @@ import {
   type RoleSnapshot,
   type RosterEntry,
   type Worker,
-  type WorkerStatus,
 } from '../shared/types.ts'
 import { displayModelName, visibleModelChoices } from '../shared/model-presentation.ts'
 import { BrandIcon, Glyph } from './icons.tsx'
@@ -39,17 +38,15 @@ type Draft = {
   model: string
   effort: Effort
 }
-const STATUS: Record<WorkerStatus | 'idle' | 'archived', string> = {
-  queued: '排队中',
-  running: '运行中',
-  stopping: '正在停止',
-  completed: '已完成',
-  failed: '失败',
-  uncertain: '结果待核实',
-  interrupted: '已中断',
-  idle: '未启动',
-  archived: '对话已删除',
-}
+/** A template owns many instances; old Workers are matched by numbered name. */
+const instancesOf = (entry: RosterEntry, workers: Worker[], archived: Worker[]) =>
+  [...workers, ...archived].filter((worker) => {
+    if (worker.templateId === entry.id) return true
+    if (worker.templateId) return false
+    const name = workerName(worker)
+    return name.startsWith(entry.title) && /^\d+$/.test(name.slice(entry.title.length))
+  })
+
 const usable = (reply: CatalogReply | undefined): ModelChoice[] =>
   reply?.missing ? [] : visibleModelChoices(reply?.catalog?.models ?? []).filter((item) => item.efforts?.length)
 
@@ -66,19 +63,9 @@ function applyCatalog(draft: Draft, reply: CatalogReply | undefined): Draft {
   return { ...draft, model: target.id, effort }
 }
 
-function statusOf(entry: RosterEntry, workers: Worker[], archived: Worker[]) {
-  const match = (list: Worker[]) =>
-    list.find((worker) => worker.id === entry.workerId) ??
-    list.find((worker) => workerName(worker) === entry.title)
-  const live = match(workers)
-  if (live) return { key: live.status as WorkerStatus | 'idle' | 'archived', worker: live }
-  if (match(archived)) return { key: 'archived' as const, worker: undefined }
-  return { key: 'idle' as const, worker: undefined }
-}
-
 /**
- * Session-scoped roster, shown as the fifth view next to the worker status filters.
- * Entries are configuration only; their Worker appears after the first dispatch.
+ * Session-scoped templates, shown as the fifth view next to the worker status filters.
+ * A template fixes CLI/model/effort/role; dispatching creates a numbered instance.
  */
 export function RosterList({
   api,
@@ -86,14 +73,12 @@ export function RosterList({
   workers,
   archived,
   query,
-  onOpenWorker,
 }: {
   api: API
   sessionId: string
   workers: Worker[]
   archived: Worker[]
   query: string
-  onOpenWorker: (id: string) => void
 }) {
   const [entries, setEntries] = useState<RosterEntry[]>([])
   const [presets, setPresets] = useState<RolePreset[]>([])
@@ -268,10 +253,6 @@ export function RosterList({
 
   const models = draft ? usable(catalogs[draft.cli]) : []
   const model = models.find((item) => item.id === draft?.model)
-  const current = draft?.id ? entries.find((entry) => entry.id === draft.id) : undefined
-  const draftArchived = current
-    ? archived.some((worker) => worker.id === current.workerId || workerName(worker) === current.title)
-    : false
   const term = query.trim().toLocaleLowerCase()
   const visible = entries.filter(
     (entry) =>
@@ -326,23 +307,20 @@ export function RosterList({
           <div className="cwn-cli-rows" data-expanded="true">
             <div className="cwn-cli-rows-inner">
               {group.rows.map((entry) => {
-                const state = statusOf(entry, workers, archived)
+                const created = instancesOf(entry, workers, archived)
                 return (
                   <div className="cwn-roster-row" key={entry.id}>
                     <button
                       type="button"
                       className="cwn-roster-open"
-                      aria-label={`${entry.title}：${STATUS[state.key]}`}
-                      onClick={() => {
-                        if (state.worker && state.key !== 'archived') onOpenWorker(state.worker.id)
-                        else openEntry(entry)
-                      }}
+                      aria-label={`${entry.title}：已创建 ${created.length} 个`}
+                      title={created.length ? created.map(workerName).join(' / ') : undefined}
+                      onClick={() => openEntry(entry)}
                     >
                       <span className="cwn-worker-line">
                         <span className="cwn-worker-title">{entry.title}</span>
-                        <span className={`cwn-worker-status ${state.key}`}>
-                          <span className={`cwn-dot ${state.key}`} />
-                          {STATUS[state.key]}
+                        <span className="cwn-worker-status">
+                          {created.length ? `已创建 ${created.length} 个` : '未创建'}
                         </span>
                       </span>
                       <span className="cwn-worker-meta">
@@ -568,9 +546,7 @@ export function RosterList({
                 </Button>
               </div>
             )}
-            {draftArchived && (
-              <p className="cwn-roster-hint">这个名称的对话已被删除；恢复该对话，或删掉这条重建一个。</p>
-            )}
+
             {error && (
               <p className="cwn-roster-feedback" role="alert">
                 {error}

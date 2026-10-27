@@ -34,6 +34,7 @@ import {
 import {
   agentNameSchema,
   availableAgentName,
+  availableNumberedName,
   promptForWorker,
   roleSnapshotSchema,
   workerTitleSchema,
@@ -951,6 +952,8 @@ export class WorkerRuntime {
       [...this.storage.workers.values()].some(
         (worker) =>
           worker.parentSessionId === parent &&
+          // Local patch: a deleted Worker releases its name.
+          !worker.archivedAt &&
           worker.id !== excludingId &&
           [workerName(worker), ...(worker.nameAliases ?? [])].some(
             (name) => name.toLocaleLowerCase() === clean.toLocaleLowerCase(),
@@ -1434,7 +1437,13 @@ export class WorkerRuntime {
     preference: Preference,
     mode: TaskMode,
     previousId?: string,
-    identity?: { agentName?: string; role?: RoleSnapshot; parallelWrite?: boolean },
+    identity?: {
+      agentName?: string
+      templateId?: string
+      templateTitle?: string
+      role?: RoleSnapshot
+      parallelWrite?: boolean
+    },
     authorizedBinding?: string,
     queuedAdmission?: QueuedAdmission,
     preparationId?: string,
@@ -1524,10 +1533,14 @@ export class WorkerRuntime {
       parentSessionId: parent,
       project: canonical,
       title: title.slice(0, 160),
+      // Local patch: template instances are numbered; an explicit name still wins.
       agentName: identity?.agentName
         ? this.checkAgentName(parent, identity.agentName)
-        : availableAgentName(this.storage.workers.values(), parent, CLI_SHORT_NAMES[cliOf(preference)]),
+        : identity?.templateTitle
+          ? availableNumberedName(this.storage.workers.values(), parent, identity.templateTitle)
+          : availableAgentName(this.storage.workers.values(), parent, CLI_SHORT_NAMES[cliOf(preference)]),
       agentNameOrigin: identity?.agentName ? 'custom' : 'auto',
+      ...(identity?.templateId ? { templateId: identity.templateId } : {}),
       role: identity?.role ? roleSnapshotSchema.parse(structuredClone(identity.role)) : undefined,
       // Local patch: only an explicit leader flag lifts the same-project write mutex.
       ...(identity?.parallelWrite === true ? { parallelWrite: true } : {}),

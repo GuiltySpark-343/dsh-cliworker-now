@@ -125,7 +125,7 @@ describe('session roster storage', () => {
     ).toThrow('同名智能体')
   })
 
-  it('keeps sessions isolated and persists the bound worker', () => {
+  it('keeps sessions isolated and survives a reopen', () => {
     const { store, open } = fixture()
     const preset = card(store)
     const entry = store.saveRosterEntry(parent, project, {
@@ -136,16 +136,13 @@ describe('session roster storage', () => {
       effort: 'high',
     })
     expect(store.roster('another-parent')).toEqual([])
-    const bound = worker(parent, entry.title)
-    store.save(bound)
-    store.bindRosterWorker(parent, entry.id, bound.id)
     store.close()
     const reopened = open()
-    expect(reopened.roster(parent).find((item) => item.id === entry.id)?.workerId).toBe(bound.id)
+    expect(reopened.roster(parent).find((item) => item.id === entry.id)?.title).toBe(entry.title)
     expect(reopened.roster('another-parent')).toEqual([])
   })
 
-  it('deletes an entry without touching its worker', () => {
+  it('deletes a template without touching the agents it created', () => {
     const { store } = fixture()
     const preset = card(store)
     const entry = store.saveRosterEntry(parent, project, {
@@ -155,12 +152,11 @@ describe('session roster storage', () => {
       model: 'synthetic-model',
       effort: 'high',
     })
-    const bound = worker()
-    store.save(bound)
-    store.bindRosterWorker(parent, entry.id, bound.id)
+    const instance = worker(parent, `${entry.title}1`)
+    store.save(instance)
     store.deleteRosterEntry(parent, entry.id)
     expect(store.roster(parent)).toEqual([])
-    expect(store.workers.get(bound.id)?.agentName).toBe('项目执行者1')
+    expect(store.workers.get(instance.id)?.agentName).toBe(`${entry.title}1`)
   })
 
   it('rejects unknown cards and unknown entries', () => {

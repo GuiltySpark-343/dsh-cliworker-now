@@ -13,7 +13,6 @@ function setup(options: { roster?: RosterEntry; receipt?: string; bound?: string
   })
   const chooseDispatch = vi.fn(() => waiting)
   const launch = vi.fn((..._args: unknown[]) => options.receipt ?? 'synthetic-receipt')
-  const bind = vi.fn()
   const workers = new Map<string, unknown>(
     options.bound ? [[options.bound, { id: options.bound }]] : [],
   )
@@ -26,11 +25,11 @@ function setup(options: { roster?: RosterEntry; receipt?: string; bound?: string
     chooseDispatch,
     disposed: new AbortController(),
     launch,
-    // Synthetic host: no roster means the tool keeps the plain path.
+    // Synthetic host: no template means the tool keeps the plain path.
     rosterEntry: (_parent: string, name: string) =>
       options.roster && options.roster.title === name ? options.roster : undefined,
     rosterRole: (entry: RosterEntry) => entry.role,
-    runtime: { storage: { workers, bindRosterWorker: bind, rolePresets: () => [] } },
+    runtime: { storage: { workers, rolePresets: () => [] } },
   }
   ;(CliWorkerService.prototype as any).registerTools.call(service)
   const controller = new AbortController(),
@@ -47,13 +46,13 @@ function setup(options: { roster?: RosterEntry; receipt?: string; bound?: string
     role: { presetId: 'fixture-review', name: '审稿员', summary: '合成角色', prompt: '检查证据' },
     binding: 'synthetic-account',
   }
-  return { service, chooseDispatch, launch, bind, answer, controller, start, selected }
+  return { service, chooseDispatch, launch, answer, controller, start, selected }
 }
 const rosterEntry = (overrides: Partial<RosterEntry> = {}): RosterEntry => ({
   id: 'entry-1',
   parentSessionId: 'synthetic-parent',
   project: '/project',
-  title: '项目执行者1',
+  title: '项目执行者',
   presetId: 'fixture-review',
   roleSource: 'preset',
   role: { presetId: 'fixture-review', name: '项目执行者', summary: '合成角色', prompt: '按流程实现' },
@@ -92,10 +91,10 @@ it('explicit no-role setup starts without substituting any preset', async () => 
   expect(f.launch.mock.calls[0]![6]).toEqual({ agentName: '小林', role: undefined })
 })
 
-it('pins a roster agent and backfills its worker without asking for a selection', async () => {
+it('dispatches a roster template as a pinned, numbered instance', async () => {
   const entry = rosterEntry()
   const f = setup({ roster: entry, receipt: JSON.stringify({ workerId: 'synthetic-worker' }) }),
-    pending = f.start({ agent_name: entry.title })
+    pending = f.start({ template: entry.title })
   await Promise.resolve()
   expect(f.chooseDispatch.mock.calls[0]![3]).toMatchObject({
     pinned: true,
@@ -107,19 +106,26 @@ it('pins a roster agent and backfills its worker without asking for a selection'
   f.answer(f.selected)
   await pending
   expect(f.launch).toHaveBeenCalledTimes(1)
-  expect(f.bind).toHaveBeenCalledWith('synthetic-parent', entry.id, 'synthetic-worker')
+  // The Host allocates template1/template2/…; the tool only names the template.
+  expect(f.launch.mock.calls[0]![6]).toMatchObject({
+    templateId: entry.id,
+  })
 })
-it('refuses to override the CLI, model or role of a pinned roster agent', async () => {
+it('each template call is an independent instance', async () => {
   const entry = rosterEntry()
   const f = setup({ roster: entry })
-  await expect(f.start({ agent_name: entry.title, cli: 'claude' })).rejects.toThrow('固定使用')
-  await expect(f.start({ agent_name: entry.title, model: 'other-model' })).rejects.toThrow('都已固定')
-  await expect(f.start({ agent_name: entry.title, role: '其他角色' })).rejects.toThrow('都已固定')
-  expect(f.chooseDispatch).not.toHaveBeenCalled()
+  const first = f.start({ template: entry.title })
+  const second = f.start({ template: entry.title })
+  f.answer(f.selected)
+  await Promise.all([first, second])
+  expect(f.launch).toHaveBeenCalledTimes(2)
+  for (const call of f.launch.mock.calls) expect(call[6]).toMatchObject({ templateId: entry.id })
 })
-it('refuses a second start for an agent whose worker already exists', async () => {
-  const entry = rosterEntry({ workerId: 'synthetic-worker' })
-  const f = setup({ roster: entry, bound: 'synthetic-worker' })
-  await expect(f.start({ agent_name: entry.title })).rejects.toThrow('cliworker_followup')
+it('rejects an unknown template and conflicting overrides', async () => {
+  const entry = rosterEntry()
+  const f = setup({ roster: entry })
+  await expect(f.start({ template: '不存在的模板' })).rejects.toThrow('没有名为')
+  await expect(f.start({ template: entry.title, cli: 'claude' })).rejects.toThrow('固定使用')
+  await expect(f.start({ template: entry.title, model: 'other-model' })).rejects.toThrow('都已固定')
   expect(f.chooseDispatch).not.toHaveBeenCalled()
 })

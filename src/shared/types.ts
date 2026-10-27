@@ -110,16 +110,16 @@ export interface RolePreset {
   source?: string
 }
 /**
- * Local patch: one session-scoped, concrete agent built from a role card.
- * It pins the exact CLI/model/effort so a leader can dispatch by name without
- * opening a question card; it is configuration, never a running Worker.
+ * Local patch: one session-scoped template built from a role card.
+ * A template pins CLI/model/effort; the leader dispatches it and the Host creates
+ * a fresh Worker with an auto-numbered name, so one template yields many agents.
  */
 export interface RosterEntry {
   id: string
   /** The conversation that owns this entry; entries never cross sessions. */
   parentSessionId: string
   project: string
-  /** Unique inside the session; doubles as the Worker agentName when dispatched. */
+  /** Template name; unique inside the session and the base of numbered Worker names. */
   title: string
   /** Source card, absent when the entry was created from a literal prompt. */
   presetId?: string
@@ -129,8 +129,6 @@ export interface RosterEntry {
   cli: CliId
   model: string
   effort: Effort
-  /** Backfilled after the first successful dispatch; kept after the Worker is archived. */
-  workerId?: string
   createdAt: string
   updatedAt: string
 }
@@ -160,6 +158,8 @@ export interface Worker {
   parallelWrite?: boolean
   /** Local patch: number of started turns; missing on records written by older versions. */
   runCount?: number
+  /** Local patch: roster template this Worker was created from, if any. */
+  templateId?: string
   conversationId?: string
   /** A session receipt is replaced, never added to another invocation's cumulative receipt. */
   conversationTelemetry?: ConversationTelemetryCheckpoint
