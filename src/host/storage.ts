@@ -17,12 +17,14 @@ import {
   renameSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { randomUUID, createHash } from 'node:crypto'
 import { z } from 'zod'
+import { StateLayout, type LogsDirectoryMode } from './state-layout.ts'
 import { conversationTelemetrySchema, lastRunUsageSnapshotSchema, sessionUsageSchema } from './conversation-telemetry.ts'
 import { contextTelemetrySchema } from './context-telemetry.ts'
 import { LANGUAGE_PREFERENCES, MAX_CONCURRENT_LIMIT, MAX_TASK_TIME_LIMIT_MS, type CliSettings } from '../shared/cli-settings.ts'
@@ -328,6 +330,9 @@ function lockOwnerAlive(pid: number, path: string, startedAt: (pid: number) => n
 /** One host owns a private store; a live second host cannot resume the same CLI session. */
 export class WorkerStorage {
   readonly workers = new Map<string, Worker>()
+  readonly layout: StateLayout
+  private readonly retention: { runs: number; bytes: number }
+  private lastPrune = 0
   private events = new Map<string, WorkerEvent[]>()
   private token = randomUUID()
   private lock: string
@@ -428,7 +433,16 @@ export class WorkerStorage {
       ? 'cleanup-blocked.json'
       : `cleanup-blocked-${z.enum(CLI_IDS).parse(cli)}.json`)
   }
-  constructor(readonly directory: string) {
+  constructor(
+    readonly directory: string,
+    options: {
+      logsDirectory?: LogsDirectoryMode
+      onLogFallback?: (project: string, error: unknown) => void
+      retention?: { runs: number; bytes: number }
+    } = {},
+  ) {
+    this.layout = new StateLayout(directory, options.logsDirectory ?? 'project', options.onLogFallback)
+    this.retention = options.retention ?? { runs: 20, bytes: 536_870_912 }
     mkdirSync(directory, { recursive: true, mode: 0o700 })
     chmodSync(directory, 0o700)
     this.lock = join(directory, 'host.lock')
@@ -768,7 +782,7 @@ export class WorkerStorage {
     if (!this.workers.has(id)) throw new Error('Unknown worker')
     const cached = this.events.get(id)
     if (cached) return cached
-    const path = join(this.directory, `${id}.events.jsonl`)
+    const path = this.layout.pathFor(this.workers.get(id)!.project, `${id}.events.jsonl`, true)
     const rows: WorkerEvent[] = []
     if (existsSync(path)) {
       const raw = readFileSync(path)
@@ -796,15 +810,96 @@ export class WorkerStorage {
     return rows
   }
   append(worker: Worker, event: Omit<WorkerEvent, 'seq' | 'runId' | 'time'>): void {
+    // Keep one append-only timeline: adopt the legacy file before the first append.
+    this.layout.adopt(worker.project, `${worker.id}.events.jsonl`)
     const rows = this.history(worker.id)
     const row = { ...event, seq: rows.length + 1, runId: worker.runId, time: new Date().toISOString() }
-    appendFileSync(join(this.directory, `${worker.id}.events.jsonl`), JSON.stringify(row) + '\n', {
+    appendFileSync(this.layout.pathFor(worker.project, `${worker.id}.events.jsonl`), JSON.stringify(row) + '\n', {
       mode: 0o600,
     })
     rows.push(row)
   }
   rawPath(worker: Worker): string {
-    return join(this.directory, `${worker.id}.${worker.runId}.raw.jsonl`)
+    return this.layout.pathFor(worker.project, `${worker.id}.${worker.runId}.raw.jsonl`)
+  }
+  /** Reads fall back to the legacy global file for runs recorded before the split. */
+  logPath(worker: Worker, runId: string, read = false): string {
+    return this.layout.pathFor(worker.project, `${worker.id}.${runId}.raw.jsonl`, read)
+  }
+  logDirectory(project: string): string {
+    return this.layout.directoryFor(project)
+  }
+  /** Timeline file for one Worker; reads fall back to the legacy global location. */
+  eventPath(worker: Worker, read = false): string {
+    return this.layout.pathFor(worker.project, `${worker.id}.events.jsonl`, read)
+  }
+  /**
+   * Bounded run-log retention: keep the newest runs per Worker and a global byte
+   * ceiling. The active run is never deleted.
+   */
+  pruneRunLogs(): void {
+    const now = Date.now()
+    if (now - this.lastPrune < 5 * 60_000) return
+    this.lastPrune = now
+    const entries: { path: string; size: number; mtime: number; workerId: string; runId: string }[] = []
+    for (const worker of this.workers.values()) {
+      const prefix = `${worker.id}.`
+      const directories = new Set([this.layout.directoryFor(worker.project), this.directory])
+      for (const directory of directories) {
+        let names: string[]
+        try {
+          names = readdirSync(directory)
+        } catch {
+          continue
+        }
+        for (const name of names) {
+          if (!name.startsWith(prefix) || !name.endsWith('.raw.jsonl')) continue
+          const runId = name.slice(prefix.length, -'.raw.jsonl'.length)
+          try {
+            const info = statSync(join(directory, name))
+            entries.push({ path: join(directory, name), size: info.size, mtime: info.mtimeMs, workerId: worker.id, runId })
+          } catch {
+            /* A concurrent cleanup already removed it. */
+          }
+        }
+      }
+    }
+    if (!entries.length) return
+    const active = new Set(
+      [...this.workers.values()]
+        .filter((worker) => worker.status === 'running')
+        .map((worker) => `${worker.id}.${worker.runId}`),
+    )
+    const byWorker = new Map<string, typeof entries>()
+    for (const entry of entries) {
+      const list = byWorker.get(entry.workerId) ?? []
+      list.push(entry)
+      byWorker.set(entry.workerId, list)
+    }
+    const doomed = new Set<string>()
+    for (const list of byWorker.values()) {
+      list.sort((left, right) => right.mtime - left.mtime)
+      for (const entry of list.slice(this.retention.runs))
+        if (!active.has(`${entry.workerId}.${entry.runId}`)) doomed.add(entry.path)
+    }
+    let total = entries.reduce((sum, entry) => sum + entry.size, 0)
+    if (total > this.retention.bytes) {
+      for (const entry of [...entries].sort((left, right) => left.mtime - right.mtime)) {
+        if (doomed.has(entry.path) || active.has(`${entry.workerId}.${entry.runId}`)) continue
+        doomed.add(entry.path)
+        total -= entry.size
+        if (total <= this.retention.bytes) break
+      }
+    }
+    for (const path of doomed) {
+      for (const suffix of ['', '.stderr']) {
+        try {
+          unlinkSync(path + suffix)
+        } catch {
+          /* Already gone. */
+        }
+      }
+    }
   }
   /**
    * Cross-process exclusion without a native flock: every Host atomically

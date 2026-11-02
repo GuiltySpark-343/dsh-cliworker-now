@@ -40,6 +40,8 @@ export interface NativeSupplementalContextInput {
   rawPath: string
   /** WorkerStore root, not a CLI home or an arbitrary search directory. */
   storageDirectory: string
+  /** Directory that actually holds this Worker's raw run logs (project-scoped or global). */
+  logDirectory: string
   /** Supply only for the selected/current run. Presence requires exact current identity;
    * historical reads omit this and bind only to their own raw request. */
   currentIdentity?: { conversationId?: string; model?: string }
@@ -99,7 +101,8 @@ export class NativeSupplementalContextReader {
     if (!['zcode', 'grok', 'qoder', 'qodercn'].includes(worker.preference.cli ?? '') || !id(worker.id) || !id(runId)) return {}
     try {
       const root = realpathSync(input.storageDirectory)
-      if (resolve(input.storageDirectory) !== root || resolve(input.rawPath) !== join(root, `${worker.id}.${runId}.raw.jsonl`)) return {}
+      const logRoot = realpathSync(input.logDirectory)
+      if (resolve(input.storageDirectory) !== root || resolve(input.rawPath) !== join(logRoot, `${worker.id}.${runId}.raw.jsonl`)) return {}
       const native = join(root, 'native', worker.id)
       const rawSignature = stamp(input.rawPath)
       const constrained = Object.hasOwn(input, 'currentIdentity')

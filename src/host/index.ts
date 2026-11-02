@@ -177,6 +177,12 @@ export interface Config {
   maxToolPreviewBytes?: number
   /** Maximum logical timeline rows in one live view (default 1000). */
   maxTimelineItems?: number
+  /** Large append-only logs: 'project' (default) writes under the project, 'global' keeps every file in the state directory. */
+  logsDirectory?: string
+  /** Keep at most this many raw run logs per Worker (default 20). */
+  rawRetentionRuns?: number
+  /** Global raw run-log ceiling in bytes (default 512 MiB). */
+  rawRetentionBytes?: number
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -282,6 +288,9 @@ export class CliWorkerService extends TypertRemoteService {
     maxNativeLineBytes: z.natural().min(1024).max(67_108_864).default(DEFAULT_CONFIG.maxNativeLineBytes!),
     maxToolPreviewBytes: z.natural().min(1024).default(DEFAULT_CONFIG.maxToolPreviewBytes!),
     maxTimelineItems: z.natural().min(10).default(DEFAULT_CONFIG.maxTimelineItems),
+    logsDirectory: z.string().default('project'),
+    rawRetentionRuns: z.natural().min(1).default(20),
+    rawRetentionBytes: z.natural().min(1048576).default(536870912),
   })
   private runtime: WorkerRuntime
   private accounts: AccountManager
@@ -329,12 +338,19 @@ export class CliWorkerService extends TypertRemoteService {
       this.runtime.blockCatalogOnCleanup(cli, error),
     )
     this.runtime = new WorkerRuntime(
-      new WorkerStorage(
-        config.stateDirectory ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'cliworker-now'),
-      ),
+      new WorkerStorage(stateDirectory, {
+        logsDirectory: config.logsDirectory === 'global' ? 'global' : 'project',
+        onLogFallback: (project, error) =>
+          this.ctx.logger?.warn?.(`CLI Worker 日志目录不可写，改用全局目录：${project}（${String(error)}）`),
+        retention: {
+          runs: config.rawRetentionRuns ?? 20,
+          bytes: config.rawRetentionBytes ?? 536870912,
+        },
+      }),
       this.backend,
       this.options,
     )
+    this.runtime.storage.pruneRunLogs()
     this.ctx.inject(['sessionController', 'subagents', 'llm'], (scope) => {
       const records = new HarnessConversationStore(this.runtime.storage.directory)
       this.harnessConversationStore = records

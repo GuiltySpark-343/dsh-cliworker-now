@@ -1377,7 +1377,7 @@ export class WorkerRuntime {
     this.assertAfterCarryover(worker, runId)
     let current = worker.id, conversationId = worker.conversationId!
     const visited = new Set<string>()
-    while (!existsSync(join(this.storage.directory, `${current}.${runId}.raw.jsonl`))) {
+    while (!existsSync(this.storage.layout.pathFor(worker.project, `${current}.${runId}.raw.jsonl`, true))) {
       if (visited.has(current)) throw new Error('分支历史来源循环')
       visited.add(current)
       const state = readWorkerForkState(this.storage.directory, current)
@@ -1506,7 +1506,7 @@ export class WorkerRuntime {
           worker: source, workers: () => [...this.storage.workers.values(), ...this.stagedForks.values()],
           assertIdle: () => { ownSignal.throwIfAborted() },
           history: (at) => bridge.forkHistory(source, at, ownSignal),
-          raw: (runId) => readFileSync(join(this.storage.directory, `${this.forkRunSource(source, runId).workerId}.${runId}.raw.jsonl`), 'utf8'),
+          raw: (runId) => readFileSync(this.storage.layout.pathFor(source.project, `${this.forkRunSource(source, runId).workerId}.${runId}.raw.jsonl`, true), 'utf8'),
           rawSourceId: (runId) => this.forkRunSource(source, runId).conversationId,
           native: (cut) => this.forkNative(source, cut, ownSignal),
           stage: (worker) => { this.stagedForks.set(worker.id, worker); created.push(worker.id) },
@@ -1515,8 +1515,10 @@ export class WorkerRuntime {
           remove: (worker) => {
             this.storage.workers.delete(worker.id)
             this.stagedForks.delete(worker.id)
-            for (const suffix of ['.worker.json', '.events.jsonl', '.account-binding.json', '.fork.json'])
+            for (const suffix of ['.worker.json', '.account-binding.json', '.fork.json'])
               rmSync(join(this.storage.directory, worker.id + suffix), { force: true })
+            rmSync(this.storage.layout.pathFor(worker.project, `${worker.id}.events.jsonl`), { force: true })
+            rmSync(join(this.storage.directory, `${worker.id}.events.jsonl`), { force: true })
           },
           changed: () => this.changed(),
           nativeStateWorkerId: readWorkerForkState(this.storage.directory, id)?.nativeStateWorkerId,
@@ -1529,7 +1531,7 @@ export class WorkerRuntime {
     const events = this.storage.history(source.id)
     const cutoff = events.findLastIndex((event) => event.runId === history.runId && event.kind !== 'submission')
     if (cutoff < 0) throw new Error('分支运行历史缺失')
-    writeFileSync(join(this.storage.directory, `${worker.id}.events.jsonl`), events.slice(0, cutoff + 1)
+    writeFileSync(this.storage.layout.pathFor(worker.project, `${worker.id}.events.jsonl`), events.slice(0, cutoff + 1)
       .map((event) => JSON.stringify(event)).join('\n') + '\n', { mode: 0o600, flag: 'wx' })
     const binding = this.storage.accountBinding(source.id)
     if (binding) this.storage.bindAccount(worker.id, binding)
@@ -1597,7 +1599,7 @@ export class WorkerRuntime {
   }
   private timeline(worker: Worker): TimelineItem[] {
     const events = this.nativeTimelineReprojector.project(worker, legacyAccountNotes(this.storage.history(worker.id)), (runId) =>
-      join(this.storage.directory, `${worker.id}.${runId}.raw.jsonl`),
+      this.storage.logPath(worker, runId, true),
     )
     const rows = foldEvents(
       events.map((event) => ({
@@ -1614,7 +1616,8 @@ export class WorkerRuntime {
   private runTelemetry(bound: Worker, runId: string) {
     // Native session files are keyed by the directory the CLI actually ran in.
     const worker = bound.isolation ? { ...bound, project: bound.isolation.path } : bound
-    const rawPath = join(this.storage.directory, `${worker.id}.${runId}.raw.jsonl`)
+    // The isolation copy is temporary; run logs stay with the original project.
+    const rawPath = this.storage.logPath(bound, runId, true)
     const observed = { ...this.telemetryReader.read(
       rawPath,
       cliOf(worker.preference),
@@ -1626,6 +1629,7 @@ export class WorkerRuntime {
           }
         : undefined,
     ), ...this.supplementalContextReader.read({ worker, runId, rawPath, storageDirectory: this.storage.directory,
+      logDirectory: this.storage.logDirectory(bound.project),
       ...(runId === worker.runId ? { currentIdentity: { conversationId: worker.conversationId,
         model: worker.observedModel ?? worker.preference.model } } : {}),
     }) }
@@ -1656,7 +1660,7 @@ export class WorkerRuntime {
       ['completed', 'failed', 'interrupted'].includes(event.state ?? ''))
     if (!terminal) return
     const receipt = this.telemetryReader.read(
-      join(this.storage.directory, `${worker.id}.${runId}.raw.jsonl`), cliOf(worker.preference),
+      this.storage.logPath(worker, runId, true), cliOf(worker.preference),
       { conversationId: worker.conversationId },
     ).runUsage
     return receipt?.scope === 'run' ? receipt : undefined
