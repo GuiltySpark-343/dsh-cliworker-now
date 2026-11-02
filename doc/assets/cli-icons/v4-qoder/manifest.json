@@ -1,0 +1,63 @@
+{
+  "name": "Qoder CLI",
+  "file": "qoder.png",
+  "runtime_file": "src/client/assets/qoder.png",
+  "downloaded_on": "2026-10-17",
+  "source_page": "https://qoder.com/",
+  "source_context": "官网页脚 Qoder 标识，ThemeImg_lightOnly 图像",
+  "source_url": "https://img.alicdn.com/imgextra/i4/O1CN012JUQmkuk4LH0cGga_!!6000000004828-2-tps-304-304.png",
+  "source_bytes_unchanged": true,
+  "generated": false,
+  "size": [
+    304,
+    304
+  ],
+  "mode": "P",
+  "decoded_mode": "RGBA",
+  "corner_alpha": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "alpha_extrema": [
+    0,
+    255
+  ],
+  "transparent_pixels": 58879,
+  "opaque_pixels": 31515,
+  "subject_bbox_alpha128": [
+    7,
+    5,
+    293,
+    299
+  ],
+  "optical_scale": 0.8272,
+  "optical_translate_percent": [
+    0.5442,
+    0
+  ],
+  "dark_filter": "invert(1)",
+  "sha256": "b0a3c6959fca7d07d5e840bd4fb23e5e8c1a9b5a528700d683476e2bfddd3900",
+  "visual_verification": {
+    "tool": "Tabbit",
+    "scope": "独立图标预览，不代表已安装 Desktop 验收",
+    "theme": [
+      "light",
+      "dark"
+    ],
+    "sizes_px": [
+      22,
+      24,
+      32
+    ],
+    "comparison_clis": [
+      "ZCode",
+      "Antigravity"
+    ],
+    "result": "通过：PNG 透明，无底板、裁切，深色反色后轮廓可辨",
+    "preview_file": "preview.png",
+    "preview_sha256": "e23d53b03170cd925201a87ef098e587d5ab0bfce1fe4523fe751c42eaff458b",
+    "loaded_image_count": 18
+  }
+}

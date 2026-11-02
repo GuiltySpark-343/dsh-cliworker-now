@@ -1,0 +1,112 @@
+"""Use a verified current native venv with a separate account home, without installing.
+
+The official launcher, checkout-derived install key and committed facts are checked by
+Host. Recheck facts under the same install lock, then use Hermes' own generation lease.
+No account/config content is copied, imported from another home, or printed here.
+"""
+import json
+import os
+from pathlib import Path
+import contextlib
+import logging
+import runpy
+import re
+import stat
+import sys
+
+checkout, facts, environment = map(Path, sys.argv[1:4])
+arguments = sys.argv[4:]
+
+def selected():
+    if facts.is_symlink():
+        raise RuntimeError("Invalid Hermes installation record")
+    fd = os.open(facts, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(fd, encoding="utf-8-sig") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 4 * 1024 * 1024:
+            raise RuntimeError("Invalid Hermes installation record")
+        return json.load(stream).get("packages", {}).get("venv", {}).get("environment") == str(environment)
+
+def run_entry():
+    release_holder = []
+    try:
+        return enter(release_holder)
+    finally:
+        for release in release_holder:
+            release()
+
+
+def enter(release_holder):
+    if any(path.resolve() != path for path in (checkout, facts, environment)):
+        raise RuntimeError("Hermes installation changed; reopen login settings")
+    sys.path.insert(0, str(checkout))
+    with open(facts.parent / ".install.lock", "a+b") as lock:
+        if os.name == "nt":
+            from pm.filesystem import lock_fd
+            if not lock_fd(lock.fileno(), wait=False):
+                raise RuntimeError("Hermes installation is being updated; retry after it finishes")
+        else:
+            import fcntl
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if not selected():
+            raise RuntimeError("Hermes installation changed; reopen login settings")
+        from hermes_cli.runtime_state import lease_generation
+        release_holder.append(lease_generation(environment))
+    os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
+    os.environ.pop("PYTHONHOME", None)
+    os.environ.pop("PYTHONPATH", None)
+    os.environ.pop("VIRTUAL_ENV", None)
+    sys.argv = [str(checkout / "hermes_cli/main.py"), *arguments]
+    # The native API exposes these boundaries, but main/run_agent pass the
+    # checkout's .env as a fallback. Pin its own home and disable that fallback
+    # and secret-manager hydration before either module imports the function.
+    # No parser or provider/login flow is replaced.
+    account_home = Path(os.environ["HERMES_HOME"])
+    if (account_home / ".cliworker-managed").exists() or (account_home / ".op.env").exists():
+        raise RuntimeError("Hermes plugin login cannot use additional account configuration layers")
+    from hermes_cli import env_loader
+    native_dotenv = env_loader.load_hermes_dotenv
+    def own_dotenv(**_options):
+        if (account_home / ".cliworker-managed").exists():
+            raise RuntimeError("Hermes plugin login cannot use an additional managed configuration")
+        if (account_home / ".op.env").exists():
+            raise RuntimeError("Hermes plugin login supports its own .env; external secret stores are unavailable")
+        return native_dotenv(hermes_home=account_home, project_env=None, load_external_secrets=False)
+    env_loader.load_hermes_dotenv = own_dotenv
+    if arguments and arguments[0].startswith("--cliworker-"):
+        if len(arguments) != 2 or arguments[0] != "--cliworker-nous-refresh":
+            return "unsupported"
+        own_dotenv()
+        operation = runpy.run_path(str(Path(__file__).with_name("hermes-nous-refresh.py")))
+        return operation["refresh_selected_nous"](account_home, arguments[1])
+    # Register only our explicitly supplied request observer through Hermes'
+    # public PluginContext API. Safe mode and discovery remain unchanged.
+    if arguments[:2] == ["gateway", "run"] and os.environ.get("CLIWORKER_HERMES_OBSERVER_DIR"):
+        try:
+            observer = runpy.run_path(str(Path(__file__).with_name("hermes-observer.py")))
+            release_holder.append(observer["install_observer"]())
+        except Exception:
+            # Unsupported/failed observation must not repeat or fail execution.
+            pass
+    # A Windows venv launcher can have a different PID from this interpreter.
+    # Report only to the owning bridge's pipe; the nonce is not an API secret
+    # and is removed before any native plugin/child can inherit it.
+    pid_nonce = os.environ.pop("CLIWORKER_HERMES_GATEWAY_NONCE", "")
+    if arguments[:2] == ["gateway", "run"] and re.fullmatch(r"[0-9a-f]{32}", pid_nonce):
+        print(f"CLIWORKER_HERMES_GATEWAY_PID {pid_nonce} {os.getpid()}", flush=True)
+    from hermes_cli.main import main
+    raise SystemExit(main())
+
+
+if arguments and arguments[0].startswith("--cliworker-"):
+    # Fixed private operation has no native diagnostic/credential output. Keep
+    # SystemExit/KeyboardInterrupt semantics; ordinary failures are classified.
+    with open(os.devnull, "w") as quiet, contextlib.redirect_stdout(quiet), contextlib.redirect_stderr(quiet):
+        logging.disable(logging.CRITICAL)
+        try:
+            result = run_entry()
+        except Exception:
+            result = "unavailable"
+    print(json.dumps({"version": 1, "state": result}, separators=(",", ":")))
+else:
+    run_entry()

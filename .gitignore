@@ -1,0 +1,22 @@
+node_modules/
+lib/
+!runtime-host/**/lib/
+!runtime-host/**/lib/**
+dist/
+coverage/
+.cache/
+.test-data/
+artifacts/
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+*.tsbuildinfo
+.pnpm-store/
+
+# Personal machine runbooks and connection notes (never publish)
+/doc/local/
+
+# Social media promotion drafts and screenshots (local only; index in promotion/README.md)
+/promotion/

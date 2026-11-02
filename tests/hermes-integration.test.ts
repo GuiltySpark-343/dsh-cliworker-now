@@ -1,0 +1,242 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { appendFileSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { catalogFor, protocolFor } from '../src/host/adapters.ts'
+import { prepareHermesAccountHome } from '../src/host/hermes-account-context.ts'
+import { readCliAccountBinding } from '../src/host/cli-account-binding.ts'
+import { readHermesAccount } from '../src/host/hermes-accounts.ts'
+import { extendedCatalog, extendedLaunch } from '../src/host/extended-adapters.ts'
+import { DEFAULT_CONFIG, type ProcessBackend } from '../src/host/process.ts'
+import { attachTelemetry, TelemetryReader } from '../src/host/telemetry.ts'
+import { foldEvents, type WorkerEvent } from '../src/shared/types.ts'
+
+vi.mock('../src/host/hermes-installation.ts', () => ({
+  verifyHermesExecutable: async () => undefined,
+  hermesNativeCommand: async (executable: string, args: string[]) => [executable, ...args],
+  hermesCommandInstallationHome: () => undefined,
+}))
+vi.mock('../src/host/hermes-models.ts', async (load) => ({
+  ...(await load<typeof import('../src/host/hermes-models.ts')>()),
+  hermesAccountModels: vi.fn(async () => ({
+    state: 'supported',
+    source: 'account-models',
+    models: [{ id: 'fixture/model', cost: 'unknown' }],
+  })),
+}))
+const directories: string[] = []
+function directory() {
+  const path = mkdtempSync(join(tmpdir(), 'hermes-integration-fixture-'))
+  directories.push(path)
+  return path
+}
+function nativeHome() {
+  const home = directory()
+  writeFileSync(
+    join(home, 'config.yaml'),
+    '# SYNTHETIC CONFIG\nauth:\n  adopt_external_logins: false\nmodel:\n  provider: openrouter\n  default: fixture/model\n',
+  )
+  return home
+}
+afterEach(() => {
+  for (const path of directories.splice(0)) rmSync(path, { recursive: true, force: true })
+})
+
+// These dispatch/receipt tests simulate CLI output. Real read-only catalog evidence lives
+// in the private .test-data/hermes-catalog-real report, not in this fixture suite.
+describe('Hermes dispatch and telemetry integration (synthetic fixtures)', () => {
+  it('dispatches sequential native scalar catalog queries without resolving shared credentials', async () => {
+    const calls: string[][] = [],
+      stateDirectory = directory(),
+      hermesHome = nativeHome()
+    let running = false
+    const resolveCredential = vi.fn(async () => 'must-not-be-used')
+    const backend: ProcessBackend = {
+      resolveExecutable: vi.fn(async (name) => name),
+      spawn(spec) {
+        expect(running).toBe(false)
+        running = true
+        calls.push(spec.argv)
+        expect(spec.argv[0]).toBe(process.execPath)
+        expect(spec.argv[2]).toBe('/synthetic/hermes')
+        expect(spec.argv.join(' ')).not.toMatch(/sandbox-exec|\(deny |\(allow /)
+        expect(spec.env?.HERMES_HOME).toBe(realpathSync(hermesHome))
+        expect(spec.env?.ZAI_CODING_CN_API_KEY).toBeUndefined()
+        const field = spec.argv[spec.argv.indexOf('get') + 1]
+        const stdout = (async function* () {
+          yield JSON.stringify(field === 'model.default' ? 'fixture/model' : 'openrouter') + '\n'
+        })()
+        return {
+          stdout,
+          stderr: (async function* () {})(),
+          done: Promise.resolve({ exitCode: 0, signal: null }),
+          terminate: vi.fn(),
+          waitForExit: async () => {
+            running = false
+            return true
+          },
+        } as ReturnType<ProcessBackend['spawn']>
+      },
+    }
+    const catalog = await catalogFor(
+      'hermes',
+      backend,
+      {
+        ...DEFAULT_CONFIG,
+        stateDirectory,
+        hermesHome,
+        hermesExecutable: '/synthetic/hermes',
+        zaiCredentialRef: 'DO_NOT_SHARE',
+        resolveCredential,
+      },
+      directory(),
+      new AbortController().signal,
+    )
+    expect(catalog.models).toEqual([
+      { id: '["openrouter","fixture/model"]', label: 'fixture/model', efforts: ['default'], cost: 'unknown' },
+    ])
+    expect(calls.map((argv) => argv[argv.indexOf('get') + 1])).toEqual(['model.default', 'model.provider'])
+    expect(resolveCredential).not.toHaveBeenCalled()
+  })
+
+  it('removes obsolete Harness dispatch before a process or credential lookup', async () => {
+    const backend: ProcessBackend = { resolveExecutable: vi.fn(), spawn: vi.fn() }
+    await expect(
+      catalogFor('harness', backend, DEFAULT_CONFIG, directory(), new AbortController().signal),
+    ).rejects.toThrow('已移除')
+    expect(backend.resolveExecutable).not.toHaveBeenCalled()
+    expect(backend.spawn).not.toHaveBeenCalled()
+    expect(() =>
+      protocolFor(
+        'harness',
+        () => {},
+        () => {},
+        8192,
+      ),
+    ).toThrow('历史记录')
+  })
+
+  it('prepares the native Hermes launch with native protections with no inherited shared credential', async () => {
+    const project = directory(),
+      stateDirectory = directory(),
+      hermesHome = nativeHome()
+    const resolveCredential = vi.fn(async () => 'must-not-be-used')
+    const launch = await extendedLaunch(
+      'hermes',
+      '/synthetic/hermes',
+      project,
+      { cli: 'hermes', model: '["openrouter","fixture/model"]', effort: 'default' },
+      'accept-edits',
+      'synthetic prompt',
+      stateDirectory,
+      { ...DEFAULT_CONFIG, stateDirectory, hermesHome, zaiCredentialRef: 'DO_NOT_SHARE', resolveCredential },
+      'synthetic-session',
+    )
+    try {
+      expect(launch.argv[0]).toBe(process.execPath)
+      expect(launch.argv[2]).toBe('/synthetic/hermes')
+      expect(launch.argv.join(' ')).not.toMatch(/sandbox-exec|\(deny |\(allow /)
+      expect(launch.argv[launch.argv.indexOf('--in') + 1]).toBe(project)
+      expect(launch.argv).toContain('--resume')
+      expect(launch.argv).toContain('synthetic-session')
+      expect(launch.argv).toContain('stream-json')
+      expect(launch.env.HERMES_HOME).toBe(realpathSync(hermesHome))
+      expect(resolveCredential).not.toHaveBeenCalled()
+    } finally {
+      await launch.cleanup()
+    }
+  })
+
+  it('reads exact run totals from a torn log without attributing the aggregate to a single reply', () => {
+    const root = directory(),
+      raw = join(root, 'fixture.raw.jsonl'),
+      events: WorkerEvent[] = []
+    const parser = protocolFor(
+      'hermes',
+      (event) =>
+        events.push({ ...event, runId: 'run-a', seq: events.length + 1, time: '2026-10-06T02:00:00Z' }),
+      () => {},
+      8192,
+    )
+    const start = { type: 'system', subtype: 'init', session_id: 'synthetic-session', model: 'fixture/model' }
+    const response = { type: 'text', text: 'synthetic reply' }
+    const result = {
+      type: 'result',
+      session_id: 'synthetic-session',
+      exit_code: 0,
+      text: response.text,
+      tokens: { input: 100, output: 3, total: 193, cache_read: 80, cache_write: 10 },
+      duration_ms: 100,
+    }
+    const serialized = JSON.stringify(result)
+    writeFileSync(
+      raw,
+      JSON.stringify(start) + '\n' + JSON.stringify(response) + '\n' + serialized.slice(0, 12),
+    )
+    const reader = new TelemetryReader()
+    expect(reader.read(raw, 'hermes').usage).toBeUndefined()
+    appendFileSync(raw, serialized.slice(12) + '\n')
+    const telemetry = reader.read(raw, 'hermes')
+    expect(telemetry.usage).toEqual({ total: 193, input: 190, output: 3, cacheRead: 80, cacheWrite: 10, scope: 'run' })
+    expect(reader.read(raw, 'hermes').usage?.total).toBe(193)
+    expect(telemetry.contextUsed).toBeUndefined()
+    expect(telemetry.contextCapacity).toBeUndefined()
+    parser.feed([start, response, result].map((event) => JSON.stringify(event)).join('\n') + '\n')
+    parser.end()
+    events.push({
+      kind: 'assistant',
+      runId: 'run-b',
+      seq: 10,
+      time: '2026-10-06T02:01:00Z',
+      text: 'another run',
+    })
+    const rows = foldEvents(events)
+    attachTelemetry(rows, 'run-a', telemetry)
+    expect(telemetry.runUsage?.total).toBe(193)
+    expect(rows.find((row) => row.text === 'synthetic reply')?.usage).toBeUndefined()
+    expect(rows.find((row) => row.text === 'another run')?.usage).toBeUndefined()
+    expect(parser.result?.status).toBe('SUCCESS')
+  })
+})
+
+it('uses the explicit plugin login source for status, catalog, binding and task after global logout', async () => {
+  const globalHome = nativeHome(),
+    stateDirectory = directory(),
+    project = directory()
+  const config = { ...DEFAULT_CONFIG, hermesHome: globalHome, stateDirectory }
+  writeFileSync(join(globalHome, '.env'), 'OPENROUTER_API_KEY=synthetic-old-global\n')
+  const signal = new AbortController().signal,
+    backend = { resolveExecutable: vi.fn(), spawn: vi.fn() } as ProcessBackend
+  const old = await readCliAccountBinding('hermes', backend, config, project, signal)
+  const own = prepareHermesAccountHome(config)
+  writeFileSync(
+    join(own, 'config.yaml'),
+    'auth:\n  adopt_external_logins: false\nmodel:\n  provider: openrouter\n  default: fixture/model\n',
+  )
+  writeFileSync(join(own, '.env'), 'OPENROUTER_API_KEY=synthetic-plugin-own\n')
+  expect((await readHermesAccount(config, signal)).authMethod).toBe('api')
+  expect(await readCliAccountBinding('hermes', backend, config, project, signal)).not.toBe(old)
+  const capture = vi.fn(async (argv: string[], env?: Record<string, string>) => {
+    expect(env?.HERMES_HOME).toBe(own)
+    return JSON.stringify(argv.at(-2) === 'model.default' ? 'fixture/model' : 'openrouter')
+  })
+  await extendedCatalog('hermes', '/synthetic/hermes', capture, stateDirectory, config, signal)
+  expect(capture).toHaveBeenCalledTimes(2)
+  const launch = await extendedLaunch(
+    'hermes',
+    '/synthetic/hermes',
+    project,
+    { cli: 'hermes', model: '["openrouter","fixture/model"]', effort: 'default' },
+    'accept-edits',
+    'synthetic',
+    directory(),
+    config,
+  )
+  expect(launch.env.HERMES_HOME).toBe(own)
+  await launch.cleanup()
+  rmSync(join(own, '.env'))
+  expect((await readHermesAccount(config, signal)).state).toBe('unconfigured')
+  await expect(readCliAccountBinding('hermes', backend, config, project, signal)).rejects.toMatchObject({
+    code: 'CLI_OWN_ACCOUNT_REQUIRED',
+  })
+})

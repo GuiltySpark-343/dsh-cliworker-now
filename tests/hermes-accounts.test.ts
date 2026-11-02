@@ -1,0 +1,286 @@
+import { afterEach, describe, expect, it } from 'vitest'
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DEFAULT_CONFIG } from '../src/host/process.ts'
+import {
+  prepareHermesAccount,
+  projectHermesIdentity,
+  readHermesAccount,
+} from '../src/host/hermes-accounts.ts'
+import { effectiveHermesHome } from '../src/host/hermes-account-context.ts'
+import { verifyHermesExecutable } from '../src/host/hermes-installation.ts'
+
+const roots: string[] = []
+const accountExecutable = process.platform === 'win32' ? process.execPath : '/fixture/hermes'
+const signal = () => new AbortController().signal
+function fixture() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'cliworker-hermes-account-')))
+  roots.push(root)
+  mkdirSync(join(root, 'project'))
+  return {
+    root,
+    project: join(root, 'project'),
+    config: { ...DEFAULT_CONFIG, stateDirectory: join(root, 'state'), hermesHome: join(root, 'native') },
+  }
+}
+function save(home: string, name: string, value: unknown) {
+  mkdirSync(home, { recursive: true, mode: 0o700 })
+  writeFileSync(join(home, name), typeof value === 'string' ? value : JSON.stringify(value), { mode: 0o600 })
+}
+const jwt = (claims: unknown) => `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.synthetic`
+const oauth = (email = 'fixture@example.test') => ({
+  version: 1,
+  active_provider: 'openai-codex',
+  providers: {
+    'openai-codex': {
+      auth_mode: 'chatgpt',
+      tokens: {
+        access_token: 'synthetic-access',
+        refresh_token: 'synthetic-refresh',
+        id_token: jwt({ email }),
+      },
+    },
+  },
+})
+afterEach(() => roots.splice(0).forEach((path) => rmSync(path, { recursive: true, force: true })))
+
+describe('Hermes native accounts (explicit synthetic fixtures)', () => {
+  it('模拟 Nous 菜单登录使用原生 OAuth，退出用原生 logout 一并清除共享登录', async () => {
+    const { config, project } = fixture()
+    const login = await prepareHermesAccount('login', accountExecutable, project, config, signal(), undefined, { provider: 'nous' })
+    expect(login.argv.slice(-5)).toEqual(['auth', 'add', 'nous', '--type', 'oauth'])
+    expect(login.env.HERMES_HOME).toBe(effectiveHermesHome(config))
+    save(login.env.HERMES_HOME!, 'auth.json', { credential_pool: { nous: [{ id: 'a1b2c3', auth_type: 'api_key', access_token: 'synthetic-key' }] } })
+    // `auth remove` would leave <home>/shared/nous_auth.json, which Hermes re-adopts on its next start.
+    for (const id of ['hermes:nous:a1b2c3', 'hermes:nous:oauth']) {
+      const logout = await prepareHermesAccount('logout', accountExecutable, project, config, signal(), undefined, { login: id })
+      expect(logout.argv.slice(-3)).toEqual(['logout', '--provider', 'nous'])
+      await logout.cleanup()
+    }
+    await login.cleanup()
+  })
+  it.skipIf(process.platform === 'win32')(
+    'rejects a broken fixed exec shim without running any launcher',
+    async () => {
+      const { root } = fixture(),
+        shim = join(root, 'hermes')
+      writeFileSync(shim, `#!/bin/sh\nexec ${join(root, 'missing-install/bin/hermes')} "$@"\n`, {
+        mode: 0o700,
+      })
+      await expect(verifyHermesExecutable(shim, signal())).rejects.toThrow('启动入口不可用')
+      writeFileSync(shim, '#!/bin/sh\nexec /bin/sh "$@"\n', { mode: 0o700 })
+      await expect(verifyHermesExecutable(shim, signal())).resolves.toBeUndefined()
+    },
+  )
+  it('does not treat a file or configuration as a logged-in account', async () => {
+    const { config } = fixture()
+    expect((await readHermesAccount(config, signal())).state).toBe('unconfigured')
+    save(config.hermesHome, 'auth.json', { providers: {} })
+    expect((await readHermesAccount(config, signal())).state).toBe('unconfigured')
+    save(config.hermesHome, 'config.yaml', 'model:\n  default: fixture-model\n')
+    expect(await readHermesAccount(config, signal())).toMatchObject({
+      state: 'unconfigured',
+      verification: 'local',
+    })
+    save(config.hermesHome, '.env', '# OPENAI_API_KEY=\nOPENAI_API_KEY=your_api_key_here\n')
+    expect((await readHermesAccount(config, signal())).state).toBe('unconfigured')
+    save(config.hermesHome, '.env', 'OPENAI_API_KEY=synthetic-secret')
+    const result = await readHermesAccount(config, signal())
+    expect(result.state).toBe('authenticated')
+    expect(result.accountLabel).toBeUndefined()
+    expect(JSON.stringify(result)).not.toMatch(/synthetic|FIXTURE_API_KEY/)
+  })
+
+  it('projects only a known native OAuth email and local verification without leaking tokens', async () => {
+    const { config } = fixture()
+    save(config.hermesHome, 'auth.json', oauth())
+    const before = readFileSync(join(config.hermesHome, 'auth.json'), 'utf8')
+    const result = await readHermesAccount(config, signal())
+    expect(result).toMatchObject({
+      state: 'authenticated',
+      authMethod: 'oauth',
+      verification: 'local',
+      accountLabel: 'fixture@example.test',
+    })
+    expect(JSON.stringify(result)).not.toMatch(/synthetic|access_token|refresh_token|id_token/)
+    expect(readFileSync(join(config.hermesHome, 'auth.json'), 'utf8')).toBe(before)
+  })
+
+  it('does not invent an identity from unknown OAuth shapes, arbitrary labels or unsafe emails', () => {
+    expect(
+      projectHermesIdentity({ providers: { unknown: { tokens: oauth().providers['openai-codex'].tokens } } })
+        ?.state,
+    ).toBe('configured')
+    const bad = oauth('sk-secret@example.test')
+    expect(projectHermesIdentity(bad)?.state).toBe('authenticated')
+    expect(projectHermesIdentity(bad)?.accountLabel).toBeUndefined()
+    const missingRefresh = oauth()
+    missingRefresh.providers['openai-codex'].tokens.refresh_token = ''
+    expect(projectHermesIdentity(missingRefresh)?.state).toBe('authenticated')
+  })
+
+  it('projects native xAI and multiple known OAuth logins without choosing one identity', () => {
+    const codex = oauth()
+    const xai = { ...codex.providers['openai-codex'], auth_mode: 'oauth_device_code' }
+    expect(
+      projectHermesIdentity({ active_provider: 'xai-oauth', providers: { 'xai-oauth': xai } }),
+    ).toMatchObject({ state: 'authenticated', authMethod: 'oauth', accountLabel: 'fixture@example.test' })
+    expect(projectHermesIdentity({ providers: { ...codex.providers, 'xai-oauth': xai } })?.state).toBe(
+      'authenticated',
+    )
+    expect(projectHermesIdentity({ ...codex, active_provider: 'unknown' })?.state).toBe('configured')
+  })
+
+  it('reports known own API pool credentials as API login without exposing a key or making a remote claim', () => {
+    const result = projectHermesIdentity({
+      credential_pool: { fixture: [{ auth_type: 'api_key', access_token: 'synthetic-api' }] },
+    })
+    expect(result).toMatchObject({ state: 'authenticated', authMethod: 'api', verification: 'local' })
+    expect(JSON.stringify(result)).not.toContain('synthetic-api')
+  })
+
+  it('keeps refresh-only OAuth unverified and reports locally expired access', () => {
+    const refreshOnly = oauth()
+    refreshOnly.providers['openai-codex'].tokens.access_token = ''
+    expect(projectHermesIdentity(refreshOnly)?.state).toBe('configured')
+    const expired = oauth()
+    expired.providers['openai-codex'].tokens.access_token = jwt({ exp: 1 })
+    expect(projectHermesIdentity(expired)).toMatchObject({ state: 'unauthenticated', verification: 'local' })
+  })
+
+  it.each(['invalid-json', 'symlink', 'hardlink', 'oversized'])(
+    'fails closed for %s auth files',
+    async (kind) => {
+      const { config, root } = fixture()
+      mkdirSync(config.hermesHome)
+      const path = join(config.hermesHome, 'auth.json')
+      if (kind === 'symlink' || kind === 'hardlink') {
+        const outside = join(root, 'secret')
+        save(root, 'secret', oauth())
+        if (kind === 'symlink') symlinkSync(outside, path)
+        else linkSync(outside, path)
+      } else writeFileSync(path, kind === 'invalid-json' ? 'secret invalid {' : 'x'.repeat(65537))
+      const result = await readHermesAccount(config, signal())
+      expect(result.state).toBe('unavailable')
+      expect(JSON.stringify(result)).not.toMatch(/secret|fixture@/)
+    },
+  )
+
+  it('refuses a symlinked home and honors cancellation', async () => {
+    const { root, config } = fixture()
+    mkdirSync(join(root, 'other'))
+    symlinkSync(join(root, 'other'), config.hermesHome)
+    expect((await readHermesAccount(config, signal())).state).toBe('unavailable')
+    const abort = new AbortController()
+    abort.abort(new Error('cancelled'))
+    await expect(readHermesAccount(config, abort.signal)).rejects.toThrow('cancelled')
+  })
+
+  it('launches only native login and credential menus in disposable private working directories', async () => {
+    const { config, project } = fixture()
+    save(config.hermesHome, 'config.yaml', 'auth:\n  adopt_external_logins: false\n')
+    const login = await prepareHermesAccount('login', accountExecutable, project, config, signal())
+    const manage = await prepareHermesAccount('manage', accountExecutable, project, config, signal())
+    expect(login.argv.slice(-2)).toEqual([accountExecutable, 'model'])
+    expect(manage.argv.slice(-2)).toEqual([accountExecutable, 'auth'])
+    expect(login.argv).not.toContain('chat')
+    expect(login.argv.join(' ')).toContain('private-launch.mjs')
+    expect(login.argv[0]).toBe(process.execPath)
+    expect(login.argv[2]).toBe(accountExecutable)
+    expect(login.argv.join(' ')).not.toMatch(/sandbox-exec|\(deny |\(allow /)
+    expect(login.argv).not.toContain(project)
+    expect(login.cwd).not.toBe(manage.cwd)
+    expect(login.env).toMatchObject({
+      HERMES_HOME: join(config.stateDirectory, 'accounts/hermes'),
+      HERMES_SAFE_MODE: '1',
+      HERMES_YOLO_MODE: '0',
+    })
+    expect(login.env).not.toHaveProperty('HOME')
+    expect(Object.keys(login.env).some((key) => /API_KEY|TOKEN/.test(key))).toBe(false)
+    for (const path of [login.cwd, login.env.TMPDIR!, login.env.HERMES_HOME!])
+      if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o700)
+    save(login.env.HERMES_HOME!, 'auth.json', oauth())
+    await login.cleanup()
+    await login.cleanup()
+    await manage.cleanup()
+    expect(existsSync(login.cwd)).toBe(false)
+    expect(existsSync(manage.cwd)).toBe(false)
+    expect(JSON.parse(readFileSync(join(login.env.HERMES_HOME!, 'auth.json'), 'utf8'))).toEqual(oauth())
+  })
+
+  it('opens an empty own menu despite global external imports and never falls back after logout', async () => {
+    const { config, project } = fixture()
+    save(config.hermesHome, 'config.yaml', 'auth:\n  adopt_external_logins: true\n')
+    save(config.hermesHome, 'auth.json', {
+      credential_pool: {
+        copilot: [{ source: 'gh_cli', auth_type: 'api_key', access_token: 'synthetic-global' }],
+      },
+    })
+    const before = readFileSync(join(config.hermesHome, 'auth.json'), 'utf8')
+    expect(effectiveHermesHome(config)).toBe(config.hermesHome)
+    const login = await prepareHermesAccount('login', accountExecutable, project, config, signal())
+    try {
+      const own = login.env.HERMES_HOME!
+      expect(own).not.toBe(config.hermesHome)
+      expect(effectiveHermesHome(config)).toBe(own)
+      expect(existsSync(join(own, 'auth.json'))).toBe(false)
+      expect((await readHermesAccount(config, signal())).state).toBe('unconfigured')
+      save(own, 'auth.json', oauth())
+      expect((await readHermesAccount(config, signal())).authMethod).toBe('oauth')
+      rmSync(join(own, 'auth.json'))
+      expect((await readHermesAccount(config, signal())).state).toBe('unconfigured')
+      rmSync(own, { recursive: true })
+      expect(effectiveHermesHome(config)).toBe(own)
+      expect((await readHermesAccount(config, signal())).state).toBe('unconfigured')
+      expect(readFileSync(join(config.hermesHome, 'auth.json'), 'utf8')).toBe(before)
+    } finally {
+      await login.cleanup()
+    }
+  })
+
+  it('fails closed for tampered selection markers instead of falling back to global accounts', async () => {
+    const { config, project } = fixture()
+    const login = await prepareHermesAccount('login', accountExecutable, project, config, signal())
+    await login.cleanup()
+    const marker = join(config.stateDirectory, 'accounts/hermes-source.json')
+    if (process.platform !== 'win32') expect(statSync(marker).mode & 0o777).toBe(0o600)
+    writeFileSync(marker, '{"source":"global"}')
+    expect((await readHermesAccount(config, signal())).state).toBe('unavailable')
+    await expect(
+      prepareHermesAccount('manage', accountExecutable, project, config, signal()),
+    ).rejects.toThrow('来源记录')
+  })
+
+  it('rejects empty logout sources and cancellation before creating state', async () => {
+    const { config, project } = fixture()
+    await expect(
+      prepareHermesAccount('logout', accountExecutable, project, config, signal()),
+    ).rejects.toThrow('账号来源已变化')
+    const abort = new AbortController()
+    abort.abort(new Error('cancelled'))
+    await expect(
+      prepareHermesAccount('login', accountExecutable, project, config, abort.signal),
+    ).rejects.toThrow('cancelled')
+    expect(existsSync(config.hermesHome)).toBe(false)
+    expect(existsSync(config.stateDirectory)).toBe(false)
+  })
+
+  it('rejects user home and root as writable native account storage', async () => {
+    const { config, project } = fixture()
+    await expect(
+      prepareHermesAccount('login', accountExecutable, project, { ...config, hermesHome: '/' }, signal()),
+    ).rejects.toThrow('Unsafe Hermes home')
+  })
+})

@@ -1,0 +1,470 @@
+import { constants } from 'node:fs'
+import { lstat, mkdir, open, rename, rm, writeFile } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
+import { dirname, join, resolve, relative, isAbsolute } from 'node:path'
+import { safePiOmpAncestors } from './pi-omp-native.ts'
+import type { AccountIdentity } from './account-identity.ts'
+import { authenticatedAccountLogins, providerLogin, usableNativeApiKey } from './account-login.ts'
+import type { AccountLogin } from '../shared/accounts.ts'
+import { accountLoginId } from '../shared/account-links.ts'
+
+const object = (value: unknown): value is Record<string, any> =>
+  !!value && typeof value === 'object' && !Array.isArray(value)
+const text = (value: unknown): value is string => typeof value === 'string' && !!value.trim()
+export const OPENCODE_OAUTH_UNSUPPORTED = 'OpenCode OAuth 暂无法安全续期，请使用该 CLI 自身 API 配置'
+export interface OpenCodeNativeOptions {
+  nativeHome?: string
+  modelsPath?: string
+  signal?: AbortSignal
+}
+export interface OpenCodeNativeProfile {
+  sourceIds: string[]
+  auth: Record<string, any>
+  providers: Record<string, any>
+  catalog: Record<string, any>
+  modelsPath: string
+  enabled?: string[]
+  disabled: string[]
+  /** Only an unambiguous auth.json credential can be removed by native auth logout. */
+  removableAuth: Record<string, string>
+}
+
+/** OpenCode 1.19 uses XDG paths on Windows too, not LOCALAPPDATA. */
+export function openCodeNativePaths(options: OpenCodeNativeOptions = {}) {
+  const home = options.nativeHome ?? homedir()
+  return {
+    data: (!options.nativeHome && process.env.XDG_DATA_HOME) || join(home, '.local/share'),
+    config: (!options.nativeHome && process.env.XDG_CONFIG_HOME) || join(home, '.config'),
+    models: options.modelsPath || (!options.nativeHome && process.env.OPENCODE_MODELS_PATH) ||
+      join((!options.nativeHome && process.env.XDG_CACHE_HOME) || join(home, '.cache'), 'opencode/models.json'),
+  }
+}
+/** JSONC comments/trailing commas, without changing quoted model IDs or URLs. */
+function jsonc(raw: string): unknown {
+  let result = '',
+    quoted = false,
+    escaped = false
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]!
+    if (quoted) {
+      result += ch
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') quoted = false
+      continue
+    }
+    if (ch === '"') {
+      quoted = true
+      result += ch
+      continue
+    }
+    if (ch === '/' && raw[i + 1] === '/') {
+      while (i + 1 < raw.length && raw[i + 1] !== '\n') i++
+      continue
+    }
+    if (ch === '/' && raw[i + 1] === '*') {
+      const end = raw.indexOf('*/', i + 2)
+      if (end < 0) throw new Error('Invalid native JSONC')
+      i = end + 1
+      result += ' '
+      continue
+    }
+    if (ch === ',') {
+      let next = i + 1
+      while (next < raw.length) {
+        if (/\s/.test(raw[next]!)) {
+          next++
+          continue
+        }
+        if (raw.slice(next, next + 2) === '//') {
+          const line = raw.indexOf('\n', next + 2)
+          next = line < 0 ? raw.length : line + 1
+          continue
+        }
+        if (raw.slice(next, next + 2) === '/*') {
+          const end = raw.indexOf('*/', next + 2)
+          if (end < 0) throw new Error('Invalid native JSONC')
+          next = end + 2
+          continue
+        }
+        break
+      }
+      if (raw[next] === '}' || raw[next] === ']') continue
+    }
+    result += ch
+  }
+  return JSON.parse(result)
+}
+export { jsonc as parseNativeJsonc }
+interface ReferenceScope {
+  roots: string[]
+  env: Record<string, string>
+}
+async function ownEnvironment(roots: string[], options: OpenCodeNativeOptions, sourceIds: Set<string>) {
+  const result: Record<string, string> = {}
+  for (const root of roots) {
+    let handle
+    try {
+      options.signal?.throwIfAborted()
+      await safePiOmpAncestors(root)
+      handle = await open(
+        join(root, '.env'),
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      )
+      const info = await handle.stat()
+      if (!info.isFile() || info.nlink !== 1 || info.size > 65536) throw new Error()
+      const bytes = Buffer.alloc(65537)
+      try {
+        const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0)
+        if (bytesRead > 65536) throw new Error()
+        for (const line of bytes.subarray(0, bytesRead).toString('utf8').split(/\r?\n/)) {
+          if (!line.trim() || line.trimStart().startsWith('#')) continue
+          const match = /^(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=\s*(.*)$/.exec(line.trim())
+          if (!match) throw new Error()
+          let value = match[2]!
+          if (
+            (value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'"))
+          )
+            value = value.slice(1, -1)
+          if (/`|\$\(|\x00/.test(value)) throw new Error()
+          result[match[1]!] = value
+          sourceIds.add(resolve(root))
+        }
+      } finally {
+        bytes.fill(0)
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+        throw new Error('OpenCode 自身环境配置无法安全读取')
+    } finally {
+      await handle?.close()
+    }
+  }
+  return result
+}
+async function resolveReferences(
+  value: unknown,
+  options: OpenCodeNativeOptions,
+  scope: ReferenceScope,
+  depth = 0,
+): Promise<any> {
+  if (depth > 48) throw new Error('OpenCode 原生配置过深')
+  if (Array.isArray(value))
+    return Promise.all(value.map((entry) => resolveReferences(entry, options, scope, depth + 1)))
+  if (object(value))
+    return Object.fromEntries(
+      await Promise.all(
+        Object.entries(value).map(async ([key, entry]) => [
+          key,
+          await resolveReferences(entry, options, scope, depth + 1),
+        ]),
+      ),
+    )
+  if (typeof value !== 'string') return value
+  let result = value.replace(/\{env:([^}]+)\}/g, (_, name) => scope.env[name] ?? '')
+  for (const match of [...result.matchAll(/\{file:([^}]+)\}/g)]) {
+    const path = match[1]!.startsWith('~/')
+      ? join(options.nativeHome ?? homedir(), match[1]!.slice(2))
+      : match[1]!
+    if (
+      !isAbsolute(path) ||
+      !scope.roots.some((root) => {
+        const rel = relative(resolve(root), resolve(path))
+        return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+      })
+    )
+      throw new Error('OpenCode 只允许引用自身账号目录中的凭据文件')
+    await safePiOmpAncestors(dirname(path))
+    let file: Awaited<ReturnType<typeof open>> | undefined
+    const bytes = Buffer.alloc(65537)
+    try {
+      options.signal?.throwIfAborted()
+      const parent = await lstat(dirname(path))
+      if (!parent.isDirectory() || parent.isSymbolicLink()) throw new Error('Unsafe credential reference')
+      file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+      const info = await file.stat()
+      if (!info.isFile() || info.nlink !== 1 || info.size > 65536)
+        throw new Error('Unsafe credential reference')
+      const { bytesRead } = await file.read(bytes, 0, bytes.length, 0)
+      if (bytesRead > 65536) throw new Error('Oversized credential reference')
+      result = result.replace(match[0], bytes.subarray(0, bytesRead).toString('utf8').trim())
+    } catch {
+      throw new Error('OpenCode 原生凭据引用无法安全读取')
+    } finally {
+      bytes.fill(0)
+      await file?.close()
+    }
+  }
+  return result
+}
+function merge(base: Record<string, any>, next: Record<string, any>): Record<string, any> {
+  return Object.fromEntries(
+    [...new Set([...Object.keys(base), ...Object.keys(next)])].map((key) => [
+      key,
+      object(base[key]) && object(next[key])
+        ? merge(base[key], next[key])
+        : next[key] === undefined
+          ? base[key]
+          : next[key],
+    ]),
+  )
+}
+async function readDocument(
+  path: string,
+  optional: boolean,
+  options: OpenCodeNativeOptions,
+  comments = false,
+  limit = 4 * 1024 * 1024,
+): Promise<Record<string, any> | undefined> {
+  let file: Awaited<ReturnType<typeof open>> | undefined
+  const bytes = Buffer.alloc(limit + 1)
+  try {
+    options.signal?.throwIfAborted()
+    const parent = await lstat(dirname(path))
+    if (!parent.isDirectory() || parent.isSymbolicLink()) throw new Error('Unsafe native account directory')
+    // Windows has no O_NOFOLLOW: inspect the path as well as the opened handle.
+    const inspected = await lstat(path)
+    if (!inspected.isFile() || inspected.isSymbolicLink() || inspected.nlink !== 1)
+      throw new Error('Unsafe native account file')
+    file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+    const before = await file.stat()
+    const openedPath = await lstat(path)
+    if (
+      !openedPath.isFile() || openedPath.isSymbolicLink() || openedPath.nlink !== 1 ||
+      openedPath.dev !== before.dev || openedPath.ino !== before.ino ||
+      inspected.dev !== before.dev || inspected.ino !== before.ino
+    )
+      throw new Error('Native account path changed during open')
+    if (!before.isFile() || before.nlink !== 1 || before.size >= bytes.length)
+      throw new Error('Unsafe native account file')
+    let length = 0
+    while (length < bytes.length) {
+      options.signal?.throwIfAborted()
+      const part = await file.read(bytes, length, bytes.length - length, null)
+      if (!part.bytesRead) break
+      length += part.bytesRead
+    }
+    const after = await file.stat()
+    const afterPath = await lstat(path)
+    if (
+      !afterPath.isFile() || afterPath.isSymbolicLink() || afterPath.nlink !== 1 || after.nlink !== 1 ||
+      afterPath.dev !== before.dev || afterPath.ino !== before.ino
+    )
+      throw new Error('Native account path changed during read')
+    if (length >= bytes.length || before.size !== after.size || before.mtimeMs !== after.mtimeMs)
+      throw new Error('Native account changed during read')
+    const value: unknown = comments
+      ? jsonc(bytes.subarray(0, length).toString('utf8'))
+      : JSON.parse(bytes.subarray(0, length).toString('utf8'))
+    if (!object(value)) throw new Error('Invalid native account data')
+    return value
+  } catch (error) {
+    options.signal?.throwIfAborted()
+    if (optional && (error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw new Error('OpenCode 原生账号或模型配置无法安全读取，请检查配置')
+  } finally {
+    bytes.fill(0)
+    await file?.close()
+  }
+}
+export const activeOpenCodeCredential = (value: unknown): value is Record<string, any> =>
+  object(value) &&
+  (value.type === 'api'
+    ? text(value.key)
+    : value.type === 'oauth' &&
+      text(value.access) &&
+      typeof value.expires === 'number' &&
+      value.expires > Date.now() + 30000)
+/** A native account terminal may load remote well-known config before provider filters. */
+export async function assertOpenCodeManagedAuth(authDirectory: string, signal?: AbortSignal): Promise<void> {
+  await safePiOmpAncestors(join(authDirectory, 'opencode'))
+  const auth = (await readDocument(join(authDirectory, 'opencode/auth.json'), true, { signal })) ?? {}
+  if (Object.values(auth).some((entry) => !object(entry) || !['api', 'oauth'].includes(entry.type)))
+    throw new Error('OpenCode 原生账号包含不支持的远程认证配置')
+}
+/** The same native+plugin sources supply metadata queries and worker execution. */
+export async function readOpenCodeProfile(
+  authDirectory: string,
+  options: OpenCodeNativeOptions = {},
+): Promise<OpenCodeNativeProfile> {
+  const { data, config, models: cache } = openCodeNativePaths(options)
+  const ownRoots = [
+    join(config, 'opencode'),
+    join(data, 'opencode'),
+    join(dirname(authDirectory), 'config', 'opencode'),
+    join(authDirectory, 'opencode'),
+  ]
+  const sourceIds = new Set<string>()
+  const ownEnv = await ownEnvironment(ownRoots, options, sourceIds)
+  const globalAuth = (await readDocument(join(data, 'opencode/auth.json'), true, options)) ?? {}
+  const localAuth = (await readDocument(join(authDirectory, 'opencode/auth.json'), true, options)) ?? {}
+  if (Object.keys(globalAuth).length) sourceIds.add(resolve(data, 'opencode'))
+  if (Object.keys(localAuth).length) sourceIds.add(resolve(authDirectory, 'opencode'))
+  let settings: Record<string, any> = {}
+  const paths = [
+    ...['config.json', 'opencode.json', 'opencode.jsonc'].map((name) => join(config, 'opencode', name)),
+    ...['opencode.json', 'opencode.jsonc'].map((name) =>
+      join(dirname(authDirectory), 'config', 'opencode', name),
+    ),
+  ]
+  for (const path of new Set(paths)) {
+    const document = (await readDocument(path, true, options, true)) ?? {}
+    settings = merge(settings, document)
+    if (Object.keys(document.provider ?? {}).length) sourceIds.add(resolve(dirname(path)))
+  }
+  const providers = await resolveReferences(settings.provider ?? {}, options, {
+    roots: ownRoots,
+    env: ownEnv,
+  })
+  if (!object(providers)) throw new Error('OpenCode 原生提供商配置无效')
+  const auth = { ...globalAuth, ...localAuth }
+  const removableAuth: Record<string, string> = Object.create(null)
+  for (const id of Object.keys(auth)) {
+    const sources = new Set([
+      ...(Object.hasOwn(globalAuth, id) ? [resolve(data)] : []),
+      ...(Object.hasOwn(localAuth, id) ? [resolve(authDirectory)] : []),
+    ])
+    // Removing only one of two sources would expose the other login again.
+    if (sources.size === 1) removableAuth[id] = [...sources][0]!
+  }
+  for (const [id, provider] of Object.entries(providers)) {
+    if (!object(provider)) throw new Error('OpenCode 原生提供商配置无效')
+    const key = provider.options?.apiKey
+    if (typeof key === 'string' && key.trim()) {
+      if (key.trimStart().startsWith('!')) throw new Error('OpenCode 不执行凭据命令')
+      // Keep the explicit API source identical in metadata and the private runtime auth store.
+      auth[id] = { type: 'api', key }
+      // Native auth logout cannot remove an apiKey supplied by opencode.json.
+      delete removableAuth[id]
+    }
+  }
+  const disabled = settings.disabled_providers ?? [],
+    enabled = settings.enabled_providers
+  if (
+    !Array.isArray(disabled) ||
+    !disabled.every(text) ||
+    (enabled !== undefined && (!Array.isArray(enabled) || !enabled.every(text)))
+  )
+    throw new Error('OpenCode 原生提供商开关配置无效')
+  return {
+    sourceIds: [...sourceIds].sort(),
+    auth,
+    providers,
+    disabled,
+    enabled,
+    removableAuth,
+    modelsPath: cache,
+    // The installed public multi-provider cache is 4.4 MB; scoped CLI output
+    // remains capped at 4 MB. This larger cap does not apply to credential files.
+    catalog: (await readDocument(cache, true, options, false, 8 * 1024 * 1024)) ?? {},
+  }
+}
+/** Rebuild a private copy from current own sources; never restore an old worker account. */
+export async function snapshotOpenCodeAuth(
+  authDirectory: string,
+  auth: Record<string, any>,
+  providers: string[],
+  signal?: AbortSignal,
+): Promise<string> {
+  // Native Auth.set has no cross-process CAS. Copying OAuth loses rotated tokens;
+  // writing directly can resurrect a concurrent logout. Neither mode is safe.
+  if (providers.some((id) => auth[id]?.type === 'oauth')) throw new Error(OPENCODE_OAUTH_UNSUPPORTED)
+  const chosen = Object.fromEntries(
+    providers
+      .filter((id) => auth[id]?.type === 'api' && activeOpenCodeCredential(auth[id]))
+      .map((id) => [id, auth[id]]),
+  )
+  const digest = createHash('sha256').update(JSON.stringify(chosen)).digest('hex')
+  const root = join(authDirectory, 'cliworker-snapshots', 'own-v2-' + digest)
+  for (const path of [
+    authDirectory,
+    join(authDirectory, 'cliworker-snapshots'),
+    root,
+    join(root, 'opencode'),
+  ]) {
+    signal?.throwIfAborted()
+    await safePiOmpAncestors(path)
+    await mkdir(path, { recursive: true, mode: 0o700 })
+    const info = await lstat(path)
+    if (!info.isDirectory() || info.isSymbolicLink() || (process.platform !== 'win32' && (info.mode & 0o077)))
+      throw new Error('OpenCode 私有账号快照目录不安全')
+  }
+  const path = join(root, 'opencode/auth.json')
+  try {
+    const info = await lstat(path)
+    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || (process.platform !== 'win32' && (info.mode & 0o077)))
+      throw new Error('OpenCode 私有账号快照文件不安全')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  const temporary = join(root, 'opencode', `.auth-${randomUUID()}.tmp`)
+  try {
+    signal?.throwIfAborted()
+    await writeFile(temporary, JSON.stringify(chosen), { mode: 0o600, flag: 'wx' })
+    signal?.throwIfAborted()
+    await rename(temporary, path)
+  } finally {
+    await rm(temporary, { force: true })
+  }
+  signal?.throwIfAborted()
+  return root
+}
+export async function inspectOpenCodeProfile(
+  authDirectory: string,
+  options: OpenCodeNativeOptions = {},
+): Promise<AccountIdentity> {
+  try {
+    const profile = await readOpenCodeProfile(authDirectory, options)
+    const logins: AccountLogin[] = []
+    let expired = false
+    for (const [id, auth] of Object.entries(profile.auth)) {
+      if (!object(auth)) continue
+      const api = auth.type === 'api' && usableNativeApiKey(auth.key)
+      const oauthShape =
+        auth.type === 'oauth' &&
+        usableNativeApiKey(auth.access) &&
+        typeof auth.expires === 'number' &&
+        Number.isFinite(auth.expires) &&
+        (auth.refresh === undefined || typeof auth.refresh === 'string')
+      const oauth = oauthShape && (auth.expires > Date.now() || usableNativeApiKey(auth.refresh))
+      if (oauthShape && !oauth) expired = true
+      if (api || oauth) {
+        const config = profile.providers[id]
+        // Keep the stable provider identity for login refresh/proof even when logout
+        // must reject an ambiguous source. Removing the handle would hide a new login.
+        const handle = accountLoginId('opencode', id)
+        logins.push({
+          ...providerLogin(id, api ? 'api' : 'oauth', {
+            baseUrl: config?.options?.baseURL,
+            name: config?.name,
+          }),
+          ...(handle ? { id: handle } : {}),
+        })
+      }
+    }
+    if (logins.length) return authenticatedAccountLogins(logins)
+    if (expired)
+      return {
+        state: 'unauthenticated',
+        verification: 'local',
+        summary: '登录已过期，请重新登录',
+      }
+    if (
+      Object.values(profile.auth).some((auth) => object(auth) && auth.type === 'api') ||
+      (!Object.keys(profile.auth).length && Object.keys(profile.providers).length)
+    )
+      return { state: 'configured', verification: 'local', summary: '尚未配置有效凭据' }
+    return Object.keys(profile.auth).length
+      ? { state: 'unknown', verification: 'local', summary: '账号配置格式未知' }
+      : { state: 'unconfigured', verification: 'local', summary: '尚未配置 OpenCode 账号' }
+  } catch {
+    options.signal?.throwIfAborted()
+    return {
+      state: 'unavailable',
+      verification: 'local',
+      summary: '账号配置读取失败，请检查配置',
+    }
+  }
+}
