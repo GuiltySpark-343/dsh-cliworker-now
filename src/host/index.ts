@@ -6,6 +6,7 @@ import { visibleModelChoices } from '../shared/model-presentation.ts'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { z as validate } from 'zod'
+import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
@@ -2159,6 +2160,48 @@ export class CliWorkerService extends TypertRemoteService {
         current: this.settingsCatalogs.displayBinding(project, id) === saved.binding,
         preference,
       })
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /**
+   * Local patch: bounded raw run log for one Worker run. The full stream stays on
+   * disk; the panel only ever receives a tail.
+   */
+  @Remote('workerRawLog')
+  async workerRawLog(
+    parentSessionId: string,
+    workerId: string,
+    runId: string,
+    tailBytes: number,
+    signal: AbortSignal,
+  ): Promise<{ runId: string; size: number; truncated: boolean; text: string } | { missing: true }> {
+    try {
+      await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      const worker = this.runtime.storage.workers.get(workerId)
+      if (!worker || worker.parentSessionId !== parentSessionId) throw new Error('此对话没有该智能体')
+      if (!/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(runId)) throw new Error('无效的运行标识')
+      const path = this.runtime.storage.logPath(worker, runId, true)
+      if (!existsSync(path)) return { missing: true }
+      const size = statSync(path).size
+      const limit = Math.min(Math.max(Number.isFinite(tailBytes) ? Math.floor(tailBytes) : 262144, 1024), 1_048_576)
+      const start = Math.max(0, size - limit)
+      const length = size - start
+      const buffer = Buffer.alloc(length)
+      const handle = openSync(path, 'r')
+      try {
+        let offset = 0
+        while (offset < length) {
+          const read = readSync(handle, buffer, offset, length - offset, start + offset)
+          if (!read) break
+          offset += read
+        }
+        signal.throwIfAborted()
+        return { runId, size, truncated: start > 0, text: buffer.subarray(0, offset).toString('utf8') }
+      } finally {
+        closeSync(handle)
+      }
     } catch (error) {
       throw failure(error)
     }

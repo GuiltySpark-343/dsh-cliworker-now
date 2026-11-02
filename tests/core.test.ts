@@ -183,7 +183,7 @@ describe('private durable storage', () => {
     first.save(worker)
     first.append(worker, { kind: 'user', text: 'one' })
     first.close()
-    const path = join(directory, `${worker.id}.events.jsonl`)
+    const path = first.eventPath(worker)
     appendFileSync(path, '{"broken":')
     const restored = new WorkerStorage(directory)
     cleanups.push(() => restored.close())

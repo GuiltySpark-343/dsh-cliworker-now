@@ -198,20 +198,21 @@ describe('short default names and exact legacy references', () => {
     for (const worker of [unnamed, old, custom, roleName, occupied]) f.storage.save(worker)
     f.storage.append(old, { kind: 'assistant', text: 'Synthetic retained history' })
     f.storage.bindAccount(old.id, 'synthetic-original-account')
-    const events = readFileSync(join(f.directory, `${old.id}.events.jsonl`), 'utf8')
+    const events = readFileSync(f.storage.eventPath(old), 'utf8')
     f.storage.close()
     const reopened = new WorkerStorage(f.directory)
     cleanups.push(() => reopened.close())
     const migratedOld = reopened.workers.get(old.id)!,
       migratedUnnamed = reopened.workers.get(unnamed.id)!
-    expect([migratedOld.agentName, migratedUnnamed.agentName].sort()).toEqual(['agy-3', 'agy-4'])
+    // Local patch: a deleted Worker releases its names; only live records reserve them.
+    expect([migratedOld.agentName, migratedUnnamed.agentName].sort()).toEqual(['agy-1', 'agy-2'])
     expect(migratedOld.nameAliases).toContain('Antigravity助手-1')
     expect(migratedUnnamed.nameAliases).toContain(workerName(unnamed))
     expect(reopened.workers.get(custom.id)).toEqual(custom)
     expect(reopened.workers.get(roleName.id)).toEqual(roleName)
     expect(reopened.workers.get(occupied.id)).toEqual(occupied)
     expect(reopened.accountBinding(old.id)).toBe('synthetic-original-account')
-    expect(readFileSync(join(f.directory, `${old.id}.events.jsonl`), 'utf8')).toBe(events)
+    expect(readFileSync(reopened.eventPath(old), 'utf8')).toBe(events)
     const runtime = new WorkerRuntime(reopened, f.backend, DEFAULT_CONFIG)
     expect(runtime.resolveWorker('parent', undefined, 'Antigravity助手-1').id).toBe(old.id)
     expect(runtime.resolveWorker('parent', old.id, 'Antigravity助手-1').id).toBe(old.id)
@@ -281,7 +282,7 @@ describe('private account admission and reversible management', () => {
     expect(f.runtime.get('parent', worker.id).title).toBe('Updated title')
   })
 
-  it('deletes and restores the same persisted Worker without deleting its history, binding or name reservation', () => {
+  it('deletes and restores the same persisted Worker without deleting its history or binding, releasing its name', () => {
     const f = fixture(),
       worker = storedWorker(f.project, { agentName: 'agy-1', nameAliases: ['Antigravity助手-1'] })
     f.storage.save(worker)
@@ -307,8 +308,9 @@ describe('private account admission and reversible management', () => {
     ).toThrow('已删除')
     const other = storedWorker(f.project, { agentName: 'custom-name' })
     f.storage.save(other)
-    expect(() => f.runtime.renameWorker('parent', other.id, 'agy-1')).toThrow('同名')
-    expect(() => f.runtime.renameWorker('parent', other.id, 'Antigravity助手-1')).toThrow('同名')
+    // The deleted Worker no longer reserves anything, so another Worker may take the name.
+    f.runtime.renameWorker('parent', other.id, 'agy-1')
+    expect(f.runtime.get('parent', other.id).agentName).toBe('agy-1')
     expect(f.storage.history(worker.id)).toHaveLength(1)
     expect(f.storage.accountBinding(worker.id)).toBe('synthetic-account-a')
     f.storage.close()

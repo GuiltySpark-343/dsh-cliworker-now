@@ -138,6 +138,16 @@ export function WorkerCard({
                 ·
               </span>
               <span>{effortLabel(worker.preference.effort)}</span>
+              {worker.runCount ? (
+                <>
+                  <span className="cwn-meta-divider" aria-hidden="true">
+                    ·
+                  </span>
+                  <span className="cwn-worker-runs" title={t('已执行 {count} 次', { count: worker.runCount })}>
+                    {t('第 {count} 次', { count: worker.runCount })}
+                  </span>
+                </>
+              ) : null}
             </div>
             <span className="cwn-worker-chevron" aria-hidden="true">
               <Glyph name="chevron" />

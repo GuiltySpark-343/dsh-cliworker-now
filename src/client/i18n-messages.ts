@@ -5,6 +5,11 @@
  * interpolation and must match between the two languages.
  */
 export const en = {
+  // Local fork: session roster
+  '可用智能体': 'Available agents',
+  '查看原始日志': 'View raw log',
+  '第 {count} 次': 'Run {count}',
+  '已执行 {count} 次': 'Ran {count} times',
   // Codex relay catalog
   'Codex 自定义路由模型；来自 Codex 自带列表，中转是否支持以实际调用为准':
     'Codex custom route models; from Codex\'s built-in list, the relay\'s support is confirmed by actual calls',

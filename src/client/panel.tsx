@@ -33,6 +33,8 @@ import { BrandIcon, Glyph } from './icons.tsx'
 import { WorkerModelMenu } from './worker-model-menu.tsx'
 import { SettingsDialog } from './settings-dialog.tsx'
 import { RenameWorker } from './rename-worker.tsx'
+import { RawLogDialog } from './raw-log.tsx'
+import { RosterList } from './roster.tsx'
 import { WorkerCard, type WorkerManagementAction } from './worker-card.tsx'
 import { RUNNING_MESSAGE_LABELS } from '../shared/running-message.ts'
 import { useMessageSubmissions } from './message-submissions.ts'
@@ -156,6 +158,7 @@ function SessionPanel({
   const [settingsCli, setSettingsCli] = useState<CliId>()
   const [settings, setSettings] = useState(false)
   const [renaming, setRenaming] = useState<{ worker: Worker; mode: 'name' | 'title' }>()
+  const [rawLog, setRawLog] = useState<Worker>()
   const [restartFor, setRestartFor] = useState('')
   const nativeSettingsRequested = useRef(false)
   useEffect(() => {
@@ -525,6 +528,14 @@ function SessionPanel({
                         label={t('复制最新结果')}
                       />
                     )}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setRawLog(worker)}
+                    >
+                      {t('查看原始日志')}
+                    </Button>
                   </>
                 )}
                 <Button
@@ -590,6 +601,15 @@ function SessionPanel({
           </Button>
         </div>
       )}
+      {rawLog && (
+        <RawLogDialog
+          key={`raw:${rawLog.id}:${rawLog.runId}`}
+          api={api}
+          sessionId={sessionId}
+          worker={rawLog}
+          onClose={() => setRawLog(undefined)}
+        />
+      )}
       {renaming && (
         <RenameWorker
           key={`${renaming.worker.id}:${renaming.mode}`}
@@ -635,6 +655,7 @@ function SessionPanel({
                     ['active', t('进行中')],
                     ['completed', t('已完成')],
                     ['attention', t('异常')],
+                    ['roster', t('可用智能体')],
                   ] as const
                 ).map(([id, label]) => (
                   <Button
@@ -708,6 +729,14 @@ function SessionPanel({
                   </article>
                 ))}
               </div>
+            ) : filter === 'roster' ? (
+              <RosterList
+                api={api}
+                sessionId={sessionId}
+                workers={snapshot.workers}
+                archived={archivedWorkers}
+                query={query}
+              />
             ) : (
               <nav aria-label={t('子 Agent')}>
                 {([...CLI_IDS, 'harness'] as const).map((cli) => {

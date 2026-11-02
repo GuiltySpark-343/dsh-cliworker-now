@@ -27,6 +27,7 @@ import { installHarnessNativeAttachments } from './harness-native-attachments.ts
 import { useWorkers, type API } from './workers.ts'
 import {
   styles,
+  rosterStyles,
   nativeChatStyles,
   modelPickerStyles,
   telemetryStyles,
@@ -215,7 +216,7 @@ export function apply(ctx: Context): void {
         renameCopyStyles +
         processStyles +
         contextInspectionStyles +
-        reasoningRecordsStyles + workerGoalStyles
+        reasoningRecordsStyles + workerGoalStyles + rosterStyles
       document.head.append(style)
       return () => style.remove()
     })
