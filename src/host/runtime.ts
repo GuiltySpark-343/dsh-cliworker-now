@@ -2453,6 +2453,11 @@ export class WorkerRuntime {
           worker.observedModel = event.observedModel
           this.storage.save(worker)
         }
+        // Local patch: remember that this run's displayed timeline was truncated.
+        if (event.truncated === true && !worker.displayTruncated) {
+          worker.displayTruncated = true
+          this.storage.save(worker)
+        }
         this.storage.append(worker, projectPublicToolCall(cliOf(worker.preference), event))
         this.changed()
       },
@@ -2563,8 +2568,9 @@ export class WorkerRuntime {
         ...(harnessLease?.connection ? { harnessTools: harnessLease.connection } : {}),
       }
       worker.status = 'running'
-      // Local patch: count only turns that actually reach the CLI.
+      // Local patch: count only turns that actually reach the CLI; a new run starts untruncated.
       worker.runCount = (worker.runCount ?? 0) + 1
+      delete worker.displayTruncated
       this.storage.save(worker)
       this.changed()
       const selectedClaudeRoute =

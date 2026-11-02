@@ -1739,6 +1739,7 @@ export class CliWorkerService extends TypertRemoteService {
                 effort: worker.preference.effort,
                 status: worker.archivedAt ? 'archived' : worker.status,
                 runs: worker.runCount ?? 0,
+                ...(worker.displayTruncated ? { displayTruncated: true } : {}),
                 ...(worker.error ? { error: worker.error } : {}),
                 ...(worker.lastResult ? { lastResult: worker.lastResult.slice(0, 400) } : {}),
                 ...(isolationGuidance(worker) ? { guidance: isolationGuidance(worker) } : {}),

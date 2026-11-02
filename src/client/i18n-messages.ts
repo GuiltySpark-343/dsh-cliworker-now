@@ -9,6 +9,8 @@ export const en = {
   '可用智能体': 'Available agents',
   '查看原始日志': 'View raw log',
   '第 {count} 次': 'Run {count}',
+  '过程已截断': 'Process truncated',
+  '本轮过程已截断，完整内容见原始日志': 'This run\'s process view was truncated; the raw log has the full text',
   '已执行 {count} 次': 'Ran {count} times',
   // Codex relay catalog
   'Codex 自定义路由模型；来自 Codex 自带列表，中转是否支持以实际调用为准':

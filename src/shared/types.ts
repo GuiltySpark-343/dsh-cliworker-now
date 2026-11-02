@@ -160,6 +160,8 @@ export interface Worker {
   templateId?: string
   /** Local patch: number of started turns; missing on records written by older versions. */
   runCount?: number
+  /** Local patch: the displayed timeline was truncated this run; cleared when the next run starts. */
+  displayTruncated?: boolean
   /** Reversible deletion keeps the original Worker, native session and account binding. */
   archivedAt?: string
   role?: RoleSnapshot

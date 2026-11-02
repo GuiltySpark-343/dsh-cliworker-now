@@ -166,6 +166,7 @@ const workerSchema = z.object({
   nameAliases: z.array(agentNameSchema).max(32).optional(),
   templateId: z.string().min(1).max(100).optional(),
   runCount: z.number().int().nonnegative().optional(),
+  displayTruncated: z.boolean().optional(),
   archivedAt: z.string().datetime().optional(),
   role: roleSnapshotSchema.optional(),
   preference: storedPreferenceSchema,

@@ -138,6 +138,16 @@ export function WorkerCard({
                 ·
               </span>
               <span>{effortLabel(worker.preference.effort)}</span>
+              {worker.displayTruncated ? (
+                <>
+                  <span className="cwn-meta-divider" aria-hidden="true">
+                    ·
+                  </span>
+                  <span className="cwn-worker-truncated" title={t('本轮过程已截断，完整内容见原始日志')}>
+                    {t('过程已截断')}
+                  </span>
+                </>
+              ) : null}
               {worker.runCount ? (
                 <>
                   <span className="cwn-meta-divider" aria-hidden="true">
