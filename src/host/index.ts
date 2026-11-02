@@ -111,6 +111,7 @@ import { WindowsCliInstallationError, WindowsCliNotFoundError } from './windows-
 import { ACCOUNT_CHANGED, authorizedCatalog, authorizeSelection } from './authorized-catalog.ts'
 import { ownAccountBusy as accountBusy } from './own-account-lease.mjs'
 import { WorkerStorage, type DispatchSetup } from './storage.ts'
+import { DEFAULT_RESULT_PAGE, pageResult } from './result-paging.ts'
 import { WorkerRuntime, type Submission } from './runtime.ts'
 import type { MergeResolution } from './isolated-workspace.ts'
 import { integrationReport, isolationGuidance, readResolutions } from './isolated-merge-decisions.ts'
@@ -1361,7 +1362,8 @@ export class CliWorkerService extends TypertRemoteService {
       kind: 'cliworker',
       owner: agent.id,
       label: `${CLI_LABELS[cliOf(preference)]} · ${title} · ${workerId ? '续聊' : '新任务'}：${prompt.replace(/\s+/g, ' ').slice(0, 100)}`,
-      outputLimitBytes: 12000,
+      // A subagent report is the real payload here: keep typical reports intact.
+      outputLimitBytes: 64_000,
       run: () => {
         const submitted = this.runtime.submit(
           agent.id,
@@ -1403,6 +1405,12 @@ export class CliWorkerService extends TypertRemoteService {
               runId: worker.runId,
               task: prompt.slice(0, 300),
               status: worker.status,
+              ...(worker.lastResult && Buffer.byteLength(worker.lastResult, 'utf8') > 60_000
+                ? {
+                    resultBytes: Buffer.byteLength(worker.lastResult, 'utf8'),
+                    resultHint: '完整结果超出本次读取上限：用 cliworker_result 带 offset 分页读取',
+                  }
+                : {}),
               response: worker.lastResult,
               error: worker.error,
               ...(worker.status === 'completed' && worker.resultNotice ? { notice: worker.resultNotice } : {}),
@@ -1748,6 +1756,37 @@ export class CliWorkerService extends TypertRemoteService {
           }),
         ),
       'cliworker:status',
+    )
+    this.ctx.effect(
+      () =>
+        this.ctx.tools.register(
+          defineTool({
+            name: 'cliworker_result',
+            description:
+              "Read one finished CLI Worker's full result in pages. Use this when job_output or cliworker_status reports [result truncated] or a resultHint: pass the previous page's next value as offset until truncated is false.",
+            parameters: {
+              worker_id: { type: 'string' },
+              worker_name: { type: 'string' },
+              offset: { type: 'number', description: 'Character offset to start from; use the previous page next value.' },
+              limit: { type: 'number', description: `Maximum characters this page, 1–${64_000} (default ${DEFAULT_RESULT_PAGE}).` },
+            },
+            output,
+            isConcurrencySafe: () => true,
+            execute: async (args, exec) => {
+              if (!exec.agent) throw new Error('A parent Agent is required')
+              const worker = this.runtime.resolveWorker(exec.agent.id, args.worker_id, args.worker_name)
+              const page = pageResult(worker.lastResult ?? '', args.offset, args.limit)
+              return JSON.stringify({
+                workerId: worker.id,
+                agentName: workerName(worker),
+                runId: worker.runId,
+                status: worker.status,
+                ...page,
+              })
+            },
+          }),
+        ),
+      'cliworker:result',
     )
     this.ctx.effect(
       () =>
