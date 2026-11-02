@@ -120,6 +120,13 @@ export class SettingsCatalogCache {
     if (entry?.catalog.cli !== cli || entry.binding !== binding) return
     return structuredClone(entry.catalog)
   }
+  /** Read-only: the last probed directory, if any. Never probes the CLI. */
+  saved(project: string, cli: CliId): { catalog: Catalog; binding: string } | undefined {
+    const key = this.key(project, cli)
+    const entry = this.ready.get(key) ?? this.previous(key)
+    if (entry?.catalog.cli !== cli) return
+    return { catalog: structuredClone(entry.catalog), binding: entry.binding }
+  }
   /** Save a freshly authorized directory without allowing an invalidated query
    * to republish its previous source. Used by the initial dispatch selection. */
   remember(project: string, result: { catalog: Catalog; binding: string }, revision: number): void {

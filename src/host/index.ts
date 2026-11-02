@@ -67,18 +67,21 @@ import {
 import {
   CLI_IDS,
   CLI_LABELS,
+  active,
   cliOf,
   workerName,
   effortLabel,
   EFFORTS,
   type CliId,
+  type Effort,
   type Preference,
   type TaskMode,
   type RoleSnapshot,
+  type RosterEntry,
   type Worker,
   type WorkerLevel,
 } from '../shared/types.ts'
-import { agentNameSchema, readRoleAnswer, roleQuestion } from './roles.ts'
+import { agentNameSchema, readRoleAnswer, roleQuestion, roleSnapshot } from './roles.ts'
 import {
   DEFAULT_CONFIG,
   projectDirectory,
@@ -744,6 +747,27 @@ export class CliWorkerService extends TypertRemoteService {
         }),
       'cliworker:guidance',
     )
+    // Local patch: a session roster is advertised by its existence only. The full
+    // list stays behind cliworker_status so this prefix never grows with entries.
+    ctx.effect(
+      () =>
+        ctx.systemPrompt.section({
+          name: 'cliworker:roster',
+          order: 81,
+          interpolate: false,
+          text: (assemble) => {
+            const parent = assemble.agent?.id
+            if (!parent) return ''
+            try {
+              if (!this.runtime.storage.roster(parent).length) return ''
+            } catch {
+              return ''
+            }
+            return '本会话已配置可用智能体模板（角色 + CLI + 模型 + 思考强度的固定组合）。派遣前先调用 cliworker_status 查看模板与已有实例；派遣时用 cliworker_start 的 template 参数，宿主会自动创建带编号的新实例（同一模板可多次创建），续聊用 cliworker_followup。'
+          },
+        }),
+      'cliworker:roster',
+    )
   }
   private async parent(id: string): Promise<Agent> {
     // Use the same composition-owned resolution policy as native Remote Agent parameters.
@@ -761,6 +785,20 @@ export class CliWorkerService extends TypertRemoteService {
    * CLI's native read-only mode. Other project or account writes (merging an
    * isolated copy, account login) stay refused under read-only.
    */
+  /** A template never binds a Worker: dispatch creates a new numbered instance. */
+  private rosterEntry(parent: string, title: string): RosterEntry | undefined {
+    const wanted = title.trim().toLocaleLowerCase()
+    if (!wanted) return undefined
+    return this.runtime.storage
+      .roster(parent)
+      .find((entry) => entry.title.toLocaleLowerCase() === wanted)
+  }
+  /** Follow the source card while it exists; fall back to the last snapshot once deleted. */
+  private rosterRole(entry: RosterEntry): RoleSnapshot {
+    if (entry.roleSource !== 'preset' || !entry.presetId) return entry.role
+    const preset = this.runtime.storage.rolePresets().find((item) => item.id === entry.presetId)
+    return preset ? roleSnapshot(preset) : entry.role
+  }
   private assertExecution(agent: Agent, dispatch = false): void {
     if (agent.session.header.origin === 'subagent') throw new Error('MVP 只支持主对话下的直接 CLI 子 Agent')
     if (agent.ctx.get('planMode')?.get(agent).active)
@@ -1052,7 +1090,12 @@ export class CliWorkerService extends TypertRemoteService {
    * the question. A settled setup asks nothing, so its catalog check leaves the
    * queue and parallel dispatches of one conversation start together.
    */
-  private async chooseDispatch(agent: Agent, callerSignal: AbortSignal, cli: CliId): Promise<DispatchSetup> {
+  private async chooseDispatch(
+    agent: Agent,
+    callerSignal: AbortSignal,
+    cli: CliId,
+    pinned?: { model: string; effort: Effort; role: RoleSnapshot },
+  ): Promise<DispatchSetup> {
     const signal = AbortSignal.any([callerSignal, this.disposed.signal])
     signal.throwIfAborted()
     this.runtime.assertCliEnabled(cli)
@@ -1096,6 +1139,23 @@ export class CliWorkerService extends TypertRemoteService {
           this.runtime.assertCliEnabled(cli)
           this.settingsCatalogs.remember(project, { catalog, binding }, catalogRevision)
           const models = catalog.models
+          if (pinned) {
+            // A session template fixes model/effort/role: no questions, still authorized.
+            const preference = resolveModel(
+              preferenceSchema.parse({ cli, model: pinned.model, effort: pinned.effort }),
+              models,
+            )
+            const authorized = await this.authorizeChoice(preference, this.backend, this.options, project, signal, binding)
+            signal.throwIfAborted()
+            this.assertExecution(agent, true)
+            this.runtime.assertCliEnabled(cli)
+            if (this.project(agent) !== project) throw new Error('项目已变更，请重新选择')
+            const setup: DispatchSetup = { preference: authorized.preference, role: pinned.role, binding: authorized.binding }
+            this.runtime.storage.setConversationSetup(agent.id, project, setup)
+            ;(this.selectionBindings ??= new WeakMap()).set(setup.preference, authorized.binding)
+            ;(this.selectionProjects ??= new WeakMap()).set(setup.preference, project)
+            return setup
+          }
           const valid = (setup: DispatchSetup | undefined): setup is DispatchSetup => {
             // A saved choice outlives an account change: the current account must still offer it,
             // and launch authorizes it again under that account.
@@ -1236,7 +1296,7 @@ export class CliWorkerService extends TypertRemoteService {
     preference: Preference,
     mode: TaskMode,
     workerId?: string,
-    identity?: { agentName?: string; role?: RoleSnapshot },
+    identity?: { agentName?: string; role?: RoleSnapshot; templateId?: string; templateTitle?: string },
     signal: AbortSignal = this.disposed.signal,
     restartSourceId?: string,
     queuedAdmission?: { id: string; expectedRunId: string; priority?: boolean },
@@ -1545,6 +1605,11 @@ export class CliWorkerService extends TypertRemoteService {
                 description:
                   'Use native read-only/plan mode; unsupported by Kimi print mode. Omit or false for coding.',
               },
+              template: {
+                type: 'string',
+                description:
+                  'Session roster template name. Creates a NEW numbered agent from it with the pinned CLI/model/effort/role and opens no selection card. Repeat the call to create more instances. Omit for the normal flow.',
+              },
             },
             output,
             timeoutMs: 1800000,
@@ -1557,11 +1622,25 @@ export class CliWorkerService extends TypertRemoteService {
                 cli = await this.chooseQoderVariant(exec.agent, exec.signal, args.cli)
               const agentName =
                 args.agent_name === undefined ? undefined : agentNameSchema.parse(args.agent_name)
+              // Local patch: a roster template fixes CLI/model/effort/role and the
+              // Host allocates a numbered instance name, so the same template can
+              // create many agents without another selection card.
+              const templateName = typeof args.template === 'string' ? args.template.trim() : ''
+              const template = templateName ? this.rosterEntry(exec.agent.id, templateName) : undefined
+              if (templateName && !template)
+                throw new Error(`本会话没有名为「${templateName}」的可用智能体；先用 cliworker_status 查看可用模板`)
+              if (template && template.cli !== cli)
+                throw new Error(
+                  `可用智能体模板「${template.title}」固定使用 ${CLI_LABELS[template.cli]}，不能改用 ${CLI_LABELS[cli]}；需要其他 CLI 请另建一个模板`,
+                )
               if (cli === 'kimi' && args.read_only) throw new Error('Kimi 非交互模式不支持只读派遣')
               const setup = await this.chooseDispatch(
                 exec.agent,
                 AbortSignal.any([exec.signal, this.disposed.signal]),
                 cli,
+                template
+                  ? { model: template.model, effort: template.effort, role: this.rosterRole(template) }
+                  : undefined,
               )
               exec.signal.throwIfAborted()
               return this.launch(
@@ -1571,7 +1650,16 @@ export class CliWorkerService extends TypertRemoteService {
                 setup.preference,
                 args.read_only ? 'plan' : 'accept-edits',
                 undefined,
-                { agentName, role: setup.role ?? undefined },
+                {
+                  agentName,
+                  role: setup.role ?? undefined,
+                  ...(template
+                    ? {
+                        templateId: template.id,
+                        ...(agentName === undefined ? { templateTitle: template.title } : {}),
+                      }
+                    : {}),
+                },
                 AbortSignal.any([exec.signal, this.disposed.signal]),
                 undefined,
                 undefined,
@@ -1591,23 +1679,70 @@ export class CliWorkerService extends TypertRemoteService {
           defineTool({
             name: 'cliworker_status',
             description:
-              'Read the parent conversation’s CLI workers or one worker’s latest result. Background completion is announced automatically.',
+              'Read the session picture before dispatching: the available-agent templates with their pinned CLI/model/effort and instance counts, every worker with its status and execution count, or one worker’s latest result. Never starts a CLI or reads the event log.',
             parameters: { worker_id: { type: 'string' }, worker_name: { type: 'string' } },
             output,
             isConcurrencySafe: () => true,
             execute: async (args, exec) => {
               if (!exec.agent) throw new Error('A parent Agent is required')
+              const parent = exec.agent.id
               if (args.worker_id || args.worker_name) {
-                const worker = this.runtime.resolveWorker(exec.agent.id, args.worker_id, args.worker_name)
-                return JSON.stringify({ ...worker, agentName: workerName(worker), guidance: isolationGuidance(worker) })
-              }
-              return JSON.stringify(
-                this.runtime.snapshot(exec.agent.id).workers.map((worker) => ({
+                const worker = this.runtime.resolveWorker(parent, args.worker_id, args.worker_name)
+                return JSON.stringify({
                   ...worker,
                   agentName: workerName(worker),
+                  runs: worker.runCount ?? 0,
                   guidance: isolationGuidance(worker),
-                })),
-              )
+                })
+              }
+              const snapshot = this.runtime.snapshot(parent)
+              const live = snapshot.workers
+              const archived = snapshot.archivedWorkers ?? []
+              const all = [...live, ...archived]
+              // A template owns many instances. Count by template id, and fall back to
+              // the numbered name prefix for Workers created before templates existed.
+              const instances = (entry: { id: string; title: string }) =>
+                all.filter((worker) => {
+                  if (worker.templateId === entry.id) return true
+                  if (worker.templateId) return false
+                  const name = workerName(worker)
+                  return name.startsWith(entry.title) && /^\d+$/.test(name.slice(entry.title.length))
+                })
+              const roster = this.runtime.storage.roster(parent).map((entry) => {
+                const created = instances(entry)
+                return {
+                  title: entry.title,
+                  cli: entry.cli,
+                  model: entry.model,
+                  effort: entry.effort,
+                  role: entry.role.name,
+                  roleSource: entry.roleSource,
+                  created: created.length,
+                  workers: created.map((worker) => workerName(worker)),
+                }
+              })
+              const brief = (worker: Worker) => ({
+                workerId: worker.id,
+                agentName: workerName(worker),
+                title: worker.title,
+                cli: cliOf(worker.preference),
+                model: worker.preference.model,
+                effort: worker.preference.effort,
+                status: worker.archivedAt ? 'archived' : worker.status,
+                runs: worker.runCount ?? 0,
+                ...(worker.error ? { error: worker.error } : {}),
+                ...(worker.lastResult ? { lastResult: worker.lastResult.slice(0, 400) } : {}),
+                ...(isolationGuidance(worker) ? { guidance: isolationGuidance(worker) } : {}),
+              })
+              return JSON.stringify({
+                roster,
+                workers: live.map(brief),
+                archived: archived.map(brief),
+                counts: {
+                  running: live.filter((worker) => active(worker.status)).length,
+                  idle: live.filter((worker) => !active(worker.status)).length,
+                },
+              })
             },
           }),
         ),
@@ -1965,6 +2100,65 @@ export class CliWorkerService extends TypertRemoteService {
       signal.throwIfAborted()
       this.runtime.storage.deleteRolePreset(presetId)
       this.runtime.changed()
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param signal - Query lifetime. @returns Session roster JSON. */
+  @Remote('roster')
+  async roster(parentSessionId: string, signal: AbortSignal): Promise<string> {
+    try {
+      await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      return JSON.stringify(this.runtime.storage.roster(parentSessionId))
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param requestJSON - Roster fields, optional existing id. @param signal - Mutation lifetime. @returns Saved entry JSON. */
+  @Remote('saveRosterEntry')
+  async saveRosterEntry(parentSessionId: string, requestJSON: string, signal: AbortSignal): Promise<string> {
+    try {
+      const agent = await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      const saved = this.runtime.storage.saveRosterEntry(parentSessionId, this.project(agent), JSON.parse(requestJSON))
+      this.runtime.changed()
+      return JSON.stringify(saved)
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param entryId - Roster entry to remove. @param signal - Mutation lifetime. @returns Completion; the entry's Workers are untouched. */
+  @Remote('deleteRosterEntry')
+  async deleteRosterEntry(parentSessionId: string, entryId: string, signal: AbortSignal): Promise<void> {
+    try {
+      await this.parent(parentSessionId)
+      signal.throwIfAborted()
+      this.runtime.storage.deleteRosterEntry(parentSessionId, validate.uuid().parse(entryId))
+      this.runtime.changed()
+    } catch (error) {
+      throw failure(error)
+    }
+  }
+  /** @param parentSessionId - Owning parent. @param cli - Selected CLI. @param signal - Query lifetime. @returns Last probed catalog and saved preference; never probes the CLI. */
+  @Remote('rosterCatalog')
+  async rosterCatalog(parentSessionId: string, cli: string, signal: AbortSignal): Promise<string> {
+    try {
+      const id = validate.enum(CLI_IDS).parse(cli)
+      const agent = await this.parent(parentSessionId)
+      const project = this.project(agent)
+      signal.throwIfAborted()
+      this.runtime.assertCliEnabled(id)
+      this.settingsCatalogs ??= new SettingsCatalogCache(this.runtime.storage.directory)
+      const preference = this.runtime.storage.dispatchSetup(project, id)?.preference
+      const saved = this.settingsCatalogs.saved(project, id)
+      if (!saved) return JSON.stringify({ cli: id, missing: true, preference })
+      return JSON.stringify({
+        cli: id,
+        catalog: saved.catalog,
+        current: this.settingsCatalogs.displayBinding(project, id) === saved.binding,
+        preference,
+      })
     } catch (error) {
       throw failure(error)
     }

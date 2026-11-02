@@ -39,6 +39,7 @@ import {
 import {
   agentNameSchema,
   availableAgentName,
+  availableNumberedName,
   promptForWorker,
   roleSnapshotSchema,
   workerTitleSchema,
@@ -1248,6 +1249,8 @@ export class WorkerRuntime {
         (worker) =>
           worker.parentSessionId === parent &&
           worker.id !== excludingId &&
+          // Local patch: a deleted Worker releases its name.
+          !worker.archivedAt &&
           [workerName(worker), ...(worker.nameAliases ?? [])].some(
             (name) => name.toLocaleLowerCase() === clean.toLocaleLowerCase(),
           ),
@@ -1364,6 +1367,25 @@ export class WorkerRuntime {
     if (!worker.archivedAt) throw new Error('此任务尚未删除')
     const restored = { ...worker }
     delete restored.archivedAt
+    // Local patch: deleting a Worker releases its name, so a restored record may
+    // collide with an instance created afterwards. Keep the old name when free and
+    // allocate a deterministic suffix otherwise; never restore a duplicate name.
+    if (restored.agentName) {
+      const wanted = restored.agentName.toLocaleLowerCase()
+      const taken = [...this.storage.workers.values()].some(
+        (other) =>
+          other.id !== id &&
+          other.parentSessionId === parent &&
+          !other.archivedAt &&
+          [workerName(other), ...(other.nameAliases ?? [])].some(
+            (name) => name.toLocaleLowerCase() === wanted,
+          ),
+      )
+      if (taken) {
+        restored.agentName = availableAgentName(this.storage.workers.values(), parent, restored.agentName)
+        restored.agentNameOrigin = 'custom'
+      }
+    }
     this.storage.save(restored)
     this.changed()
   }
@@ -1750,7 +1772,12 @@ export class WorkerRuntime {
     preference: Preference,
     mode: TaskMode,
     previousId?: string,
-    identity?: { agentName?: string; role?: RoleSnapshot },
+    identity?: {
+      agentName?: string
+      templateId?: string
+      templateTitle?: string
+      role?: RoleSnapshot
+    },
     authorizedBinding?: string,
     queuedAdmission?: QueuedAdmission,
     preparationId?: string,
@@ -1840,10 +1867,14 @@ export class WorkerRuntime {
       parentSessionId: parent,
       project: canonical,
       title: title.slice(0, 160),
+      // Local patch: template instances are numbered; an explicit name still wins.
       agentName: identity?.agentName
         ? this.checkAgentName(parent, identity.agentName)
-        : availableAgentName(this.storage.workers.values(), parent, CLI_SHORT_NAMES[cliOf(preference)]),
+        : identity?.templateTitle
+          ? availableNumberedName(this.storage.workers.values(), parent, identity.templateTitle)
+          : availableAgentName(this.storage.workers.values(), parent, CLI_SHORT_NAMES[cliOf(preference)]),
       agentNameOrigin: identity?.agentName ? 'custom' : 'auto',
+      ...(identity?.templateId ? { templateId: identity.templateId } : {}),
       role: identity?.role ? roleSnapshotSchema.parse(structuredClone(identity.role)) : undefined,
       preference: { ...preference },
       transport: this.initialTransport(cliOf(preference)),
@@ -2532,6 +2563,8 @@ export class WorkerRuntime {
         ...(harnessLease?.connection ? { harnessTools: harnessLease.connection } : {}),
       }
       worker.status = 'running'
+      // Local patch: count only turns that actually reach the CLI.
+      worker.runCount = (worker.runCount ?? 0) + 1
       this.storage.save(worker)
       this.changed()
       const selectedClaudeRoute =

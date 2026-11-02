@@ -117,6 +117,29 @@ export interface RolePreset {
   source?: string
 }
 /** Frozen when a worker is created; library edits cannot change an existing conversation. */
+/**
+ * Local patch: one session-scoped template built from a role card.
+ * A template pins CLI/model/effort; the leader dispatches it and the Host creates
+ * a fresh Worker with an auto-numbered name, so one template yields many agents.
+ */
+export interface RosterEntry {
+  id: string
+  /** The conversation that owns this entry; entries never cross sessions. */
+  parentSessionId: string
+  project: string
+  /** Template name; unique inside the session and the base of numbered Worker names. */
+  title: string
+  /** Source card, absent when the entry was created from a literal prompt. */
+  presetId?: string
+  /** `preset` follows the card's current prompt; `custom` uses `role.prompt`. */
+  roleSource: 'preset' | 'custom'
+  role: RoleSnapshot
+  cli: CliId
+  model: string
+  effort: Effort
+  createdAt: string
+  updatedAt: string
+}
 export interface RoleSnapshot {
   presetId?: string
   name: string
@@ -133,6 +156,10 @@ export interface Worker {
   agentNameOrigin?: 'auto' | 'custom'
   /** Exact former automatic names reserved for compatible historical references. */
   nameAliases?: string[]
+  /** Local patch: roster template this Worker was created from, if any. */
+  templateId?: string
+  /** Local patch: number of started turns; missing on records written by older versions. */
+  runCount?: number
   /** Reversible deletion keeps the original Worker, native session and account binding. */
   archivedAt?: string
   role?: RoleSnapshot
