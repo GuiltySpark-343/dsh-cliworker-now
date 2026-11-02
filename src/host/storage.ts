@@ -260,7 +260,12 @@ const eventSchema = z.object({
       name: z.string().min(1).max(1024).optional(),
       input: z.unknown().optional(),
       output: z.unknown().optional(),
-      command: z.string().max(32768).optional(),
+      // Historical events from earlier builds may carry longer commands. Truncate
+      // for display instead of rejecting the whole persisted timeline on load.
+      command: z
+        .string()
+        .optional()
+        .transform((value) => (value && value.length > 32768 ? value.slice(0, 32768) : value)),
       exitCode: z.number().int().safe().optional(),
     })
     .optional(),
